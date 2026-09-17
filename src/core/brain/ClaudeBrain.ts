@@ -7,6 +7,7 @@ type ContentBlockParam = Anthropic.TextBlockParam | Anthropic.ToolUseBlockParam 
 
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TOKENS = 1024;
+const ANTHROPIC_API_BASE_URL = "https://api.anthropic.com";
 
 /**
  * Talks to Anthropic's Messages API. This class only decides *what* Claude
@@ -21,7 +22,12 @@ export class ClaudeBrain implements Brain {
     private readonly model: string = DEFAULT_MODEL,
     private readonly maxTokens: number = DEFAULT_MAX_TOKENS
   ) {
-    this.client = new Anthropic({ apiKey });
+    // baseURL is pinned explicitly: the Anthropic SDK otherwise honors an
+    // ambient ANTHROPIC_BASE_URL environment variable, which on a
+    // developer's machine may point at an unrelated local proxy/router
+    // (e.g. a different AI tool) — JARVIS must always talk to the real
+    // Anthropic API regardless of what else is configured on the host.
+    this.client = new Anthropic({ apiKey, baseURL: ANTHROPIC_API_BASE_URL });
   }
 
   async chat(request: BrainRequest): Promise<BrainResponse> {
