@@ -4,6 +4,8 @@ import type { EventBus } from "@/core/events/EventBus";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
+import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
+import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
 import {
   makeEnvelope,
   parseDeviceToCoreMessage,
@@ -20,6 +22,10 @@ export interface JarvisWebSocketServerDependencies {
   deviceConnectionManager: DeviceConnectionManager;
   pairingService: PairingService;
   eventBus: EventBus;
+  /** All three required together to enable the Twilio phone gateway; otherwise its routes 404. */
+  phoneGateway?: TwilioVoiceGateway;
+  twilioAuthToken?: string;
+  twilioPublicBaseUrl?: string;
 }
 
 /**
@@ -43,6 +49,10 @@ export class JarvisWebSocketServer {
 
           if (req.method === "POST" && url.pathname === "/pairing/approve") {
             return await this.handleApproveHttp(req);
+          }
+
+          if (req.method === "POST" && url.pathname.startsWith("/voice/")) {
+            return await this.handleVoiceWebhook(req, url);
           }
 
           if (server.upgrade(req, { data: { deviceId: null } })) {
@@ -202,6 +212,53 @@ export class JarvisWebSocketServer {
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown reason";
       console.log(`[jarvis] could not grant requested role to "${deviceId}": ${message}`);
+    }
+  }
+
+  /**
+   * Routes Twilio's Voice webhooks, after verifying `X-Twilio-Signature`
+   * against the *public* URL Twilio actually signed (not this process's
+   * internal view of the request, which a reverse proxy/tunnel rewrites).
+   * A missing or invalid signature is always rejected — an unauthenticated
+   * webhook here would let anyone drive JARVIS's tools with fabricated
+   * "speech" input, no real phone call required.
+   */
+  private async handleVoiceWebhook(req: Request, url: URL): Promise<Response> {
+    const { phoneGateway, twilioAuthToken, twilioPublicBaseUrl } = this.deps;
+
+    if (!phoneGateway || !twilioAuthToken || !twilioPublicBaseUrl) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    const formData = await req.formData();
+    const params: Record<string, string> = {};
+    for (const [key, value] of formData.entries()) {
+      if (typeof value === "string") params[key] = value;
+    }
+
+    const publicUrl = new URL(url.pathname + url.search, twilioPublicBaseUrl).toString();
+    const signature = req.headers.get("X-Twilio-Signature");
+
+    if (!verifyTwilioSignature(twilioAuthToken, publicUrl, params, signature)) {
+      console.error(`[jarvis] rejected voice webhook to ${url.pathname}: invalid or missing Twilio signature`);
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    const callSid = params.CallSid;
+    if (!callSid) {
+      return new Response("Bad request: missing CallSid", { status: 400 });
+    }
+
+    switch (url.pathname) {
+      case "/voice/incoming":
+        return phoneGateway.handleIncomingCall(callSid);
+      case "/voice/gather":
+        return await phoneGateway.handleGather(callSid, params.SpeechResult ?? null);
+      case "/voice/status":
+        phoneGateway.handleCallEnded(callSid);
+        return new Response(null, { status: 204 });
+      default:
+        return new Response("Not found", { status: 404 });
     }
   }
 

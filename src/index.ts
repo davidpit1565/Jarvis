@@ -16,6 +16,7 @@ import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
+import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/TwilioVoiceGateway";
 
 const DEFAULT_USER_ID = "local-user";
 
@@ -61,11 +62,36 @@ function main() {
     confirmationService,
   });
 
+  // A phone call gets its own conversation thread (a fresh ConversationManager
+  // + Orchestrator) but shares every other live instance — same JARVIS,
+  // separate conversation. Only wired up when both Twilio settings are
+  // present; otherwise the /voice/* routes 404 and nothing changes.
+  function createPhoneSession(_callSid: string): PhoneSession {
+    const phoneConversation = new ConversationManager(eventBus);
+    const phoneOrchestrator = new Orchestrator({
+      brain,
+      conversation: phoneConversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService,
+    });
+    return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
+  }
+
+  const phoneGateway =
+    config.twilioAuthToken && config.twilioPublicBaseUrl ? new TwilioVoiceGateway(createPhoneSession) : undefined;
+
   const wsServer = new JarvisWebSocketServer({
     deviceRegistry,
     deviceConnectionManager,
     pairingService,
     eventBus,
+    phoneGateway,
+    twilioAuthToken: config.twilioAuthToken,
+    twilioPublicBaseUrl: config.twilioPublicBaseUrl,
   });
   wsServer.start(config.port);
 
@@ -87,6 +113,11 @@ function main() {
 
   console.log(`JARVIS Core listening on port ${config.port}`);
   console.log(`Registered tools: ${toolRegistry.listTools().map((t) => t.name).join(", ")}`);
+  console.log(
+    phoneGateway
+      ? "Phone gateway: enabled (POST /voice/incoming, /voice/gather, /voice/status)"
+      : "Phone gateway: disabled (set TWILIO_AUTH_TOKEN and TWILIO_PUBLIC_BASE_URL to enable)"
+  );
 
   process.on("SIGINT", () => {
     memoryStore.close();
@@ -106,6 +137,7 @@ function main() {
     toolRegistry,
     permissionService,
     confirmationService,
+    phoneGateway,
     eventBus,
   };
 }

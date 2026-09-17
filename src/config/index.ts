@@ -2,6 +2,15 @@ export interface JarvisConfig {
   anthropicApiKey: string;
   port: number;
   memoryDbPath: string;
+  /** Both must be set together to enable the optional Twilio phone gateway. */
+  twilioAuthToken?: string;
+  /**
+   * The exact public base URL Twilio is configured to call (e.g. an ngrok
+   * URL). Required for signature verification: a reverse-proxied request's
+   * `req.url` as seen by this process reflects the internal address, not
+   * the public one Twilio actually signed.
+   */
+  twilioPublicBaseUrl?: string;
 }
 
 class ConfigError extends Error {}
@@ -27,7 +36,16 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError(`Invalid JARVIS_PORT: must be an integer between 1 and 65535`);
   }
 
-  return { anthropicApiKey, port, memoryDbPath };
+  const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN?.trim() || undefined;
+  const twilioPublicBaseUrl = process.env.TWILIO_PUBLIC_BASE_URL?.trim() || undefined;
+
+  if (Boolean(twilioAuthToken) !== Boolean(twilioPublicBaseUrl)) {
+    throw new ConfigError(
+      "TWILIO_AUTH_TOKEN and TWILIO_PUBLIC_BASE_URL must be set together (or neither) to enable the phone gateway"
+    );
+  }
+
+  return { anthropicApiKey, port, memoryDbPath, twilioAuthToken, twilioPublicBaseUrl };
 }
 
 export { ConfigError };
