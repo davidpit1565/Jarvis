@@ -71,6 +71,8 @@ function main() {
     process.exit(0);
   });
 
+  runChatLoop(orchestrator);
+
   // Exposed for future entry points (HTTP handler, CLI, tests).
   return {
     orchestrator,
@@ -82,6 +84,33 @@ function main() {
     permissionService,
     eventBus,
   };
+}
+
+const DEFAULT_USER_ID = "local-user";
+
+/**
+ * Minimal interactive CLI for talking to JARVIS from the same process that
+ * holds the live device connections — this is what actually proves the
+ * full loop (Claude -> tool decision -> permission -> device -> result ->
+ * Claude -> response) end to end against a real connected device. It has
+ * to live in this process, not a separate script, because the device's
+ * WebSocket connection and the Orchestrator's registries only exist here.
+ */
+async function runChatLoop(orchestrator: Orchestrator): Promise<void> {
+  console.log('\nJARVIS is ready. Type a message and press Enter (Ctrl+C to quit).\n');
+
+  for await (const line of console) {
+    const message = line.trim();
+    if (!message) continue;
+
+    try {
+      const response = await orchestrator.handleUserMessage(DEFAULT_USER_ID, message);
+      console.log(`\nJARVIS: ${response}\n`);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[jarvis] error handling message: ${reason}\n`);
+    }
+  }
 }
 
 if (import.meta.main) {
