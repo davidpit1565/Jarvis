@@ -26,18 +26,59 @@ canvas, then samples that canvas's pixel alpha to place several thousand
 That's what gives the hologram its organic, non-uniform density instead of
 looking like a flat cutout.
 
-## Wiring it to real Core state (not done yet)
+## Live "CORE ACTIVITY" feed — real, not simulated, once Core is running
 
-Right now the two side panels (`SYSTEM STATUS`, `DEVICE LINK`) show
-placeholder numbers that jitter on a timer, purely for visual life. To make
-them real, connect this page to JARVIS Core's WebSocket server
-(`src/communication/websocket/JarvisWebSocketServer.ts`) and replace the
-`leftLines`/`rightLines` data in the `<script>` block with live values —
-device connection state, active tool count, permission-gate status, etc.
-The glitch/banner effect is purely decorative and isn't tied to any real
-system event; wiring it to an actual alert condition (e.g. a permission
-denial or a device disconnect) instead of a random timer would make it
-mean something rather than just look interesting.
+The bottom panel connects to a real, new read-only endpoint on Core:
+**`/observer`** (added in `JarvisWebSocketServer.ts`). Any socket that
+connects there is added to a spectator set and gets every real EventBus
+event mirrored to it verbatim — `brain.request`/`brain.response`,
+`tool.requested`/`tool.executed`/`tool.dispatched`, `permission.checked`,
+`device.registered`/`connected`/`disconnected` — as
+`{"type", "payload", "timestamp"}` JSON. No device-registration handshake
+is required or accepted from it; it can't send commands, only receive.
+
+Run Core (`bun run start`, default port from `JARVIS_PORT`, `4770`), open
+this page, and the panel switches from `DEMO · CORE OFFLINE` to
+`LIVE · CONNECTED TO CORE` automatically — it retries the connection every
+5 seconds if Core isn't up yet or drops. Point it at a different host/port
+with `?host=...&port=...` in the URL.
+
+**When Core is offline** (which is the common case right now — Phase 2 has
+no long-running deployment yet), the panel honestly falls back to a
+clearly-labeled `DEMO` feed of representative events, so it's never
+ambiguous whether what's on screen is real.
+
+Covered by `tests/integration/observerBroadcast.test.ts`.
+
+## Voice reactivity — real audio analysis, no TTS to plug it into yet
+
+The head visibly pulses (strongest around the mouth/jaw) in response to
+live audio via the Web Audio API (`AnalyserNode`) — genuine
+frequency-domain analysis, not a fake animation loop. `window.JarvisHologram`
+exposes two real integration points for whenever Core gets a voice/TTS
+output:
+
+- `connectAudioElement(mediaEl)` — feed it an `<audio>`/`<video>` element
+  playing Jarvis's speech.
+- `connectMediaStream(stream)` — feed it a raw `MediaStream` (e.g. a
+  WebRTC or streaming-TTS pipeline).
+
+**Core has no TTS/voice output at all yet** (checked — nothing in `src/`
+does speech synthesis), so there's nothing genuine to auto-connect to
+today. The "🎙 CONNECT MIC" button in the bottom-right is a real, working
+way to see the reactivity live right now — it feeds your actual
+microphone in, which is honest proof the mechanism works rather than a
+placeholder pretending to be voice output.
+
+## Visual fidelity vs. the reference video/images
+
+The reference was a cinematic AI-generated render (single high-detail
+frames) — this is a live, 60fps interactive page. It gets close in
+concept and mood (particle/wireframe holographic head, dark scene, side
+telemetry, glowing base, periodic glitch) but won't be a pixel-exact match
+to a one-shot render without an unreasonable real-time rendering budget.
+If specific details still feel off, point at exactly which ones — that's
+a more useful next step than a general "make it closer" pass.
 
 ## Known limitations
 

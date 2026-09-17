@@ -102,6 +102,48 @@
   #glitch-banner .l3 { font-size: 9px; opacity: 0.7; }
 
   #rgb-split { position: fixed; inset: 0; z-index: 3; pointer-events: none; opacity: 0; mix-blend-mode: screen; }
+
+  #activity {
+    position: fixed; left: 4%; right: 4%; bottom: 20%;
+    max-height: 15vh; overflow: hidden; z-index: 4;
+    font-size: 10.5px; line-height: 1.6; color: #7fe0c8;
+    background: linear-gradient(180deg, rgba(6,14,16,0.0), rgba(6,14,16,0.35));
+    border-top: 1px solid rgba(127,224,200,0.18);
+    padding-top: 6px; user-select: none;
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 30%, black 85%, transparent);
+    mask-image: linear-gradient(to bottom, transparent, black 30%, black 85%, transparent);
+  }
+  #activity .heading {
+    color: #a8f2ff; font-size: 10px; letter-spacing: 3px; opacity: 0.8;
+    display: flex; justify-content: space-between;
+  }
+  #activity .heading .status { font-size: 9px; letter-spacing: 1px; }
+  #activity .heading .status.live { color: #8bffb0; }
+  #activity .heading .status.demo { color: #ffcf7f; }
+  #activity-lines { margin-top: 4px; }
+  #activity-lines .line { opacity: 0.9; white-space: pre; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 0 5px rgba(127,224,200,0.4); }
+  #activity-lines .line .t { opacity: 0.55; }
+  #activity-lines .line .k-tool { color: #ffd9a0; }
+  #activity-lines .line .k-brain { color: #9fd8ff; }
+  #activity-lines .line .k-perm { color: #d3a8ff; }
+  #activity-lines .line .k-device { color: #8bffb0; }
+
+  #audio-ctl {
+    position: fixed; right: 4%; bottom: 3%; z-index: 6;
+    font-size: 9px; letter-spacing: 1.5px; color: #6fd8e8; opacity: 0.55;
+    background: rgba(10,18,20,0.4); border: 1px solid rgba(111,216,232,0.3);
+    padding: 6px 10px; border-radius: 3px; cursor: pointer; user-select: none;
+    transition: opacity 0.2s ease;
+  }
+  #audio-ctl:hover { opacity: 1; }
+  #audio-ctl.active { color: #8bffb0; border-color: rgba(139,255,176,0.5); opacity: 0.9; }
+
+  #voice-ring {
+    position: fixed; left: 50%; top: 50%; z-index: 2; pointer-events: none;
+    width: 340px; height: 340px; margin: -170px 0 0 -170px;
+    border-radius: 50%; border: 1px solid rgba(111,216,232,0.0);
+    transition: border-color 0.15s ease;
+  }
 </style>
 </head>
 <body>
@@ -129,6 +171,18 @@
     <div class="l2">HUNGER PROTOCOL INITIATED</div>
     <div class="l3">SYSTEM DEMAND: BIO-FUEL</div>
   </div>
+
+  <div id="voice-ring"></div>
+
+  <div id="activity">
+    <div class="heading">
+      <span>CORE ACTIVITY — behind the scenes</span>
+      <span class="status demo" id="activity-status">DEMO · CORE OFFLINE</span>
+    </div>
+    <div id="activity-lines"></div>
+  </div>
+
+  <div id="audio-ctl">🎙 CONNECT MIC</div>
 
   <div id="plinth-wrap">
     <div id="plinth-glow"></div>
@@ -310,6 +364,7 @@
       uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) },
       uTime: { value: 0 },
       uGlitch: { value: 0 },
+      uAudio: { value: 0 },
     },
     vertexShader: `
       attribute float aSize;
@@ -317,6 +372,7 @@
       uniform float uPixelRatio;
       uniform float uTime;
       uniform float uGlitch;
+      uniform float uAudio;
       void main() {
         vColor = color;
         vec3 p = position;
@@ -324,8 +380,14 @@
         p.x += sin(uTime * 0.6 + position.y * 3.0) * 0.006;
         p.y += cos(uTime * 0.5 + position.x * 3.0) * 0.006;
         p.x += uGlitch * (sin(position.y * 40.0 + uTime * 30.0)) * 0.12;
+        // voice-reactive: outward breathing pulse driven by live audio level,
+        // strongest at the mouth/jaw (lower half of the face) so it reads
+        // as "speaking" rather than a uniform global pulse
+        float lower = clamp(-position.y * 0.6 + 0.5, 0.0, 1.0);
+        float pulse = uAudio * lower * (0.6 + 0.4 * sin(uTime * 24.0 + position.x * 6.0));
+        p += normalize(position + vec3(0.0001)) * pulse * 0.18;
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
-        gl_PointSize = aSize * uPixelRatio * (340.0 / -mv.z);
+        gl_PointSize = aSize * uPixelRatio * (340.0 / -mv.z) * (1.0 + uAudio * 0.5);
         gl_Position = projectionMatrix * mv;
       }
     `,
@@ -452,6 +514,189 @@
     renderPanel(document.getElementById("panel-left"), leftLines);
     renderPanel(document.getElementById("panel-right"), rightLines);
   }, 1800);
+
+  /* ---------------------------------------------------------------
+   * 5. Live "behind the scenes" activity feed. Connects to JARVIS
+   *    Core's real /observer WebSocket (broadcasts actual EventBus
+   *    events: brain requests/responses, tool calls, permission
+   *    checks, device connections) — never fabricated once connected.
+   *    Falls back to a clearly-labeled DEMO feed only when Core isn't
+   *    reachable, so nothing here is ever silently pretending to be real.
+   * ------------------------------------------------------------- */
+  const MAX_ACTIVITY_LINES = 7;
+  const activityLinesEl = document.getElementById("activity-lines");
+  const activityStatusEl = document.getElementById("activity-status");
+  const activityQueue = [];
+
+  function kindFor(type) {
+    if (type.startsWith("tool.")) return "k-tool";
+    if (type.startsWith("brain.")) return "k-brain";
+    if (type.startsWith("permission.")) return "k-perm";
+    if (type.startsWith("device.")) return "k-device";
+    return "";
+  }
+
+  function describeEvent(type, payload) {
+    switch (type) {
+      case "brain.request": return `brain.request  messages=${payload.messageCount}`;
+      case "brain.response": return `brain.response  tool_calls=${payload.toolCallCount}  "${String(payload.text || "").slice(0, 46)}"`;
+      case "tool.requested": return `tool.requested  ${payload.toolCall && payload.toolCall.toolName}(${JSON.stringify(payload.toolCall && payload.toolCall.input || {}).slice(0, 40)})`;
+      case "tool.executed": return `tool.executed  ${payload.toolName}  ok=${payload.result && payload.result.success}`;
+      case "tool.dispatched": return `tool.dispatched  ${payload.toolName} -> device:${String(payload.deviceId).slice(0, 8)}`;
+      case "permission.checked": return `permission.checked  ${payload.toolId}  allowed=${payload.result && payload.result.allowed}`;
+      case "device.registered": return `device.registered  ${payload.device && payload.device.name}`;
+      case "device.connected": return `device.connected  ${String(payload.deviceId).slice(0, 8)}`;
+      case "device.disconnected": return `device.disconnected  ${String(payload.deviceId).slice(0, 8)}  (${payload.reason})`;
+      default: return `${type}  ${JSON.stringify(payload).slice(0, 60)}`;
+    }
+  }
+
+  function pushActivityLine(type, payload, timestamp) {
+    const time = new Date(timestamp || Date.now()).toLocaleTimeString([], { hour12: false });
+    activityQueue.push({ time, text: describeEvent(type, payload || {}), kind: kindFor(type) });
+    if (activityQueue.length > MAX_ACTIVITY_LINES) activityQueue.shift();
+    activityLinesEl.innerHTML = activityQueue
+      .map((l) => `<div class="line"><span class="t">${l.time}</span>  <span class="${l.kind}">${l.text}</span></div>`)
+      .join("");
+  }
+
+  function setActivityStatus(isLive) {
+    activityStatusEl.textContent = isLive ? "LIVE · CONNECTED TO CORE" : "DEMO · CORE OFFLINE";
+    activityStatusEl.className = "status " + (isLive ? "live" : "demo");
+  }
+
+  // Demo feed: only ever runs while there's no real Core connection, and
+  // is honestly labeled as such in the panel header above.
+  const DEMO_EVENTS = [
+    ["brain.request", { messageCount: 3 }],
+    ["tool.requested", { toolCall: { toolName: "getActiveApplication", input: {} } }],
+    ["permission.checked", { toolId: "getActiveApplication", result: { allowed: true } }],
+    ["tool.executed", { toolName: "getActiveApplication", result: { success: true } }],
+    ["brain.response", { toolCallCount: 0, text: "You currently have Safari in the foreground." }],
+    ["device.connected", { deviceId: "imac-primary-001" }],
+  ];
+  let demoTimer = null;
+  function startDemoFeed() {
+    if (demoTimer) return;
+    let i = 0;
+    demoTimer = setInterval(() => {
+      const [type, payload] = DEMO_EVENTS[i % DEMO_EVENTS.length];
+      pushActivityLine(type, payload, Date.now());
+      i++;
+    }, 2200);
+  }
+  function stopDemoFeed() {
+    if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
+  }
+
+  function connectObserver() {
+    const port = new URLSearchParams(location.search).get("port") || "4770";
+    const host = new URLSearchParams(location.search).get("host") || "localhost";
+    let socket;
+    try {
+      socket = new WebSocket(`ws://${host}:${port}/observer`);
+    } catch (e) {
+      setActivityStatus(false);
+      startDemoFeed();
+      return;
+    }
+    const connectTimeout = setTimeout(() => {
+      if (socket.readyState !== WebSocket.OPEN) socket.close();
+    }, 2500);
+
+    socket.addEventListener("open", () => {
+      clearTimeout(connectTimeout);
+      stopDemoFeed();
+      setActivityStatus(true);
+      pushActivityLine("device.connected", { deviceId: "observer (this page)" }, Date.now());
+    });
+    socket.addEventListener("message", (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        pushActivityLine(msg.type, msg.payload, msg.timestamp);
+      } catch (e) { /* ignore malformed frames */ }
+    });
+    socket.addEventListener("close", () => {
+      setActivityStatus(false);
+      startDemoFeed();
+      setTimeout(connectObserver, 5000); // keep trying — Core may start later
+    });
+    socket.addEventListener("error", () => socket.close());
+  }
+
+  setActivityStatus(false);
+  startDemoFeed();
+  connectObserver();
+
+  /* ---------------------------------------------------------------
+   * 6. Real voice reactivity via Web Audio. `window.JarvisHologram`
+   *    exposes hooks to feed it any real audio source — a <audio>
+   *    element playing Jarvis's TTS output once that exists, or the
+   *    microphone for testing right now (Core has no TTS yet, so
+   *    there is nothing genuine to auto-connect to today).
+   * ------------------------------------------------------------- */
+  let audioCtx = null;
+  let analyser = null;
+  let audioData = null;
+  const voiceRing = document.getElementById("voice-ring");
+
+  function ensureAudioGraph() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.75;
+    audioData = new Uint8Array(analyser.frequencyBinCount);
+  }
+
+  function sampleAudioLevel() {
+    if (!analyser) return 0;
+    analyser.getByteFrequencyData(audioData);
+    let sum = 0;
+    for (let i = 0; i < audioData.length; i++) sum += audioData[i];
+    return Math.min(1, (sum / audioData.length / 255) * 2.2);
+  }
+
+  (function audioLoop() {
+    requestAnimationFrame(audioLoop);
+    const level = sampleAudioLevel();
+    material.uniforms.uAudio.value += (level - material.uniforms.uAudio.value) * 0.25;
+    const glow = material.uniforms.uAudio.value;
+    voiceRing.style.borderColor = `rgba(111,216,232,${(glow * 0.8).toFixed(2)})`;
+    voiceRing.style.transform = `scale(${1 + glow * 0.15})`;
+    voiceRing.style.boxShadow = glow > 0.05 ? `0 0 ${20 + glow * 60}px rgba(111,216,232,${glow * 0.5})` : "none";
+  })();
+
+  window.JarvisHologram = {
+    /** Feed a live <audio> or <video> element (e.g. Jarvis's TTS playback) into the reactive visualizer. */
+    connectAudioElement(mediaEl) {
+      ensureAudioGraph();
+      const source = audioCtx.createMediaElementSource(mediaEl);
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+    },
+    /** Feed a raw MediaStream (e.g. from getUserMedia or a WebRTC/TTS stream) into the reactive visualizer. */
+    connectMediaStream(stream) {
+      ensureAudioGraph();
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+    },
+  };
+
+  const audioBtn = document.getElementById("audio-ctl");
+  let micActive = false;
+  audioBtn.addEventListener("click", async () => {
+    if (micActive) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      window.JarvisHologram.connectMediaStream(stream);
+      micActive = true;
+      audioBtn.textContent = "🎙 MIC LIVE (voice-reactive)";
+      audioBtn.classList.add("active");
+    } catch (e) {
+      audioBtn.textContent = "🎙 MIC DENIED";
+    }
+  });
 })();
 </script>
 </body>

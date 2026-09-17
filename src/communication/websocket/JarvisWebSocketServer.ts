@@ -13,7 +13,22 @@ import {
 
 interface SocketData {
   deviceId: string | null;
+  isObserver?: boolean;
 }
+
+/** Every EventBus event this server will mirror out to observer sockets. */
+const OBSERVABLE_EVENTS = [
+  "conversation.message",
+  "brain.request",
+  "brain.response",
+  "tool.requested",
+  "tool.executed",
+  "tool.dispatched",
+  "permission.checked",
+  "device.registered",
+  "device.connected",
+  "device.disconnected",
+] as const;
 
 export interface JarvisWebSocketServerDependencies {
   deviceRegistry: DeviceRegistry;
@@ -32,7 +47,33 @@ export class JarvisWebSocketServer {
   /** Sockets that have sent device.register but aren't authenticated yet, keyed by deviceId. */
   private pendingConnections: Map<string, ServerWebSocket<SocketData>> = new Map();
 
-  constructor(private readonly deps: JarvisWebSocketServerDependencies) {}
+  /**
+   * Read-only spectators connected on `/observer` (e.g. the hologram UI in
+   * `ui/hologram/`) — never part of the device protocol, never trusted with
+   * device.register/tool.result, just mirrored every EventBus event so a
+   * human can watch what Core is actually doing in real time.
+   */
+  private observers: Set<ServerWebSocket<SocketData>> = new Set();
+
+  constructor(private readonly deps: JarvisWebSocketServerDependencies) {
+    this.subscribeObserverBroadcast();
+  }
+
+  private subscribeObserverBroadcast(): void {
+    for (const eventName of OBSERVABLE_EVENTS) {
+      this.deps.eventBus.on(eventName, (payload) => {
+        this.broadcastToObservers(eventName, payload);
+      });
+    }
+  }
+
+  private broadcastToObservers(type: string, payload: unknown): void {
+    if (this.observers.size === 0) return;
+    const message = JSON.stringify({ type, payload, timestamp: new Date().toISOString() });
+    for (const ws of this.observers) {
+      ws.send(message);
+    }
+  }
 
   start(port: number) {
     return Bun.serve<SocketData>({
@@ -43,6 +84,13 @@ export class JarvisWebSocketServer {
 
           if (req.method === "POST" && url.pathname === "/pairing/approve") {
             return await this.handleApproveHttp(req);
+          }
+
+          if (url.pathname === "/observer") {
+            if (server.upgrade(req, { data: { deviceId: null, isObserver: true } })) {
+              return undefined;
+            }
+            return new Response("Upgrade failed", { status: 400 });
           }
 
           if (server.upgrade(req, { data: { deviceId: null } })) {
@@ -59,14 +107,25 @@ export class JarvisWebSocketServer {
         }
       },
       websocket: {
-        open: () => {
-          // No-op: a connection is only meaningful once it registers.
+        open: (ws) => {
+          const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.isObserver) {
+            this.observers.add(socket);
+          }
+          // Device sockets: no-op, a connection is only meaningful once it registers.
         },
         message: (ws, raw) => {
-          this.handleMessage(ws as ServerWebSocket<SocketData>, raw.toString());
+          const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.isObserver) return; // read-only channel, nothing to accept from it
+          this.handleMessage(socket, raw.toString());
         },
         close: (ws) => {
-          const deviceId = (ws as ServerWebSocket<SocketData>).data.deviceId;
+          const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.isObserver) {
+            this.observers.delete(socket);
+            return;
+          }
+          const deviceId = socket.data.deviceId;
           if (deviceId) {
             this.pendingConnections.delete(deviceId);
             this.deps.deviceConnectionManager.handleDisconnect(deviceId, "socket_closed");
