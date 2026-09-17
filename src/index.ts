@@ -21,6 +21,7 @@ import { ActivityLog } from "@/core/activity/ActivityLog";
 import { WebAuthnStore } from "@/auth/WebAuthnStore";
 import { WebAuthnService } from "@/auth/WebAuthnService";
 import { SessionStore } from "@/auth/SessionStore";
+import { AudioLevelBroadcaster } from "@/communication/websocket/AudioLevelBroadcaster";
 
 const DEFAULT_USER_ID = "local-user";
 
@@ -93,9 +94,18 @@ function main() {
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
 
+  // Media Streams is a real, small extra Twilio cost (~$0.004/min on top
+  // of call minutes) — only wired up when explicitly enabled, and only
+  // meaningful once the phone gateway itself is configured.
+  const audioLevelBroadcaster =
+    config.audioWaveformEnabled && config.twilioPublicBaseUrl ? new AudioLevelBroadcaster() : undefined;
+  const audioStreamUrl = audioLevelBroadcaster
+    ? new URL("/voice/audio-stream", config.twilioPublicBaseUrl!.replace(/^http/, "ws")).toString()
+    : undefined;
+
   const phoneGateway =
     config.twilioAuthToken && config.twilioPublicBaseUrl
-      ? new TwilioVoiceGateway(createPhoneSession, config.twilioVoice)
+      ? new TwilioVoiceGateway(createPhoneSession, config.twilioVoice, audioStreamUrl)
       : undefined;
 
   const wsServer = new JarvisWebSocketServer({
@@ -112,6 +122,7 @@ function main() {
     adminToken: config.adminToken,
     webAuthnService,
     sessionStore,
+    audioLevelBroadcaster,
   });
   wsServer.start(config.port);
 
@@ -157,6 +168,9 @@ function main() {
       ? "Phone gateway: enabled (POST /voice/incoming, /voice/gather, /voice/status)"
       : "Phone gateway: disabled (set TWILIO_AUTH_TOKEN and TWILIO_PUBLIC_BASE_URL to enable)"
   );
+  if (audioLevelBroadcaster) {
+    console.log("Audio waveform: enabled (Twilio Media Streams — extra cost ~$0.004/min on the Twilio account)");
+  }
   if (phoneGateway && (!config.twilioAllowedCallers || config.twilioAllowedCallers.length === 0)) {
     console.warn(
       "[jarvis] WARNING: phone gateway is enabled with no TWILIO_ALLOWED_CALLERS set — " +

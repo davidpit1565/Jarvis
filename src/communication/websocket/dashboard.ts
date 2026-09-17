@@ -301,6 +301,16 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     min-height: 16px;
   }
   .ticker.thinking { color: var(--amber); font-style: italic; }
+  #waveform-wrap {
+    margin-top: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+  #waveform {
+    width: 100%;
+    height: 48px;
+    display: block;
+  }
   h1 {
     letter-spacing: 0.3em;
     font-size: 15px;
@@ -449,6 +459,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     <section>
       <h2>Phone gateway</h2>
       <div id="phone" class="row"><span class="empty">Loading…</span></div>
+      <div id="waveform-wrap" style="display:none">
+        <canvas id="waveform" width="600" height="48"></canvas>
+      </div>
     </section>
     <section>
       <h2>Activity</h2>
@@ -488,6 +501,58 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       })
       .join("");
   }
+
+  // Live audio waveform: connects to /dashboard/audio-ws (only meaningful
+  // when the operator has enabled JARVIS_AUDIO_WAVEFORM — see README).
+  // Silently does nothing if the endpoint 404s, which is the normal state
+  // when the feature isn't configured.
+  var waveformHistory = [];
+  var WAVEFORM_BARS = 80;
+  for (var wi = 0; wi < WAVEFORM_BARS; wi++) waveformHistory.push(0);
+
+  function drawWaveform() {
+    var canvas = document.getElementById("waveform");
+    if (!canvas) return;
+    var ctx = canvas.getContext("2d");
+    var w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    var barWidth = w / WAVEFORM_BARS;
+    for (var i = 0; i < waveformHistory.length; i++) {
+      var level = waveformHistory[i];
+      var barHeight = Math.max(2, level * h);
+      ctx.fillStyle = "rgba(79, 214, 232, " + (0.4 + level * 0.6) + ")";
+      ctx.fillRect(i * barWidth, (h - barHeight) / 2, barWidth * 0.7, barHeight);
+    }
+  }
+
+  (function setupWaveform() {
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    var ws;
+    try {
+      ws = new WebSocket(proto + "//" + location.host + "/dashboard/audio-ws");
+    } catch (err) {
+      return;
+    }
+    ws.onmessage = function (event) {
+      try {
+        var data = JSON.parse(event.data);
+        if (data.type === "level") {
+          waveformHistory.push(data.level);
+          if (waveformHistory.length > WAVEFORM_BARS) waveformHistory.shift();
+          drawWaveform();
+        }
+      } catch (err) {
+        // ignore malformed frames
+      }
+    };
+    // Decay toward silence between real audio events, so the waveform
+    // doesn't freeze on the last level between calls/chunks.
+    setInterval(function () {
+      waveformHistory.push(waveformHistory[waveformHistory.length - 1] * 0.7);
+      if (waveformHistory.length > WAVEFORM_BARS) waveformHistory.shift();
+      drawWaveform();
+    }, 200);
+  })();
 
   function escapeHtml(text) {
     var div = document.createElement("div");
@@ -589,6 +654,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       phoneEl.innerHTML = data.phoneGatewayEnabled
         ? '<span><span class="dot ok"></span>enabled</span>'
         : '<span><span class="dot off"></span>disabled</span>';
+
+      const waveformWrap = document.getElementById("waveform-wrap");
+      waveformWrap.style.display = data.audioWaveformEnabled ? "block" : "none";
 
       const activityEl = document.getElementById("activity");
       activityEl.innerHTML = data.activity && data.activity.length

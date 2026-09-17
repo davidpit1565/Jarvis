@@ -39,6 +39,31 @@ describe("TwilioVoiceGateway", () => {
     expect(body).toContain('voice="Google.en-US-Chirp3-HD-Charon"');
   });
 
+  test("includes <Start><Stream> on the greeting when an audio stream URL is configured", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused"), userId: "local-user" }),
+      undefined,
+      "wss://example.com/voice/audio-stream"
+    );
+
+    const response = gateway.handleIncomingCall("CA1");
+    const body = await response.text();
+    expect(body).toContain("<Start>");
+    expect(body).toContain('url="wss://example.com/voice/audio-stream"');
+    expect(body).toContain('track="both_tracks"');
+  });
+
+  test("omits <Start><Stream> when no audio stream URL is configured", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    const response = gateway.handleIncomingCall("CA1");
+    const body = await response.text();
+    expect(body).not.toContain("<Start>");
+  });
+
   test("a call's session is created once and reused across gather turns", async () => {
     let sessionsCreated = 0;
     const gateway = new TwilioVoiceGateway((): PhoneSession => {

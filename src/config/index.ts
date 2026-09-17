@@ -34,6 +34,14 @@ export interface JarvisConfig {
   webSearchEnabled: boolean;
   /** Caps how many searches Claude may run in a single turn. */
   webSearchMaxUses: number;
+  /**
+   * Enables live phone-call audio waveform visualization on the
+   * dashboard, via Twilio Media Streams. Only meaningful when the phone
+   * gateway is also configured. Off by default: Twilio bills Media
+   * Streams at ~$0.004/min on top of normal call minutes — a real,
+   * if small, extra cost, so this is never silently turned on.
+   */
+  audioWaveformEnabled: boolean;
 }
 
 class ConfigError extends Error {}
@@ -81,6 +89,8 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("Invalid JARVIS_WEB_SEARCH_MAX_USES: must be a positive integer");
   }
 
+  const audioWaveformEnabled = process.env.JARVIS_AUDIO_WAVEFORM?.trim().toLowerCase() === "true";
+
   if (twilioAuthToken && twilioPublicBaseUrl && !adminToken) {
     throw new ConfigError(
       "JARVIS_ADMIN_TOKEN is required once the phone gateway is configured (TWILIO_AUTH_TOKEN/TWILIO_PUBLIC_BASE_URL) — " +
@@ -101,6 +111,7 @@ export function loadConfig(): JarvisConfig {
     adminToken,
     webSearchEnabled,
     webSearchMaxUses,
+    audioWaveformEnabled,
   };
 }
 

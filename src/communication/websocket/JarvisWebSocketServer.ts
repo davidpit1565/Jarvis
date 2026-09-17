@@ -12,6 +12,8 @@ import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
 import { DASHBOARD_HTML, LOCK_HTML } from "./dashboard";
 import type { WebAuthnService } from "@/auth/WebAuthnService";
 import type { SessionStore } from "@/auth/SessionStore";
+import { AudioLevelBroadcaster } from "./AudioLevelBroadcaster";
+import { computeAudioLevel } from "@/communication/phone/audioLevel";
 import {
   makeEnvelope,
   parseDeviceToCoreMessage,
@@ -19,9 +21,12 @@ import {
   type ToolResultMessage,
 } from "./protocol";
 
-interface SocketData {
-  deviceId: string | null;
-}
+type SocketData =
+  | { kind: "device"; deviceId: string | null }
+  | { kind: "audio-ingest" }
+  | { kind: "audio-viewer" };
+
+type DeviceSocket = ServerWebSocket<Extract<SocketData, { kind: "device" }>>;
 
 export interface JarvisWebSocketServerDependencies {
   deviceRegistry: DeviceRegistry;
@@ -65,6 +70,15 @@ export interface JarvisWebSocketServerDependencies {
    */
   webAuthnService?: WebAuthnService;
   sessionStore?: SessionStore;
+  /**
+   * When set, enables live phone-call audio level broadcasting: Twilio
+   * streams raw call audio to POST-upgraded GET /voice/audio-stream, and
+   * any browser connected to GET /dashboard/audio-ws receives a live
+   * amplitude feed for a waveform visualization. Absent means the feature
+   * is off and /voice/audio-stream 404s — this is a real extra Twilio
+   * cost (~$0.004/min on top of call minutes), so it's opt-in.
+   */
+  audioLevelBroadcaster?: AudioLevelBroadcaster;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -95,7 +109,7 @@ function getOriginAndRpID(req: Request, url: URL): { origin: string; rpID: strin
  */
 export class JarvisWebSocketServer {
   /** Sockets that have sent device.register but aren't authenticated yet, keyed by deviceId. */
-  private pendingConnections: Map<string, ServerWebSocket<SocketData>> = new Map();
+  private pendingConnections: Map<string, DeviceSocket> = new Map();
 
   constructor(private readonly deps: JarvisWebSocketServerDependencies) {}
 
@@ -137,7 +151,25 @@ export class JarvisWebSocketServer {
             return new Response(locked ? LOCK_HTML : DASHBOARD_HTML, { headers: { "Content-Type": "text/html" } });
           }
 
-          if (server.upgrade(req, { data: { deviceId: null } })) {
+          if (isUpgradeRequest && url.pathname === "/voice/audio-stream") {
+            if (!this.deps.audioLevelBroadcaster) {
+              return new Response("Not found", { status: 404 });
+            }
+            return server.upgrade(req, { data: { kind: "audio-ingest" } })
+              ? undefined
+              : new Response("Upgrade failed", { status: 400 });
+          }
+
+          if (isUpgradeRequest && url.pathname === "/dashboard/audio-ws") {
+            if (!this.deps.audioLevelBroadcaster) {
+              return new Response("Not found", { status: 404 });
+            }
+            return server.upgrade(req, { data: { kind: "audio-viewer" } })
+              ? undefined
+              : new Response("Upgrade failed", { status: 400 });
+          }
+
+          if (server.upgrade(req, { data: { kind: "device", deviceId: null } })) {
             return undefined;
           }
           return new Response("JARVIS Core WebSocket endpoint", { status: 200 });
@@ -151,25 +183,42 @@ export class JarvisWebSocketServer {
         }
       },
       websocket: {
-        open: () => {
-          // No-op: a connection is only meaningful once it registers.
+        open: (ws) => {
+          const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.kind === "audio-viewer") {
+            this.deps.audioLevelBroadcaster?.addViewer(socket);
+          }
+          // Device sockets: a no-op here — only meaningful once they register.
         },
         message: (ws, raw) => {
-          this.handleMessage(ws as ServerWebSocket<SocketData>, raw.toString());
+          const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.kind === "audio-ingest") {
+            this.handleAudioStreamMessage(raw.toString());
+            return;
+          }
+          if (socket.data.kind === "audio-viewer") {
+            return; // viewers are receive-only; nothing to act on
+          }
+          this.handleMessage(socket as DeviceSocket, raw.toString());
         },
         close: (ws) => {
-          const deviceId = (ws as ServerWebSocket<SocketData>).data.deviceId;
-          if (deviceId) {
-            this.pendingConnections.delete(deviceId);
-            this.deps.deviceConnectionManager.handleDisconnect(deviceId, "socket_closed");
-            this.deps.deviceRegistry.updateStatus(deviceId, "offline");
+          const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.kind === "device") {
+            const deviceId = socket.data.deviceId;
+            if (deviceId) {
+              this.pendingConnections.delete(deviceId);
+              this.deps.deviceConnectionManager.handleDisconnect(deviceId, "socket_closed");
+              this.deps.deviceRegistry.updateStatus(deviceId, "offline");
+            }
+          } else if (socket.data.kind === "audio-viewer") {
+            this.deps.audioLevelBroadcaster?.removeViewer(socket);
           }
         },
       },
     });
   }
 
-  private handleMessage(ws: ServerWebSocket<SocketData>, raw: string): void {
+  private handleMessage(ws: DeviceSocket, raw: string): void {
     const result = parseDeviceToCoreMessage(raw);
 
     if (!result.ok) {
@@ -198,7 +247,7 @@ export class JarvisWebSocketServer {
     }
   }
 
-  private handleRegister(ws: ServerWebSocket<SocketData>, message: DeviceRegisterMessage): void {
+  private handleRegister(ws: DeviceSocket, message: DeviceRegisterMessage): void {
     const { deviceRegistry, pairingService, deviceConnectionManager } = this.deps;
     const payload = message.payload;
 
@@ -360,9 +409,47 @@ export class JarvisWebSocketServer {
     }
   }
 
+  /**
+   * Handles one Twilio Media Streams WebSocket message. Twilio's own
+   * schema (https://www.twilio.com/docs/voice/media-streams/websocket-messages):
+   * {event: "connected"|"start"|"media"|"stop", media?: {track, payload, ...}, ...}.
+   * Only "media" events carry audio; everything else is informational and
+   * safely ignored here. A malformed/unexpected message is dropped, never
+   * thrown — an ingest socket misbehaving must not crash the server.
+   */
+  private handleAudioStreamMessage(raw: string): void {
+    const { audioLevelBroadcaster } = this.deps;
+    if (!audioLevelBroadcaster) return;
+
+    let message: unknown;
+    try {
+      message = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      (message as Record<string, unknown>).event !== "media"
+    ) {
+      return;
+    }
+
+    const media = (message as Record<string, unknown>).media as Record<string, unknown> | undefined;
+    const payload = media?.payload;
+    const track = media?.track;
+    if (typeof payload !== "string" || (track !== "inbound" && track !== "outbound")) {
+      return;
+    }
+
+    audioLevelBroadcaster.broadcast(computeAudioLevel(payload), track);
+  }
+
   /** GET /status — read-only JSON feed the dashboard polls; no auth today, matching the rest of Core. */
   private handleStatusJson(): Response {
-    const { deviceRegistry, toolRegistry, phoneGateway, activityLog, webAuthnService } = this.deps;
+    const { deviceRegistry, toolRegistry, phoneGateway, activityLog, webAuthnService, audioLevelBroadcaster } =
+      this.deps;
 
     const devices = deviceRegistry.listDevices().map((device) => ({
       id: device.id,
@@ -384,6 +471,7 @@ export class JarvisWebSocketServer {
       phoneGatewayEnabled: Boolean(phoneGateway),
       activity: activityLog?.list() ?? [],
       webAuthnConfigured: webAuthnService?.hasCredentials() ?? true,
+      audioWaveformEnabled: Boolean(audioLevelBroadcaster),
     });
   }
 
@@ -482,7 +570,7 @@ export class JarvisWebSocketServer {
   }
 
   private send(
-    ws: ServerWebSocket<SocketData>,
+    ws: DeviceSocket,
     deviceId: string,
     type: "device.command",
     payload: { command: string; args?: Record<string, unknown> }

@@ -162,12 +162,15 @@ src/
 │   │   ├── protocol.ts               Typed, validated envelope protocol
 │   │   ├── DeviceConnectionManager.ts  Owns connections + tool request/response lifecycle
 │   │   ├── JarvisWebSocketServer.ts    Thin transport: bytes <-> validated messages,
-│   │   │                                plus routing for the /voice/* webhooks below
-│   │   │                                and the GET / /status status dashboard
-│   │   └── dashboard.ts                Self-contained HTML for the live status page
+│   │   │                                plus routing for the /voice/* webhooks below,
+│   │   │                                the GET / /status status dashboard, and the
+│   │   │                                audio-stream ingest/broadcast routes below
+│   │   ├── dashboard.ts                Self-contained HTML for the live status page
+│   │   └── AudioLevelBroadcaster.ts    Fans out live call audio levels to dashboard viewers
 │   └── phone/
 │       ├── TwilioVoiceGateway.ts   Per-call session + TwiML generation
-│       └── twilioSignature.ts      Twilio webhook signature verification
+│       ├── twilioSignature.ts      Twilio webhook signature verification
+│       └── audioLevel.ts           µ-law decode + RMS amplitude for the waveform
 ├── core/confirmation/   ConfirmationService — pluggable per-call approval gate
 │                        for CONFIRM/DANGEROUS tools
 ├── auth/
@@ -236,6 +239,9 @@ Then set `ANTHROPIC_API_KEY` in `.env`. Optional variables:
 - `JARVIS_WEB_SEARCH` — set to `true` to give JARVIS real internet search
   (see below). Off by default.
 - `JARVIS_WEB_SEARCH_MAX_USES` — caps searches per turn (default `5`).
+- `JARVIS_AUDIO_WAVEFORM` — set to `true` for a live audio waveform on the
+  dashboard during phone calls (see below). Off by default — **this has a
+  real extra cost** (~$0.004/min via Twilio Media Streams).
 
 ## Real internet search
 
@@ -391,6 +397,42 @@ through a real Twilio account — that requires the account/number setup
 above, which hasn't been done in this environment. In particular, the
 actual sound of `Polly.Matthew-Neural` (or any other voice) hasn't been
 heard — only that the TwiML correctly requests it.
+
+## Live audio waveform (see JARVIS's voice on a call)
+
+Setting `JARVIS_AUDIO_WAVEFORM=true` adds a live waveform to the
+dashboard's "Phone gateway" section, driven by the actual audio of the
+current call — both the caller's voice and JARVIS's own spoken replies.
+
+**How it works:**
+- Twilio's [Media Streams](https://www.twilio.com/docs/voice/media-streams)
+  feature streams raw call audio (µ-law, 8kHz) to a WebSocket as the call
+  happens. When enabled, `TwilioVoiceGateway` includes
+  `<Start><Stream url="wss://.../voice/audio-stream" track="both_tracks" /></Start>`
+  on the call's initial greeting (call-scoped, so it isn't repeated on
+  every turn).
+- `JarvisWebSocketServer` accepts that stream at `GET /voice/audio-stream`,
+  decodes each µ-law chunk with a standard G.711 decode table
+  (`src/communication/phone/audioLevel.ts`), and computes a normalized
+  0–1 RMS amplitude — enough for a waveform, not for playback or
+  transcription.
+- Each amplitude value is broadcast in real time (not via the 1s
+  `/status` poll) to any browser connected to `GET /dashboard/audio-ws`,
+  via `AudioLevelBroadcaster`. The dashboard renders it as scrolling bars
+  that decay to silence between chunks.
+
+**Real extra cost, disclosed up front**: Twilio bills Media Streams at
+approximately **$0.004/minute**, on top of normal call minutes — small,
+but real, which is why this is off by default and never silently enabled.
+Core also prints a startup log line naming the cost when it's turned on.
+
+**Verified end to end** (not just unit-tested in isolation): a real
+Chromium instance loaded the dashboard while a script fed genuinely
+Twilio-shaped `media` events (correct JSON schema, real µ-law bytes) into
+`/voice/audio-stream` over an actual WebSocket connection — the waveform
+rendered and reacted correctly, confirmed via screenshot, with the "Phone
+gateway" side-panel readout also flipping to `LIVE`. Not yet confirmed
+against a real Twilio account/call.
 
 ## Status dashboard
 
@@ -552,6 +594,15 @@ contain no language-detection logic, by design.
 - Optional Face ID/Touch ID lock for the dashboard (see below): real
   WebAuthn, not a custom biometric integration; registering the first
   credential requires `JARVIS_ADMIN_TOKEN` so setup can't be hijacked.
+- The audio waveform's ingest endpoint (`/voice/audio-stream`) only
+  exists at all when `JARVIS_AUDIO_WAVEFORM=true`, and — unlike the HTTP
+  voice webhooks — is **not** Twilio-signature-verified (a WebSocket
+  upgrade carries no such header to check). Anyone who knows the URL
+  could open it and send fake audio-shaped messages. This is a low-impact
+  gap, not a security hole on the order of the pairing/gather ones: the
+  path only ever reduces input to a bare 0–1 amplitude number for a
+  cosmetic waveform — it cannot inject text into the Orchestrator or
+  trigger any tool call.
 
 ## Current limitations
 

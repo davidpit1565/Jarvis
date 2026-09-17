@@ -12,6 +12,7 @@ const ENV_KEYS = [
   "JARVIS_ADMIN_TOKEN",
   "JARVIS_WEB_SEARCH",
   "JARVIS_WEB_SEARCH_MAX_USES",
+  "JARVIS_AUDIO_WAVEFORM",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -124,5 +125,16 @@ describe("loadConfig", () => {
   test("rejects a non-positive JARVIS_WEB_SEARCH_MAX_USES", () => {
     process.env.JARVIS_WEB_SEARCH_MAX_USES = "0";
     expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("audio waveform is disabled by default", () => {
+    const config = loadConfig();
+    expect(config.audioWaveformEnabled).toBe(false);
+  });
+
+  test("enables the audio waveform via JARVIS_AUDIO_WAVEFORM=true", () => {
+    process.env.JARVIS_AUDIO_WAVEFORM = "true";
+    const config = loadConfig();
+    expect(config.audioWaveformEnabled).toBe(true);
   });
 });

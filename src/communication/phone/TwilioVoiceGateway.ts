@@ -59,7 +59,18 @@ export class TwilioVoiceGateway {
   private sessions: Map<string, PhoneSession> = new Map();
   private readonly voice: string;
 
-  constructor(private readonly createSession: PhoneSessionFactory, voice: string = DEFAULT_VOICE) {
+  constructor(
+    private readonly createSession: PhoneSessionFactory,
+    voice: string = DEFAULT_VOICE,
+    /**
+     * When set, the `wss://` URL Twilio should stream raw call audio to
+     * (see JarvisWebSocketServer's /voice/audio-stream). Included via
+     * <Start><Stream> only on the initial greeting — the stream is
+     * call-scoped, not per-TwiML-response, so it doesn't need repeating
+     * on every gather turn. Unset means no audio waveform feature.
+     */
+    private readonly audioStreamUrl?: string
+  ) {
     this.voice = voice;
   }
 
@@ -81,7 +92,10 @@ export class TwilioVoiceGateway {
   /** POST /voice/incoming — Twilio calls this when a call comes in. */
   handleIncomingCall(callSid: string): Response {
     this.sessions.set(callSid, this.createSession(callSid));
-    return twimlResponse(this.gatherPrompt(GREETING));
+    const streamTag = this.audioStreamUrl
+      ? `<Start><Stream url="${escapeXml(this.audioStreamUrl)}" track="both_tracks" /></Start>`
+      : "";
+    return twimlResponse(streamTag + this.gatherPrompt(GREETING));
   }
 
   /** POST /voice/gather — Twilio calls this with the caller's transcribed speech. */
