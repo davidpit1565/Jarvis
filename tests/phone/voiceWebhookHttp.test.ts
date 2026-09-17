@@ -25,7 +25,7 @@ function makeStubSessionFactory(handle: (message: string) => Promise<string>) {
   });
 }
 
-function setupServer(sessionFactory: () => PhoneSession) {
+function setupServer(sessionFactory: () => PhoneSession, twilioAllowedCallers?: string[]) {
   const eventBus = new EventBus();
   const deviceRegistry = new DeviceRegistry();
   const pairingService = new PairingService();
@@ -40,6 +40,7 @@ function setupServer(sessionFactory: () => PhoneSession) {
     phoneGateway,
     twilioAuthToken: AUTH_TOKEN,
     twilioPublicBaseUrl: PUBLIC_BASE_URL,
+    twilioAllowedCallers,
   });
   const handle = server.start(0);
   return { handle, port: handle.port };
@@ -120,6 +121,53 @@ describe("Voice webhook HTTP routing", () => {
 
     const body = await response.text();
     expect(body).toContain("You said: what am I doing");
+  });
+
+  test("a caller not on the allowlist is turned away without reaching the orchestrator", async () => {
+    let orchestratorCalled = false;
+    const { handle, port } = setupServer(
+      makeStubSessionFactory(async () => {
+        orchestratorCalled = true;
+        return "unused";
+      }),
+      ["+15559999999"]
+    );
+    activeHandle = handle;
+
+    const path = "/voice/incoming";
+    const params = { CallSid: "CA1", From: "+15551234567" };
+    const signature = sign(`${PUBLIC_BASE_URL}${path}`, params);
+
+    const response = await fetch(`http://localhost:${port}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Twilio-Signature": signature },
+      body: new URLSearchParams(params),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(body).toContain("isn't authorized");
+    expect(body).toContain("<Hangup");
+    expect(orchestratorCalled).toBe(false);
+  });
+
+  test("a caller on the allowlist is let through normally", async () => {
+    const { handle, port } = setupServer(makeStubSessionFactory(async () => "unused"), ["+15551234567"]);
+    activeHandle = handle;
+
+    const path = "/voice/incoming";
+    const params = { CallSid: "CA1", From: "+15551234567" };
+    const signature = sign(`${PUBLIC_BASE_URL}${path}`, params);
+
+    const response = await fetch(`http://localhost:${port}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Twilio-Signature": signature },
+      body: new URLSearchParams(params),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(body).toContain("<Gather");
   });
 
   test("/voice/* routes 404 when the phone gateway isn't configured", async () => {

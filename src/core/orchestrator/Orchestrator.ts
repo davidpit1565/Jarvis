@@ -23,6 +23,13 @@ export interface OrchestratorDependencies {
   deviceConnectionManager?: DeviceConnectionManager;
   /** Required only if any registered tool requires CONFIRM/DANGEROUS. */
   confirmationService?: ConfirmationService;
+  /**
+   * Extra text appended to the system prompt for this Orchestrator's
+   * conversations only — e.g. telling Claude it's on a phone call so it
+   * knows to keep replies short and speakable. Leave unset for the default
+   * (text-only) channel.
+   */
+  channelContext?: string;
 }
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -39,7 +46,8 @@ export class Orchestrator {
   constructor(private readonly deps: OrchestratorDependencies) {}
 
   async handleUserMessage(userId: string, content: string): Promise<string> {
-    const { brain, conversation, toolRegistry, eventBus } = this.deps;
+    const { brain, conversation, toolRegistry, eventBus, channelContext } = this.deps;
+    const systemPrompt = channelContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${channelContext}` : JARVIS_SYSTEM_PROMPT;
 
     conversation.addUserMessage(content);
 
@@ -49,7 +57,7 @@ export class Orchestrator {
       const response = await brain.chat({
         messages: conversation.getMessages(),
         tools: toolRegistry.toToolDefinitions(),
-        context: JARVIS_SYSTEM_PROMPT,
+        context: systemPrompt,
       });
 
       eventBus.emit("brain.response", {

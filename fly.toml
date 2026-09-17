@@ -1,0 +1,39 @@
+# Fly.io app config for running JARVIS Core as an always-on service with a
+# public HTTPS URL (needed so Twilio's webhooks can reach it).
+#
+# One-time setup (from the office, tomorrow):
+#   1. `fly launch --no-deploy` (creates the app; keep this generated config)
+#   2. `fly volumes create jarvis_data --size 1` (persistent memory storage)
+#   3. `fly secrets set ANTHROPIC_API_KEY=... TWILIO_AUTH_TOKEN=...`
+#      (TWILIO_PUBLIC_BASE_URL is set after step 4, once the app's URL is known)
+#   4. `fly deploy`
+#   5. `fly secrets set TWILIO_PUBLIC_BASE_URL=https://<your-app>.fly.dev`
+#      then `fly deploy` again so the new value takes effect.
+#   6. In the Twilio console, set the phone number's voice webhook to
+#      https://<your-app>.fly.dev/voice/incoming
+#
+# See README.md "Phone gateway (call JARVIS)" for the full walkthrough.
+
+app = "jarvis-core"
+primary_region = "iad"
+
+[build]
+
+[env]
+  JARVIS_PORT = "4770"
+  JARVIS_MEMORY_DB_PATH = "/data/jarvis-memory.sqlite"
+
+[http_service]
+  internal_port = 4770
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[mounts]]
+  source = "jarvis_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

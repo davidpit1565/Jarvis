@@ -294,26 +294,50 @@ only needs to shuttle text in and out through the existing `Orchestrator`.
 **To actually go live, you need your own Twilio account** (same
 requirement as needing your own Anthropic API key — this repo never
 ships credentials for either):
-1. Create a Twilio account and a phone number with Voice capability.
-2. Run JARVIS somewhere Twilio's servers can reach over HTTPS (a public
-   host, or a local machine tunneled with something like ngrok).
+1. Create a Twilio account and buy a phone number with Voice capability.
+2. Run JARVIS somewhere Twilio's servers can reach over HTTPS — see
+   "Cloud deployment" below for the recommended way (an always-on host,
+   no dependency on a personal machine staying on), or tunnel a local
+   machine with something like ngrok for quick testing.
 3. Set `TWILIO_AUTH_TOKEN` (from the Twilio console) and
-   `TWILIO_PUBLIC_BASE_URL` (the public HTTPS URL Twilio will hit, e.g.
-   your ngrok URL) in `.env`.
+   `TWILIO_PUBLIC_BASE_URL` (the public HTTPS URL Twilio will hit) as
+   environment variables/secrets on wherever JARVIS runs.
 4. In the Twilio console, set the phone number's "A call comes in"
    webhook to `<TWILIO_PUBLIC_BASE_URL>/voice/incoming` (HTTP POST).
-5. Call the number. JARVIS answers, listens, replies, and keeps listening
+5. Optionally set `TWILIO_ALLOWED_CALLERS` to a comma-separated allowlist
+   of E.164 numbers (see "Security controls" above) — recommended before
+   giving the number out.
+6. Call the number. JARVIS answers, listens, replies, and keeps listening
    until the call ends.
 
 If `TWILIO_AUTH_TOKEN`/`TWILIO_PUBLIC_BASE_URL` aren't set, the `/voice/*`
 routes don't exist at all (`404`) and nothing else changes — the phone
 gateway is fully optional.
 
+### Cloud deployment
+
+To make JARVIS reachable by Twilio without keeping a personal machine on
+and connected, this repo includes a `Dockerfile` and a `fly.toml` for
+[Fly.io](https://fly.io) — a straightforward host for a small always-on
+service with a free HTTPS URL. The full one-time setup is documented as
+comments at the top of `fly.toml`: `fly launch --no-deploy`, create a
+volume for the persistent memory database, set secrets
+(`ANTHROPIC_API_KEY`, `TWILIO_AUTH_TOKEN`, then `TWILIO_PUBLIC_BASE_URL`
+once the app's URL is known), `fly deploy`, then point the Twilio number
+at `<app>.fly.dev/voice/incoming`. Any other Docker-friendly host (Railway,
+Render, a VPS) works the same way using the same `Dockerfile` — `fly.toml`
+is just the one this repo ships a ready config for.
+
+**Not yet verified**: the `Dockerfile` was written and reviewed but not
+built or run in this environment (no Docker daemon available here). Build
+it yourself once (`docker build -t jarvis-core .`) before relying on it,
+and report back if anything doesn't come up clean.
+
 **What's validated vs. not:** the gateway logic (TwiML generation, session
-lifecycle per `CallSid`, signature verification, HTTP routing including
-signed/unsigned/tampered requests) is covered by real tests, including
-end-to-end HTTP tests against the actual `Bun.serve` server
-(`tests/phone/`). What is **not** validated is an actual phone call
+lifecycle per `CallSid`, signature verification, the caller allowlist, HTTP
+routing including signed/unsigned/tampered requests) is covered by real
+tests, including end-to-end HTTP tests against the actual `Bun.serve`
+server (`tests/phone/`). What is **not** validated is an actual phone call
 through a real Twilio account — that requires the account/number setup
 above, which hasn't been done in this environment.
 
@@ -359,6 +383,10 @@ contain no language-detection logic, by design.
 - Every phone webhook request's Twilio signature is verified against the
   configured public URL before it reaches the Orchestrator; unsigned,
   tampered, or wrong-route requests are rejected with `403`.
+- Optional phone caller allowlist (`TWILIO_ALLOWED_CALLERS`): when set, a
+  call from any other number is turned away with a spoken message before
+  it reaches the Orchestrator — signature verification alone only proves
+  the request came from Twilio, not who's on the call.
 
 ## Current limitations
 
@@ -368,10 +396,11 @@ contain no language-detection logic, by design.
 - DeviceRegistry, PermissionService, and PairingService are all in-memory
   and reset on restart. (`MemoryStore` is the one exception — it is
   SQLite-backed and persists across restarts.)
-- The phone gateway has no caller allowlist — anyone who calls the
+- The phone gateway's caller allowlist (`TWILIO_ALLOWED_CALLERS`) is
+  optional and off by default — if you don't set it, anyone who calls the
   configured Twilio number reaches the same JARVIS conversation as the
-  terminal chat, with the same tool access. Treat the phone number itself
-  as a credential until a caller-identity check is added.
+  terminal chat, with the same tool access. Set it before giving the
+  number to anyone but yourself.
 - Pairing approval is a manual CLI step (`bun run approve-device`) — there
   is no web UI for it yet.
 - No authentication beyond a placeholder `userId`.

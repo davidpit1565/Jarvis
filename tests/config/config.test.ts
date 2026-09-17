@@ -1,7 +1,14 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { loadConfig, ConfigError } from "@/config";
 
-const ENV_KEYS = ["ANTHROPIC_API_KEY", "JARVIS_PORT", "JARVIS_MEMORY_DB_PATH", "TWILIO_AUTH_TOKEN", "TWILIO_PUBLIC_BASE_URL"];
+const ENV_KEYS = [
+  "ANTHROPIC_API_KEY",
+  "JARVIS_PORT",
+  "JARVIS_MEMORY_DB_PATH",
+  "TWILIO_AUTH_TOKEN",
+  "TWILIO_PUBLIC_BASE_URL",
+  "TWILIO_ALLOWED_CALLERS",
+];
 let saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -55,5 +62,16 @@ describe("loadConfig", () => {
   test("rejects an invalid JARVIS_PORT", () => {
     process.env.JARVIS_PORT = "not-a-number";
     expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("parses TWILIO_ALLOWED_CALLERS into a trimmed, non-empty list", () => {
+    process.env.TWILIO_ALLOWED_CALLERS = " +15551234567 ,+15557654321,";
+    const config = loadConfig();
+    expect(config.twilioAllowedCallers).toEqual(["+15551234567", "+15557654321"]);
+  });
+
+  test("leaves twilioAllowedCallers undefined when unset", () => {
+    const config = loadConfig();
+    expect(config.twilioAllowedCallers).toBeUndefined();
   });
 });

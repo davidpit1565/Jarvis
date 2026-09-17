@@ -26,6 +26,13 @@ export interface JarvisWebSocketServerDependencies {
   phoneGateway?: TwilioVoiceGateway;
   twilioAuthToken?: string;
   twilioPublicBaseUrl?: string;
+  /**
+   * E.164 phone numbers allowed to reach JARVIS by phone. When set and
+   * non-empty, any other caller is politely turned away before reaching
+   * the Orchestrator. When unset, any caller who knows the number reaches
+   * the full assistant — the phone number itself is then the only gate.
+   */
+  twilioAllowedCallers?: string[];
 }
 
 /**
@@ -224,7 +231,7 @@ export class JarvisWebSocketServer {
    * "speech" input, no real phone call required.
    */
   private async handleVoiceWebhook(req: Request, url: URL): Promise<Response> {
-    const { phoneGateway, twilioAuthToken, twilioPublicBaseUrl } = this.deps;
+    const { phoneGateway, twilioAuthToken, twilioPublicBaseUrl, twilioAllowedCallers } = this.deps;
 
     if (!phoneGateway || !twilioAuthToken || !twilioPublicBaseUrl) {
       return new Response("Not found", { status: 404 });
@@ -247,6 +254,22 @@ export class JarvisWebSocketServer {
     const callSid = params.CallSid;
     if (!callSid) {
       return new Response("Bad request: missing CallSid", { status: 400 });
+    }
+
+    // Signature verification only proves the request genuinely came from
+    // Twilio — it says nothing about who's on the other end of the call.
+    // An allowlist, when configured, is the actual gate on that.
+    if (
+      url.pathname === "/voice/incoming" &&
+      twilioAllowedCallers &&
+      twilioAllowedCallers.length > 0 &&
+      !twilioAllowedCallers.includes(params.From ?? "")
+    ) {
+      console.error(`[jarvis] rejected call from disallowed number: ${params.From ?? "(unknown)"}`);
+      return new Response(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, this number isn't authorized to reach JARVIS.</Say><Hangup/></Response>`,
+        { headers: { "Content-Type": "text/xml" } }
+      );
     }
 
     switch (url.pathname) {

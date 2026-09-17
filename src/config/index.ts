@@ -11,6 +11,8 @@ export interface JarvisConfig {
    * the public one Twilio actually signed.
    */
   twilioPublicBaseUrl?: string;
+  /** E.164 numbers allowed to call JARVIS; empty/unset means any caller is let through. */
+  twilioAllowedCallers?: string[];
 }
 
 class ConfigError extends Error {}
@@ -45,7 +47,18 @@ export function loadConfig(): JarvisConfig {
     );
   }
 
-  return { anthropicApiKey, port, memoryDbPath, twilioAuthToken, twilioPublicBaseUrl };
+  const twilioAllowedCallers = process.env.TWILIO_ALLOWED_CALLERS?.split(",")
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0);
+
+  return {
+    anthropicApiKey,
+    port,
+    memoryDbPath,
+    twilioAuthToken,
+    twilioPublicBaseUrl,
+    twilioAllowedCallers,
+  };
 }
 
 export { ConfigError };

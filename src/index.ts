@@ -77,6 +77,7 @@ function main() {
       deviceRegistry,
       deviceConnectionManager,
       confirmationService,
+      channelContext: "This conversation is happening over a live phone call right now.",
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -92,6 +93,7 @@ function main() {
     phoneGateway,
     twilioAuthToken: config.twilioAuthToken,
     twilioPublicBaseUrl: config.twilioPublicBaseUrl,
+    twilioAllowedCallers: config.twilioAllowedCallers,
   });
   wsServer.start(config.port);
 
