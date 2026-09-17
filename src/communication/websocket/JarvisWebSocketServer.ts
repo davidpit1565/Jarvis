@@ -8,7 +8,9 @@ import type { ActivityLog } from "@/core/activity/ActivityLog";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
-import { DASHBOARD_HTML } from "./dashboard";
+import { DASHBOARD_HTML, LOCK_HTML } from "./dashboard";
+import type { WebAuthnService } from "@/auth/WebAuthnService";
+import type { SessionStore } from "@/auth/SessionStore";
 import {
   makeEnvelope,
   parseDeviceToCoreMessage,
@@ -52,6 +54,35 @@ export interface JarvisWebSocketServerDependencies {
    * development.
    */
   adminToken?: string;
+  /**
+   * Optional Face ID / Touch ID (WebAuthn) protection for the dashboard.
+   * Both required together: once any credential is registered, GET / and
+   * GET /dashboard require a valid session (issued by POST /auth/login)
+   * instead of serving the page directly. Registering the first credential
+   * requires `adminToken` (see above), so setup can't be hijacked by
+   * whoever happens to load the page first.
+   */
+  webAuthnService?: WebAuthnService;
+  sessionStore?: SessionStore;
+}
+
+const SESSION_COOKIE = "jarvis_session";
+
+function readCookie(req: Request, name: string): string | null {
+  const header = req.headers.get("cookie");
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return rest.join("=");
+  }
+  return null;
+}
+
+/** Derives the origin/rpID WebAuthn ceremonies must match, from the request actually used to reach this server (works behind Fly's proxy via X-Forwarded-Proto, and on plain localhost for development). */
+function getOriginAndRpID(req: Request, url: URL): { origin: string; rpID: string } {
+  const host = req.headers.get("host") ?? url.host;
+  const proto = req.headers.get("x-forwarded-proto") ?? url.protocol.replace(":", "");
+  return { origin: `${proto}://${host}`, rpID: host.split(":")[0]! };
 }
 
 /**
@@ -90,8 +121,14 @@ export class JarvisWebSocketServer {
             return this.handleStatusJson();
           }
 
+          if (!isUpgradeRequest && url.pathname.startsWith("/auth/")) {
+            return await this.handleAuthRoute(req, url);
+          }
+
           if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
-            return new Response(DASHBOARD_HTML, { headers: { "Content-Type": "text/html" } });
+            const { webAuthnService } = this.deps;
+            const locked = webAuthnService?.hasCredentials() && !this.hasValidSession(req);
+            return new Response(locked ? LOCK_HTML : DASHBOARD_HTML, { headers: { "Content-Type": "text/html" } });
           }
 
           if (server.upgrade(req, { data: { deviceId: null } })) {
@@ -319,7 +356,7 @@ export class JarvisWebSocketServer {
 
   /** GET /status — read-only JSON feed the dashboard polls; no auth today, matching the rest of Core. */
   private handleStatusJson(): Response {
-    const { deviceRegistry, toolRegistry, phoneGateway, activityLog } = this.deps;
+    const { deviceRegistry, toolRegistry, phoneGateway, activityLog, webAuthnService } = this.deps;
 
     const devices = deviceRegistry.listDevices().map((device) => ({
       id: device.id,
@@ -340,7 +377,69 @@ export class JarvisWebSocketServer {
       tools,
       phoneGatewayEnabled: Boolean(phoneGateway),
       activity: activityLog?.list() ?? [],
+      webAuthnConfigured: webAuthnService?.hasCredentials() ?? true,
     });
+  }
+
+  private hasValidSession(req: Request): boolean {
+    const { sessionStore } = this.deps;
+    if (!sessionStore) return false;
+    return sessionStore.isValid(readCookie(req, SESSION_COOKIE));
+  }
+
+  /**
+   * Face ID / Touch ID (WebAuthn) ceremony endpoints. Registration
+   * requires the same admin token as device-pairing approval — otherwise
+   * whoever loads the dashboard first could register their own face as
+   * "the owner." Login requires no secret: the platform authenticator
+   * ceremony itself is the proof.
+   */
+  private async handleAuthRoute(req: Request, url: URL): Promise<Response> {
+    const { webAuthnService, sessionStore, adminToken } = this.deps;
+    if (!webAuthnService || !sessionStore) {
+      return new Response("Not found", { status: 404 });
+    }
+    const { origin, rpID } = getOriginAndRpID(req, url);
+
+    if (req.method === "POST" && url.pathname === "/auth/register-options") {
+      if (!adminToken || !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+        return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+      }
+      const options = await webAuthnService.createRegistrationOptions(rpID);
+      return Response.json(options);
+    }
+
+    if (req.method === "POST" && url.pathname === "/auth/register") {
+      if (!adminToken || !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+        return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+      }
+      const body = (await req.json().catch(() => null)) as { response?: unknown } | null;
+      if (!body?.response) return Response.json({ error: "Missing response" }, { status: 400 });
+      const verified = await webAuthnService.verifyRegistration(body.response as never, rpID, origin);
+      if (!verified) return Response.json({ error: "Verification failed" }, { status: 400 });
+      return Response.json({ success: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/auth/login-options") {
+      const options = await webAuthnService.createAuthenticationOptions(rpID);
+      return Response.json(options);
+    }
+
+    if (req.method === "POST" && url.pathname === "/auth/login") {
+      const body = (await req.json().catch(() => null)) as { response?: unknown } | null;
+      if (!body?.response) return Response.json({ error: "Missing response" }, { status: 400 });
+      const verified = await webAuthnService.verifyAuthentication(body.response as never, rpID, origin);
+      if (!verified) return Response.json({ error: "Verification failed" }, { status: 401 });
+
+      const token = sessionStore.create();
+      const secure = origin.startsWith("https://") ? "; Secure" : "";
+      return Response.json(
+        { success: true },
+        { headers: { "Set-Cookie": `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/${secure}` } }
+      );
+    }
+
+    return new Response("Not found", { status: 404 });
   }
 
   private async handleApproveHttp(req: Request): Promise<Response> {

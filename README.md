@@ -170,6 +170,10 @@ src/
 │       └── twilioSignature.ts      Twilio webhook signature verification
 ├── core/confirmation/   ConfirmationService — pluggable per-call approval gate
 │                        for CONFIRM/DANGEROUS tools
+├── auth/
+│   ├── WebAuthnStore.ts     Registered Face ID/Touch ID credentials (SQLite)
+│   ├── WebAuthnService.ts   Registration/authentication ceremonies
+│   └── SessionStore.ts      In-memory dashboard session tokens
 ├── config/              Environment variable loading and validation
 └── types/               Shared TypeScript types across all modules (incl.
                          voice.ts — provider-agnostic STT/TTS interfaces,
@@ -386,6 +390,61 @@ tool names, activity messages) is HTML-escaped before insertion — device
 names in particular originate from device agents, which are a less
 trusted source than Core's own code.
 
+## Face ID / Touch ID for the dashboard
+
+The dashboard can be locked behind Face ID, Touch ID, or any other
+platform passkey, via [WebAuthn](https://webauthn.guide) — the same
+browser standard real password managers and "Sign in with..." buttons
+use, not a custom biometric integration. No third-party vendor, no
+uploaded biometric data: the browser and OS handle the actual
+fingerprint/face check, and only prove the result to JARVIS.
+
+**How it works:**
+- `src/auth/WebAuthnStore.ts` — SQLite-backed storage for registered
+  credentials (`JARVIS_WEBAUTHN_DB_PATH`, one database, any number of
+  devices — e.g. a MacBook's Touch ID and an iPhone's Face ID can both be
+  registered).
+- `src/auth/WebAuthnService.ts` — wraps
+  [`@simplewebauthn/server`](https://simplewebauthn.dev/)'s registration
+  and authentication ceremonies (the actual cryptographic verification is
+  never hand-rolled).
+- `src/auth/SessionStore.ts` — in-memory session tokens (12-hour TTL,
+  reset on restart) issued after a successful unlock.
+- **Setup requires `JARVIS_ADMIN_TOKEN`** (the same secret used for
+  device-pairing approval — see "Security controls"): without this, the
+  first person to load the dashboard could register their own face as
+  "the owner." A "Set up" banner appears on the dashboard until at least
+  one credential is registered; clicking it prompts for the admin token,
+  then triggers the browser's native Face ID/Touch ID/passkey prompt.
+- **Unlocking requires no secret** — once at least one credential exists,
+  visiting `/` or `/dashboard` shows a lock screen instead of the
+  dashboard; the "Unlock" button triggers the same native prompt, and the
+  platform authenticator's response (never the biometric data itself,
+  which never leaves the device) is what proves identity.
+- No external script/CDN dependency: the browser-side conversions
+  `@simplewebauthn/browser` would normally handle are hand-written
+  (`src/communication/websocket/dashboard.ts`) to keep the dashboard
+  self-contained.
+
+**Verified end to end**, not just unit-tested in isolation: a real
+Chromium instance, driven via Playwright, completed the actual
+`navigator.credentials.create()`/`.get()` browser ceremony against the
+real running server, using Chrome DevTools Protocol's virtual
+authenticator (`transport: "internal"`, i.e. standing in for real Face
+ID/Touch ID hardware, which this development environment doesn't have)
+— registration verified (200), login verified (200), and the dashboard
+was confirmed unlocked after reload. This proves the full cryptographic
+ceremony genuinely works, not only that the server's own logic is
+internally consistent.
+
+**Current limitations:**
+- No credential-removal UI yet (only a fresh `JARVIS_WEBAUTHN_DB_PATH` or
+  manual SQL clears one).
+- Sessions are in-memory only — restarting Core requires unlocking again.
+- This protects the dashboard specifically; it does not gate `/status`,
+  the WebSocket device protocol, or the phone gateway, which have their
+  own separate security models (see "Security controls").
+
 ## Test
 
 ```bash
@@ -443,6 +502,9 @@ contain no language-detection logic, by design.
   call from any other number is turned away with a spoken message before
   it reaches the Orchestrator — signature verification alone only proves
   the request came from Twilio, not who's on the call.
+- Optional Face ID/Touch ID lock for the dashboard (see below): real
+  WebAuthn, not a custom biometric integration; registering the first
+  credential requires `JARVIS_ADMIN_TOKEN` so setup can't be hijacked.
 
 ## Current limitations
 
@@ -538,3 +600,10 @@ of that gap; the rest is tracked explicitly below.
    control surface — device pairing approval, confirmation prompts, and
    memory browsing from the browser instead of only the terminal/CLI.
 7. Device-to-device communication.
+8. A spoken-passphrase equivalent of Face ID for the phone channel — the
+   dashboard now has real WebAuthn (Face ID/Touch ID); the phone gateway
+   has no analogous identity check beyond the optional
+   `TWILIO_ALLOWED_CALLERS` allowlist. A verified passphrase (checked
+   against Twilio's own speech-to-text) is a reasonable next step; genuine
+   voiceprint biometrics would need a separate paid vendor and is a
+   bigger decision than a config value.

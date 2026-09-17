@@ -18,6 +18,9 @@ import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnect
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/TwilioVoiceGateway";
 import { ActivityLog } from "@/core/activity/ActivityLog";
+import { WebAuthnStore } from "@/auth/WebAuthnStore";
+import { WebAuthnService } from "@/auth/WebAuthnService";
+import { SessionStore } from "@/auth/SessionStore";
 
 const DEFAULT_USER_ID = "local-user";
 
@@ -34,6 +37,9 @@ function main() {
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
   const activityLog = new ActivityLog();
+  const webAuthnStore = new WebAuthnStore(config.webauthnDbPath);
+  const webAuthnService = new WebAuthnService(webAuthnStore);
+  const sessionStore = new SessionStore();
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
@@ -101,6 +107,8 @@ function main() {
     twilioPublicBaseUrl: config.twilioPublicBaseUrl,
     twilioAllowedCallers: config.twilioAllowedCallers,
     adminToken: config.adminToken,
+    webAuthnService,
+    sessionStore,
   });
   wsServer.start(config.port);
 
@@ -144,6 +152,7 @@ function main() {
 
   process.on("SIGINT", () => {
     memoryStore.close();
+    webAuthnStore.close();
     rl.close();
     process.exit(0);
   });

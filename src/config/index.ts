@@ -2,6 +2,8 @@ export interface JarvisConfig {
   anthropicApiKey: string;
   port: number;
   memoryDbPath: string;
+  /** Path to the SQLite database storing registered Face ID/Touch ID (WebAuthn) credentials. */
+  webauthnDbPath: string;
   /** Both must be set together to enable the optional Twilio phone gateway. */
   twilioAuthToken?: string;
   /**
@@ -43,6 +45,7 @@ export function loadConfig(): JarvisConfig {
   const anthropicApiKey = requireEnv("ANTHROPIC_API_KEY");
   const port = Number(process.env.JARVIS_PORT ?? "4770");
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
+  const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
 
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new ConfigError(`Invalid JARVIS_PORT: must be an integer between 1 and 65535`);
@@ -75,6 +78,7 @@ export function loadConfig(): JarvisConfig {
     anthropicApiKey,
     port,
     memoryDbPath,
+    webauthnDbPath,
     twilioAuthToken,
     twilioPublicBaseUrl,
     twilioAllowedCallers,

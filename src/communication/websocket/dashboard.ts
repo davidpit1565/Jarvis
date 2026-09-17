@@ -10,6 +10,165 @@
  * no injection surface here even though the data it displays (device
  * names, etc.) originates from device agents.
  */
+/**
+ * Shared browser-side WebAuthn helpers (Face ID / Touch ID / platform
+ * passkeys), used by both the dashboard's "set up Face ID" banner and the
+ * lock screen's "unlock" button. Hand-written rather than pulling in
+ * @simplewebauthn/browser, to keep this dashboard dependency-free and
+ * self-contained (no build step, no CDN script) — the conversions here
+ * (base64url <-> ArrayBuffer, and shaping the browser's PublicKeyCredential
+ * into the JSON @simplewebauthn/server expects) are exactly what that
+ * package does, just inlined.
+ */
+const WEBAUTHN_CLIENT_JS = `
+  function bufToBase64url(buf) {
+    var bytes = new Uint8Array(buf);
+    var str = "";
+    for (var i = 0; i < bytes.byteLength; i++) str += String.fromCharCode(bytes[i]);
+    return btoa(str).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
+  }
+  function base64urlToBuf(base64url) {
+    var base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+    var pad = base64.length % 4 === 0 ? "" : "=".repeat(4 - (base64.length % 4));
+    var str = atob(base64 + pad);
+    var bytes = new Uint8Array(str.length);
+    for (var i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  async function setupFaceId() {
+    var adminToken = prompt("Enter your JARVIS_ADMIN_TOKEN to register this device's Face ID / Touch ID:");
+    if (!adminToken) return;
+    try {
+      var optionsRes = await fetch("/auth/register-options", {
+        method: "POST",
+        headers: { "X-Jarvis-Admin-Token": adminToken },
+      });
+      if (!optionsRes.ok) throw new Error("Could not start registration — wrong admin token?");
+      var options = await optionsRes.json();
+      options.challenge = base64urlToBuf(options.challenge);
+      options.user.id = base64urlToBuf(options.user.id);
+      if (options.excludeCredentials) {
+        options.excludeCredentials = options.excludeCredentials.map(function (c) {
+          return Object.assign({}, c, { id: base64urlToBuf(c.id) });
+        });
+      }
+      var credential = await navigator.credentials.create({ publicKey: options });
+      var payload = {
+        response: {
+          id: credential.id,
+          rawId: bufToBase64url(credential.rawId),
+          type: credential.type,
+          response: {
+            attestationObject: bufToBase64url(credential.response.attestationObject),
+            clientDataJSON: bufToBase64url(credential.response.clientDataJSON),
+          },
+          clientExtensionResults: credential.getClientExtensionResults(),
+        },
+      };
+      var verifyRes = await fetch("/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Jarvis-Admin-Token": adminToken },
+        body: JSON.stringify(payload),
+      });
+      if (!verifyRes.ok) throw new Error("Registration could not be verified");
+      alert("Face ID / Touch ID registered. Reloading.");
+      location.reload();
+    } catch (err) {
+      alert("Setup failed: " + (err && err.message ? err.message : err));
+    }
+  }
+
+  async function unlockWithFaceId() {
+    try {
+      var optionsRes = await fetch("/auth/login-options");
+      var options = await optionsRes.json();
+      options.challenge = base64urlToBuf(options.challenge);
+      if (options.allowCredentials) {
+        options.allowCredentials = options.allowCredentials.map(function (c) {
+          return Object.assign({}, c, { id: base64urlToBuf(c.id) });
+        });
+      }
+      var assertion = await navigator.credentials.get({ publicKey: options });
+      var payload = {
+        response: {
+          id: assertion.id,
+          rawId: bufToBase64url(assertion.rawId),
+          type: assertion.type,
+          response: {
+            authenticatorData: bufToBase64url(assertion.response.authenticatorData),
+            clientDataJSON: bufToBase64url(assertion.response.clientDataJSON),
+            signature: bufToBase64url(assertion.response.signature),
+            userHandle: assertion.response.userHandle ? bufToBase64url(assertion.response.userHandle) : undefined,
+          },
+          clientExtensionResults: assertion.getClientExtensionResults(),
+        },
+      };
+      var loginRes = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(payload),
+      });
+      if (!loginRes.ok) throw new Error("Face ID was not recognized");
+      location.reload();
+    } catch (err) {
+      var box = document.getElementById("unlock-error");
+      if (box) box.textContent = "Unlock failed: " + (err && err.message ? err.message : err);
+    }
+  }
+`;
+
+/**
+ * Shown instead of DASHBOARD_HTML when Face ID/Touch ID protection is
+ * configured (at least one credential registered) and the request has no
+ * valid session cookie. The unlock ceremony itself proves identity — this
+ * page needs no server-rendered data, so (like the dashboard) it carries
+ * no injection surface.
+ */
+export const LOCK_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS — Locked</title>
+<style>
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(circle at 50% 30%, #0d1a20 0%, #05070a 60%);
+    color: #d7e4ea;
+    font-family: "SF Mono", "Consolas", "Menlo", monospace;
+  }
+  h1 { letter-spacing: 0.3em; color: #4fd6e8; font-size: 16px; }
+  button {
+    margin-top: 24px;
+    background: transparent;
+    border: 1px solid #4fd6e8;
+    color: #4fd6e8;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { background: rgba(79, 214, 232, 0.1); }
+  #unlock-error { color: #ff5f5f; font-size: 12px; margin-top: 12px; max-width: 320px; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>JARVIS — LOCKED</h1>
+  <button onclick="unlockWithFaceId()">Unlock with Face ID / Touch ID</button>
+  <div id="unlock-error"></div>
+<script>${WEBAUTHN_CLIENT_JS}</script>
+</body>
+</html>
+`;
+
 export const DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -229,8 +388,16 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       <h2>Activity</h2>
       <div id="activity" class="activity"><div class="empty">Nothing yet.</div></div>
     </section>
+    <section id="faceid-banner" style="display:none">
+      <h2>Face ID / Touch ID</h2>
+      <div class="row">
+        <span class="empty">Not set up — anyone with this URL can view this dashboard.</span>
+        <button onclick="setupFaceId()" style="background:transparent;border:1px solid var(--cyan);color:var(--cyan);padding:6px 12px;border-radius:6px;font-family:inherit;font-size:12px;cursor:pointer;">Set up</button>
+      </div>
+    </section>
   </main>
   <footer>refreshes every 3s</footer>
+<script>${WEBAUTHN_CLIENT_JS}</script>
 <script>
   // --- Holographic core: a hand-rolled wireframe sphere, no 3D library.
   // Inspired by a reference (an AI-generated cinematic hologram render) the
@@ -448,6 +615,9 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
               '</span><span class="msg">' + escapeHtml(a.message) + '</span></div>';
           }).join("")
         : '<div class="empty">Nothing yet.</div>';
+
+      const faceIdBanner = document.getElementById("faceid-banner");
+      faceIdBanner.style.display = data.webAuthnConfigured ? "none" : "block";
     } catch (err) {
       line.textContent = "disconnected";
     }
