@@ -88,16 +88,53 @@ What's new in Phase 2:
 real functionality):
 
 - iPhone client, MacBook agent
-- Voice (speech-to-text / text-to-speech)
+- Full voice input/output (microphone-based speech-to-text / text-to-speech
+  — the phone channel below uses Twilio's own speech recognition/synthesis
+  instead, so this remains open for any non-phone voice channel)
 - Browser automation
 - Arbitrary shell/AppleScript execution, sudo, process injection
 - Unrestricted keyboard/mouse/application automation
 - Any destructive filesystem operation
-- A confirmation UI for `CONFIRM`/`DANGEROUS` permission levels
 - Persistent (disk-backed) device registry, permission grants, or pairing
   store — all in-memory, matching Phase 1's pattern
 - Continuous/high-frequency context monitoring (e.g. streaming
   `active_window.changed` events)
+
+## Persistent memory
+
+Beyond the in-memory conversation state, JARVIS has an explicit, SQLite-backed
+memory store (`src/memory/MemoryStore.ts`) that survives restarts:
+
+- **`SAVE_MEMORY`** (`src/tools/memory/SaveMemoryTool.ts`) — `SAFE_ACTION`
+  level, standing-granted to the local user at startup (single-user
+  assistant, not multi-tenant). Saves a `{key, value}` fact Claude decides
+  is worth remembering.
+- **`SEARCH_MEMORY`** (`src/tools/memory/SearchMemoryTool.ts`) — `READ`
+  level. Lets Claude recall previously saved facts by a text fragment
+  before answering.
+
+This is the first real step toward "JARVIS knows things about you between
+conversations" rather than only within a single session.
+
+## Confirmation flow for CONFIRM / DANGEROUS tools
+
+`CONFIRM` and `DANGEROUS` tools now have a real approval path instead of
+being unconditionally denied:
+
+- A standing `PermissionService` grant for one of these tools means "the
+  user has opted in to being asked" — it is never treated as "skip
+  asking." The actual gate is a fresh `ConfirmationService.requestConfirmation()`
+  call on **every single invocation**, no exceptions.
+- `src/core/confirmation/ConfirmationService.ts` defines the gate as a
+  small `ConfirmationPrompter` function (`(request) => Promise<boolean>`),
+  decoupled from any particular UI. Today's only prompter asks in the
+  terminal chat (`confirmViaChat` in `src/index.ts`); a future channel
+  (push notification, a spoken yes/no over the phone gateway below) is
+  just a different prompter passed to the same `ConfirmationService` — no
+  change needed in the `Orchestrator`.
+- The `Orchestrator` calls this gate from one shared `authorize()` method
+  used by both local and device tool execution, so the policy can't drift
+  between the two paths.
 
 ## Architecture
 
@@ -113,18 +150,28 @@ src/
 ├── tools/
 │   ├── registry/       ToolRegistry — allowlist of tools Claude may call
 │   ├── filesystem/     READ_ONLY_FILE_INFO — local tool
-│   └── system/         GET_ACTIVE_APPLICATION — device tool (iMac first)
+│   ├── system/         GET_ACTIVE_APPLICATION — device tool (iMac first)
+│   └── memory/         SAVE_MEMORY / SEARCH_MEMORY — local, persistent memory tools
 ├── permissions/         PermissionService — (userId, toolId, deviceId) grants
 ├── memory/              MemoryStore — SQLite-backed explicit key/value store
 ├── devices/
 │   ├── registry/        DeviceRegistry — device metadata + role assignment
 │   └── pairing/         PairingService — pairing codes, credential hashes
-├── communication/websocket/
-│   ├── protocol.ts               Typed, validated envelope protocol
-│   ├── DeviceConnectionManager.ts  Owns connections + tool request/response lifecycle
-│   └── JarvisWebSocketServer.ts    Thin transport: bytes <-> validated messages
+├── communication/
+│   ├── websocket/
+│   │   ├── protocol.ts               Typed, validated envelope protocol
+│   │   ├── DeviceConnectionManager.ts  Owns connections + tool request/response lifecycle
+│   │   └── JarvisWebSocketServer.ts    Thin transport: bytes <-> validated messages,
+│   │                                    plus routing for the /voice/* webhooks below
+│   └── phone/
+│       ├── TwilioVoiceGateway.ts   Per-call session + TwiML generation
+│       └── twilioSignature.ts      Twilio webhook signature verification
+├── core/confirmation/   ConfirmationService — pluggable per-call approval gate
+│                        for CONFIRM/DANGEROUS tools
 ├── config/              Environment variable loading and validation
-└── types/               Shared TypeScript types across all modules
+└── types/               Shared TypeScript types across all modules (incl.
+                         voice.ts — provider-agnostic STT/TTS interfaces,
+                         architecture only, not yet wired to an implementation)
 
 agents/
 └── imac/JarvisAgent/    Swift source for the macOS iMac Agent (unbuilt —
@@ -173,6 +220,10 @@ Then set `ANTHROPIC_API_KEY` in `.env`. Optional variables:
 - `JARVIS_PORT` — port for the HTTP/WebSocket server (default `4770`)
 - `JARVIS_MEMORY_DB_PATH` — path to the local SQLite memory database
   (default `./data/jarvis-memory.sqlite`)
+- `TWILIO_AUTH_TOKEN` / `TWILIO_PUBLIC_BASE_URL` — enable the phone-call
+  channel (see below). **Both or neither** — setting only one throws a
+  `ConfigError` at startup, since request-signature verification needs
+  both to be meaningful.
 
 ## Run
 
@@ -215,6 +266,57 @@ device's long-lived credential and — if the device's socket is still open
 — pushes the credential to it immediately, promoting the connection to
 authenticated in the same step.
 
+## Phone gateway (call JARVIS)
+
+JARVIS can be reached as an actual phone call, via
+[Twilio](https://www.twilio.com) Programmable Voice — answering "can I make
+JARVIS a contact I call" without building a separate STT/TTS pipeline:
+Twilio's own `<Gather input="speech">` does speech-to-text and `<Say>` does
+text-to-speech, so the gateway (`src/communication/phone/TwilioVoiceGateway.ts`)
+only needs to shuttle text in and out through the existing `Orchestrator`.
+
+**How it works:**
+- Each call gets its own `ConversationManager` + `Orchestrator` pair (a
+  fresh conversation thread) but shares every other live instance — same
+  Claude brain, same tools, same memory, same permission/confirmation
+  state as the terminal chat.
+- Three webhook routes, added to the existing WebSocket server's HTTP
+  handling (`src/communication/websocket/JarvisWebSocketServer.ts`):
+  `POST /voice/incoming`, `POST /voice/gather`, `POST /voice/status`.
+- Every incoming webhook request's Twilio signature is verified
+  (`src/communication/phone/twilioSignature.ts`, HMAC-SHA1 per Twilio's
+  spec) against the **configured public URL**
+  (`TWILIO_PUBLIC_BASE_URL`), not the server's own view of the request
+  URL — required because a tunnel (ngrok) or reverse proxy rewrites what
+  the process sees. A missing or invalid signature is rejected with
+  `403` before anything reaches the Orchestrator.
+
+**To actually go live, you need your own Twilio account** (same
+requirement as needing your own Anthropic API key — this repo never
+ships credentials for either):
+1. Create a Twilio account and a phone number with Voice capability.
+2. Run JARVIS somewhere Twilio's servers can reach over HTTPS (a public
+   host, or a local machine tunneled with something like ngrok).
+3. Set `TWILIO_AUTH_TOKEN` (from the Twilio console) and
+   `TWILIO_PUBLIC_BASE_URL` (the public HTTPS URL Twilio will hit, e.g.
+   your ngrok URL) in `.env`.
+4. In the Twilio console, set the phone number's "A call comes in"
+   webhook to `<TWILIO_PUBLIC_BASE_URL>/voice/incoming` (HTTP POST).
+5. Call the number. JARVIS answers, listens, replies, and keeps listening
+   until the call ends.
+
+If `TWILIO_AUTH_TOKEN`/`TWILIO_PUBLIC_BASE_URL` aren't set, the `/voice/*`
+routes don't exist at all (`404`) and nothing else changes — the phone
+gateway is fully optional.
+
+**What's validated vs. not:** the gateway logic (TwiML generation, session
+lifecycle per `CallSid`, signature verification, HTTP routing including
+signed/unsigned/tampered requests) is covered by real tests, including
+end-to-end HTTP tests against the actual `Bun.serve` server
+(`tests/phone/`). What is **not** validated is an actual phone call
+through a real Twilio account — that requires the account/number setup
+above, which hasn't been done in this environment.
+
 ## Test
 
 ```bash
@@ -251,15 +353,25 @@ contain no language-detection logic, by design.
   in the macOS Keychain, never on disk or in logs.
 - Device-scoped permission grants: authorizing a tool on one device never
   authorizes it on another.
+- `CONFIRM`/`DANGEROUS` tools require a fresh, per-call human confirmation
+  even when a standing grant exists — a grant means "ask me," never
+  "skip asking."
+- Every phone webhook request's Twilio signature is verified against the
+  configured public URL before it reaches the Orchestrator; unsigned,
+  tampered, or wrong-route requests are rejected with `403`.
 
 ## Current limitations
 
-- Only two tools exist: `READ_ONLY_FILE_INFO` (local) and
-  `GET_ACTIVE_APPLICATION` (device — app name/bundle ID only).
-- `CONFIRM` and `DANGEROUS` permission levels are defined but always
-  denied — no confirmation flow exists yet.
+- Only four tools exist: `READ_ONLY_FILE_INFO` (local),
+  `GET_ACTIVE_APPLICATION` (device — app name/bundle ID only),
+  `SAVE_MEMORY` and `SEARCH_MEMORY` (local, persistent key/value memory).
 - DeviceRegistry, PermissionService, and PairingService are all in-memory
-  and reset on restart.
+  and reset on restart. (`MemoryStore` is the one exception — it is
+  SQLite-backed and persists across restarts.)
+- The phone gateway has no caller allowlist — anyone who calls the
+  configured Twilio number reaches the same JARVIS conversation as the
+  terminal chat, with the same tool access. Treat the phone number itself
+  as a credential until a caller-identity check is added.
 - Pairing approval is a manual CLI step (`bun run approve-device`) — there
   is no web UI for it yet.
 - No authentication beyond a placeholder `userId`.
@@ -278,7 +390,7 @@ of that gap; the rest is tracked explicitly below.
 
 **Validated in the Linux Core environment:**
 - TypeScript typechecking (`bun run typecheck`) and the full Core test
-  suite (`bun test`, 110+ tests)
+  suite (`bun test`, 150+ tests)
 - WebSocket envelope protocol: valid/invalid envelopes, every message
   type, malformed payloads, wrong/missing `deviceId`
 - `DeviceRegistry`: registration, role assignment, primary-device
@@ -305,7 +417,16 @@ of that gap; the rest is tracked explicitly below.
 
 **Still requires further real-iMac validation:**
 - Keychain persistence across Agent restarts (the save path ran; a
-  restart-and-reconnect using the stored credential hasn't been confirmed)
+  restart-and-reconnect using the stored credential hasn't been confirmed).
+  `KeychainStore.swift` was hardened with `kSecUseDataProtectionKeychain`
+  and real error logging (via `SecCopyErrorMessageString`) to make the
+  next real failure diagnosable, and a likely root cause was identified —
+  an ad-hoc/unsigned `swift build` gets a new code-signature hash on every
+  rebuild, and macOS Keychain access is scoped by code signature, so a
+  credential saved by one build may become unreadable by the next. **This
+  is not a confirmed fix** — it can't be verified outside a real Mac in
+  this environment — and the real fix likely needs a paid Apple Developer
+  ID for stable code signing across rebuilds.
 - `NSWorkspace.frontmostApplication` — an actual `GET_ACTIVE_APPLICATION`
   tool call executed end to end from Core through the Agent
 - Menu bar UI rendering and permission prompts
@@ -316,12 +437,16 @@ of that gap; the rest is tracked explicitly below.
 
 1. iPhone mobile client.
 2. MacBook secondary-computer client.
-3. Confirmation flow for `CONFIRM`/`DANGEROUS` tools, plus persistent
-   permission/pairing storage.
-4. Voice input/output (Hebrew + English, provider-agnostic STT/TTS)
-   layered on top of the existing conversation loop.
-5. Additional device tools behind the same registry/permission model:
+3. Persistent (disk-backed) permission/pairing/device storage — memory is
+   already persistent; these three are still in-memory.
+4. Microphone-based voice input/output (Hebrew + English) using the
+   provider-agnostic `SpeechToText`/`TextToSpeech` interfaces already
+   defined in `src/types/voice.ts`, for channels other than the phone
+   gateway (which already has voice via Twilio).
+5. Caller-identity verification for the phone gateway, so an arbitrary
+   caller to the configured number can't reach the full assistant.
+6. Additional device tools behind the same registry/permission model:
    safe application control, screenshots, broader (still non-destructive)
    filesystem access, richer context events (`active_window.changed`,
    `user.idle`, etc.) — kept low-frequency and privacy-conscious.
-6. Device-to-device communication.
+7. Device-to-device communication.
