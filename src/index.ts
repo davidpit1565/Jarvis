@@ -17,6 +17,7 @@ import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/TwilioVoiceGateway";
+import { ActivityLog } from "@/core/activity/ActivityLog";
 
 const DEFAULT_USER_ID = "local-user";
 
@@ -32,6 +33,7 @@ function main() {
   const eventBus = new EventBus();
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
+  const activityLog = new ActivityLog();
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
@@ -83,7 +85,9 @@ function main() {
   }
 
   const phoneGateway =
-    config.twilioAuthToken && config.twilioPublicBaseUrl ? new TwilioVoiceGateway(createPhoneSession) : undefined;
+    config.twilioAuthToken && config.twilioPublicBaseUrl
+      ? new TwilioVoiceGateway(createPhoneSession, config.twilioVoice)
+      : undefined;
 
   const wsServer = new JarvisWebSocketServer({
     deviceRegistry,
@@ -91,6 +95,7 @@ function main() {
     pairingService,
     eventBus,
     toolRegistry,
+    activityLog,
     phoneGateway,
     twilioAuthToken: config.twilioAuthToken,
     twilioPublicBaseUrl: config.twilioPublicBaseUrl,
@@ -104,14 +109,21 @@ function main() {
 
   eventBus.on("device.registered", ({ device }) => {
     console.log(`[jarvis] device registered: ${device.name} (${device.id}), pending pairing approval`);
+    activityLog.record(`Device registered: ${device.name}`);
   });
 
   eventBus.on("device.connected", ({ deviceId }) => {
     console.log(`[jarvis] device connected: ${deviceId}`);
+    activityLog.record(`Device connected: ${deviceId}`);
   });
 
   eventBus.on("device.disconnected", ({ deviceId, reason }) => {
     console.log(`[jarvis] device disconnected: ${deviceId} (${reason})`);
+    activityLog.record(`Device disconnected: ${deviceId} (${reason})`);
+  });
+
+  eventBus.on("tool.executed", ({ toolName, result }) => {
+    activityLog.record(`${toolName} → ${result.success ? "ok" : `failed: ${result.error}`}`);
   });
 
   console.log(`JARVIS Core listening on port ${config.port}`);

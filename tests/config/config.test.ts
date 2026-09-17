@@ -8,6 +8,7 @@ const ENV_KEYS = [
   "TWILIO_AUTH_TOKEN",
   "TWILIO_PUBLIC_BASE_URL",
   "TWILIO_ALLOWED_CALLERS",
+  "TWILIO_VOICE",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -73,5 +74,16 @@ describe("loadConfig", () => {
   test("leaves twilioAllowedCallers undefined when unset", () => {
     const config = loadConfig();
     expect(config.twilioAllowedCallers).toBeUndefined();
+  });
+
+  test("reads TWILIO_VOICE when set", () => {
+    process.env.TWILIO_VOICE = "Google.en-US-Chirp3-HD-Charon";
+    const config = loadConfig();
+    expect(config.twilioVoice).toBe("Google.en-US-Chirp3-HD-Charon");
+  });
+
+  test("leaves twilioVoice undefined when unset", () => {
+    const config = loadConfig();
+    expect(config.twilioVoice).toBeUndefined();
   });
 });

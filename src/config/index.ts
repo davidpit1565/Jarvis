@@ -13,6 +13,8 @@ export interface JarvisConfig {
   twilioPublicBaseUrl?: string;
   /** E.164 numbers allowed to call JARVIS; empty/unset means any caller is let through. */
   twilioAllowedCallers?: string[];
+  /** Twilio <Say> voice name (e.g. "Polly.Matthew-Neural"); unset uses the gateway's own default. */
+  twilioVoice?: string;
 }
 
 class ConfigError extends Error {}
@@ -50,6 +52,7 @@ export function loadConfig(): JarvisConfig {
   const twilioAllowedCallers = process.env.TWILIO_ALLOWED_CALLERS?.split(",")
     .map((n) => n.trim())
     .filter((n) => n.length > 0);
+  const twilioVoice = process.env.TWILIO_VOICE?.trim() || undefined;
 
   return {
     anthropicApiKey,
@@ -58,6 +61,7 @@ export function loadConfig(): JarvisConfig {
     twilioAuthToken,
     twilioPublicBaseUrl,
     twilioAllowedCallers,
+    twilioVoice,
   };
 }
 

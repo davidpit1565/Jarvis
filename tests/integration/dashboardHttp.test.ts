@@ -5,6 +5,7 @@ import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
+import { ActivityLog } from "@/core/activity/ActivityLog";
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 
@@ -120,6 +121,44 @@ describe("Dashboard HTTP routes", () => {
     const response = await fetch(`http://localhost:${handle.port}/status`);
     const data = (await response.json()) as { phoneGatewayEnabled: boolean };
     expect(data.phoneGatewayEnabled).toBe(true);
+  });
+
+  test("GET /status includes recent activity log entries, newest first", async () => {
+    const eventBus = new EventBus();
+    const activityLog = new ActivityLog();
+    activityLog.record("first thing happened");
+    activityLog.record("second thing happened");
+
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      activityLog,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/status`);
+    const data = (await response.json()) as { activity: { message: string }[] };
+
+    expect(data.activity.map((a) => a.message)).toEqual(["second thing happened", "first thing happened"]);
+  });
+
+  test("GET /status returns an empty activity list when no ActivityLog is configured", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/status`);
+    const data = (await response.json()) as { activity: unknown[] };
+    expect(data.activity).toEqual([]);
   });
 
   test("a WebSocket upgrade request to \"/\" still connects instead of getting the HTML page", async () => {

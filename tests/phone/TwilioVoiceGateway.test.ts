@@ -17,6 +17,28 @@ describe("TwilioVoiceGateway", () => {
     expect(response.headers.get("Content-Type")).toBe("text/xml");
   });
 
+  test("uses a natural neural voice by default", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    const response = gateway.handleIncomingCall("CA1");
+    const body = await response.text();
+    expect(body).toContain('voice="Polly.Matthew-Neural"');
+  });
+
+  test("honors a custom voice passed to the constructor", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused"), userId: "local-user" }),
+      "Google.en-US-Chirp3-HD-Charon"
+    );
+
+    const response = gateway.handleIncomingCall("CA1");
+    const body = await response.text();
+    expect(body).toContain('voice="Google.en-US-Chirp3-HD-Charon"');
+  });
+
   test("a call's session is created once and reused across gather turns", async () => {
     let sessionsCreated = 0;
     const gateway = new TwilioVoiceGateway((): PhoneSession => {

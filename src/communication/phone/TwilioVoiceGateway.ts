@@ -12,6 +12,15 @@ const GREETING = "Hi, this is JARVIS. What can I help you with?";
 const NO_INPUT_MESSAGE = "Sorry, I didn't catch that. Could you say that again?";
 const ERROR_MESSAGE = "Sorry, something went wrong on my end. Please try again.";
 
+/**
+ * Amazon Polly's Neural voice for <Say> — noticeably more natural than
+ * Twilio's default "Basic" voice, and (unlike Twilio's newer Generative
+ * voices) available on standard accounts with no beta opt-in required.
+ * Overridable via the TWILIO_VOICE env var if a better voice becomes
+ * available on the account this actually runs on.
+ */
+const DEFAULT_VOICE = "Polly.Matthew-Neural";
+
 function escapeXml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -25,20 +34,6 @@ function twimlResponse(body: string): Response {
   return new Response(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`, {
     headers: { "Content-Type": "text/xml" },
   });
-}
-
-/**
- * A <Gather> that speaks `sayText`, listens for the caller's speech (Twilio
- * does the speech-to-text itself and posts the transcript back to
- * /voice/gather), and falls back to a goodbye if nothing was heard.
- */
-function gatherPrompt(sayText: string): string {
-  return (
-    `<Gather input="speech" action="/voice/gather" method="POST" speechTimeout="auto" language="en-US">` +
-    `<Say>${escapeXml(sayText)}</Say>` +
-    `</Gather>` +
-    `<Say>I didn't hear anything. Goodbye.</Say>`
-  );
 }
 
 /**
@@ -62,13 +57,31 @@ function gatherPrompt(sayText: string): string {
  */
 export class TwilioVoiceGateway {
   private sessions: Map<string, PhoneSession> = new Map();
+  private readonly voice: string;
 
-  constructor(private readonly createSession: PhoneSessionFactory) {}
+  constructor(private readonly createSession: PhoneSessionFactory, voice: string = DEFAULT_VOICE) {
+    this.voice = voice;
+  }
+
+  /**
+   * A <Gather> that speaks `sayText` in the configured voice, listens for
+   * the caller's speech (Twilio does the speech-to-text itself and posts
+   * the transcript back to /voice/gather), and falls back to a goodbye if
+   * nothing was heard.
+   */
+  private gatherPrompt(sayText: string): string {
+    return (
+      `<Gather input="speech" action="/voice/gather" method="POST" speechTimeout="auto" language="en-US">` +
+      `<Say voice="${escapeXml(this.voice)}">${escapeXml(sayText)}</Say>` +
+      `</Gather>` +
+      `<Say voice="${escapeXml(this.voice)}">I didn't hear anything. Goodbye.</Say>`
+    );
+  }
 
   /** POST /voice/incoming — Twilio calls this when a call comes in. */
   handleIncomingCall(callSid: string): Response {
     this.sessions.set(callSid, this.createSession(callSid));
-    return twimlResponse(gatherPrompt(GREETING));
+    return twimlResponse(this.gatherPrompt(GREETING));
   }
 
   /** POST /voice/gather — Twilio calls this with the caller's transcribed speech. */
@@ -77,7 +90,7 @@ export class TwilioVoiceGateway {
     this.sessions.set(callSid, session);
 
     if (!speechResult || speechResult.trim() === "") {
-      return twimlResponse(gatherPrompt(NO_INPUT_MESSAGE));
+      return twimlResponse(this.gatherPrompt(NO_INPUT_MESSAGE));
     }
 
     let responseText: string;
@@ -87,7 +100,7 @@ export class TwilioVoiceGateway {
       responseText = ERROR_MESSAGE;
     }
 
-    return twimlResponse(gatherPrompt(responseText));
+    return twimlResponse(this.gatherPrompt(responseText));
   }
 
   /** POST /voice/status — Twilio's call status callback; frees the session's memory once the call ends. */

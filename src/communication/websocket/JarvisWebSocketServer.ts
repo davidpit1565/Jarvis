@@ -4,6 +4,7 @@ import type { EventBus } from "@/core/events/EventBus";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { PairingService } from "@/devices/pairing/PairingService";
 import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
+import type { ActivityLog } from "@/core/activity/ActivityLog";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
@@ -26,6 +27,8 @@ export interface JarvisWebSocketServerDependencies {
   eventBus: EventBus;
   /** Optional: enables tool names/targets in the GET /status dashboard feed. */
   toolRegistry?: ToolRegistry;
+  /** Optional: recent activity feed shown on the dashboard. */
+  activityLog?: ActivityLog;
   /** All three required together to enable the Twilio phone gateway; otherwise its routes 404. */
   phoneGateway?: TwilioVoiceGateway;
   twilioAuthToken?: string;
@@ -304,7 +307,7 @@ export class JarvisWebSocketServer {
 
   /** GET /status — read-only JSON feed the dashboard polls; no auth today, matching the rest of Core. */
   private handleStatusJson(): Response {
-    const { deviceRegistry, toolRegistry, phoneGateway } = this.deps;
+    const { deviceRegistry, toolRegistry, phoneGateway, activityLog } = this.deps;
 
     const devices = deviceRegistry.listDevices().map((device) => ({
       id: device.id,
@@ -320,7 +323,12 @@ export class JarvisWebSocketServer {
       target: tool.target,
     }));
 
-    return Response.json({ devices, tools, phoneGatewayEnabled: Boolean(phoneGateway) });
+    return Response.json({
+      devices,
+      tools,
+      phoneGatewayEnabled: Boolean(phoneGateway),
+      activity: activityLog?.list() ?? [],
+    });
   }
 
   private async handleApproveHttp(req: Request): Promise<Response> {

@@ -309,7 +309,14 @@ ships credentials for either):
 5. Optionally set `TWILIO_ALLOWED_CALLERS` to a comma-separated allowlist
    of E.164 numbers (see "Security controls" above) — recommended before
    giving the number out.
-6. Call the number. JARVIS answers, listens, replies, and keeps listening
+6. Optionally set `TWILIO_VOICE` to pick a different `<Say>` voice. The
+   default, `Polly.Matthew-Neural`, is a natural-sounding neural voice
+   available on standard Twilio accounts (no beta opt-in) — a clear
+   step up from Twilio's robotic default "Basic" voice. If the account
+   has Twilio's newer Generative voices enabled (e.g.
+   `Google.en-US-Chirp3-HD-Charon`), that's an even more natural option;
+   see [Twilio's voice list](https://www.twilio.com/docs/voice/twiml/say/text-speech).
+7. Call the number. JARVIS answers, listens, replies, and keeps listening
    until the call ends.
 
 If `TWILIO_AUTH_TOKEN`/`TWILIO_PUBLIC_BASE_URL` aren't set, the `/voice/*`
@@ -335,27 +342,39 @@ built or run in this environment (no Docker daemon available here). Build
 it yourself once (`docker build -t jarvis-core .`) before relying on it,
 and report back if anything doesn't come up clean.
 
-**What's validated vs. not:** the gateway logic (TwiML generation, session
-lifecycle per `CallSid`, signature verification, the caller allowlist, HTTP
-routing including signed/unsigned/tampered requests) is covered by real
-tests, including end-to-end HTTP tests against the actual `Bun.serve`
-server (`tests/phone/`). What is **not** validated is an actual phone call
+**What's validated vs. not:** the gateway logic (TwiML generation
+including the `voice` attribute, session lifecycle per `CallSid`,
+signature verification, the caller allowlist, HTTP routing including
+signed/unsigned/tampered requests) is covered by real tests, including
+end-to-end HTTP tests against the actual `Bun.serve` server
+(`tests/phone/`). What is **not** validated is an actual phone call
 through a real Twilio account — that requires the account/number setup
-above, which hasn't been done in this environment.
+above, which hasn't been done in this environment. In particular, the
+actual sound of `Polly.Matthew-Neural` (or any other voice) hasn't been
+heard — only that the TwiML correctly requests it.
 
 ## Status dashboard
 
 Visit `http://localhost:4770/` (or `/dashboard`) in a browser while Core is
 running to see a live-updating status page: registered devices and their
-online/offline state, registered tools, and whether the phone gateway is
-enabled. It's served directly by the same process — no build step, no
-extra dependency — and polls a plain JSON feed at `GET /status` every 3
-seconds. This is the first step toward a real visual layer; it's read-only
-today (nothing on the page can trigger an action).
+online/offline state, registered tools, whether the phone gateway is
+enabled, and a rolling activity feed (recent tool executions, device
+connects/disconnects) via `ActivityLog` (`src/core/activity/ActivityLog.ts`
+— an in-memory ring buffer of the last 30 events, reset on restart). It's
+served directly by the same process — no build step, no extra dependency —
+and polls a plain JSON feed at `GET /status` every 3 seconds. This is the
+first step toward a real visual layer; it's read-only today (nothing on
+the page can trigger an action). Styled as a HUD (glowing core with a
+rotating scan sweep, boot-sequence status line) after looking at how
+several open-source Iron-Man-style JARVIS projects approach the same idea.
 
 Verified in a real browser (headless Chromium) against the actual running
-server: the page loads, the live data renders correctly for both empty and
-populated states, and there are no console errors.
+server: the page loads, the live data (including the activity feed and
+animations) renders correctly for both empty and populated states, and
+there are no console errors. All dynamically-inserted text (device names,
+tool names, activity messages) is HTML-escaped before insertion — device
+names in particular originate from device agents, which are a less
+trusted source than Core's own code.
 
 ## Test
 
