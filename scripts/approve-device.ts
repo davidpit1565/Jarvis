@@ -17,13 +17,29 @@ if (!deviceId || !code) {
 const port = process.env.JARVIS_PORT ?? "4770";
 const url = `http://localhost:${port}/pairing/approve`;
 
-const response = await fetch(url, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ deviceId, code }),
-});
+let response: Response;
+try {
+  response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceId, code }),
+  });
+} catch (error) {
+  const message = error instanceof Error ? error.message : "Unknown network error";
+  console.error(`Could not reach JARVIS Core at ${url}: ${message}`);
+  console.error(`Is "bun run dev" running, and is JARVIS_PORT set to ${port}?`);
+  process.exit(1);
+}
 
-const body = (await response.json()) as { success: boolean; error?: string };
+const rawText = await response.text();
+let body: { success: boolean; error?: string };
+try {
+  body = JSON.parse(rawText);
+} catch {
+  console.error(`Core returned a non-JSON response (HTTP ${response.status}):`);
+  console.error(rawText);
+  process.exit(1);
+}
 
 if (!response.ok || !body.success) {
   console.error(`Pairing approval failed: ${body.error ?? response.statusText}`);

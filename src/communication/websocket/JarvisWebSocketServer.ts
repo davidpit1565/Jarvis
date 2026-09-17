@@ -38,16 +38,25 @@ export class JarvisWebSocketServer {
     return Bun.serve<SocketData>({
       port,
       fetch: async (req, server) => {
-        const url = new URL(req.url);
+        try {
+          const url = new URL(req.url);
 
-        if (req.method === "POST" && url.pathname === "/pairing/approve") {
-          return this.handleApproveHttp(req);
-        }
+          if (req.method === "POST" && url.pathname === "/pairing/approve") {
+            return await this.handleApproveHttp(req);
+          }
 
-        if (server.upgrade(req, { data: { deviceId: null } })) {
-          return undefined;
+          if (server.upgrade(req, { data: { deviceId: null } })) {
+            return undefined;
+          }
+          return new Response("JARVIS Core WebSocket endpoint", { status: 200 });
+        } catch (error) {
+          // Guarantees every HTTP response is well-formed JSON or plain text
+          // (never a runtime's default error page), so an HTTP client never
+          // has to guess what came back.
+          const message = error instanceof Error ? error.message : "Unexpected server error";
+          console.error(`[jarvis] fetch handler error: ${message}`);
+          return Response.json({ success: false, error: message }, { status: 500 });
         }
-        return new Response("JARVIS Core WebSocket endpoint", { status: 200 });
       },
       websocket: {
         open: () => {
