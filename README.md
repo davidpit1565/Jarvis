@@ -176,6 +176,20 @@ Then set `ANTHROPIC_API_KEY` in `.env`. Optional variables:
 
 ## Run
 
+### The easy way (one command, on the iMac)
+
+```bash
+bash scripts/start-everything.sh
+```
+
+This starts Core, builds the Agent if it isn't built yet, starts it,
+detects its pairing code automatically, approves it automatically, and
+hands you straight into the interactive chat — no other terminal windows,
+no manual copy/pasting of IDs or codes. Requires `ANTHROPIC_API_KEY` to
+already be set in `.env` (the script tells you how if it isn't).
+
+### The manual way
+
 ```bash
 bun run dev
 ```
