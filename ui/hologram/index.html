@@ -226,11 +226,34 @@
     ctx.fill();
 
     ctx.globalCompositeOperation = "destination-out";
-    // Carve eye sockets.
+    // Carve almond-shaped eye sockets (angled, not plain ellipses) with a
+    // slight upward outer canthus, like a real eye opening.
+    for (const sx of [-1, 1]) {
+      ctx.save();
+      ctx.translate(sx * size * 0.115, -size * 0.05);
+      ctx.rotate(sx * -0.12);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, size * 0.078, size * 0.034, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,1)";
+      ctx.fill();
+      ctx.restore();
+    }
+    // Carve eyebrow shadow (a thin arched band above each eye).
+    for (const sx of [-1, 1]) {
+      ctx.save();
+      ctx.translate(sx * size * 0.115, -size * 0.105);
+      ctx.rotate(sx * -0.1);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, size * 0.085, size * 0.012, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fill();
+      ctx.restore();
+    }
+    // Nostril shadows either side of the philtrum.
     for (const sx of [-1, 1]) {
       ctx.beginPath();
-      ctx.ellipse(sx * size * 0.115, -size * 0.045, size * 0.075, size * 0.045, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(0,0,0,1)";
+      ctx.ellipse(sx * size * 0.028, size * 0.135, size * 0.012, size * 0.009, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
       ctx.fill();
     }
     // Carve under the nose / philtrum shadow.
@@ -238,26 +261,80 @@
     ctx.ellipse(0, size * 0.14, size * 0.05, size * 0.03, 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,0.35)";
     ctx.fill();
-    // Carve mouth line.
+    // Carve mouth line, and a faint lower-lip shadow just beneath it.
     ctx.beginPath();
     ctx.ellipse(0, size * 0.205, size * 0.075, size * 0.016, 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(0,0,0,0.9)";
     ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.228, size * 0.055, size * 0.014, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,0.3)";
+    ctx.fill();
+    // Carve cheek hollows (subtle, below/outside the eyes) for jaw definition.
+    for (const sx of [-1, 1]) {
+      ctx.beginPath();
+      ctx.ellipse(sx * size * 0.155, size * 0.06, size * 0.05, size * 0.075, sx * 0.25, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.22)";
+      ctx.fill();
+    }
     ctx.globalCompositeOperation = "source-over";
 
-    // Add back soft highlights: brow ridge, nose bridge, cheekbones —
-    // circuit-like fine structure comes from the particle jitter/threshold,
-    // not from painting literal lines, so it never looks like a decal.
+    // Add back soft highlights: brow ridge, nose bridge, upper cheekbones —
+    // broad structure only; the fine circuit-like texture on top of this
+    // comes from the trace overlay below, not from more painted shapes.
     ctx.fillStyle = "rgba(255,255,255,0.5)";
     ctx.beginPath();
-    ctx.ellipse(0, -size * 0.01, size * 0.028, size * 0.11, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, -size * 0.01, size * 0.026, size * 0.115, 0, 0, Math.PI * 2);
     ctx.fill();
     for (const sx of [-1, 1]) {
       ctx.beginPath();
-      ctx.ellipse(sx * size * 0.14, -size * 0.075, size * 0.06, size * 0.014, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(255,255,255,0.4)";
+      ctx.ellipse(sx * size * 0.15, size * 0.005, size * 0.05, size * 0.06, sx * 0.2, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.3)";
       ctx.fill();
     }
+    // Jaw/chin highlight so the lower face doesn't fade to nothing.
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.255, size * 0.09, size * 0.045, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.32)";
+    ctx.fill();
+
+    // --- Circuit-trace overlay: thin branching lines etched across the
+    // face, masked to the head silhouette already drawn. This is what
+    // reads as "technical/schematic" in the reference stills, rather
+    // than a smooth plain bust — drawn procedurally (a random walk per
+    // trace), never a fixed decal, so it stays subtle and organic.
+    ctx.globalCompositeOperation = "source-atop"; // only draws where the head alpha already is
+    ctx.strokeStyle = "rgba(180,255,255,0.35)";
+    ctx.lineWidth = Math.max(1, size * 0.0018);
+    const rand = (a, b) => a + Math.random() * (b - a);
+    for (let t = 0; t < 22; t++) {
+      let x = rand(-size * 0.24, size * 0.24);
+      let y = rand(-size * 0.32, size * 0.28);
+      const steps = Math.floor(rand(3, 7));
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      for (let s = 0; s < steps; s++) {
+        x += rand(-size * 0.05, size * 0.05);
+        y += rand(-size * 0.045, size * 0.045);
+        ctx.lineTo(x, y);
+      }
+      ctx.globalAlpha = rand(0.15, 0.45);
+      ctx.stroke();
+      // small "node" dot at the trace's end, like a circuit via.
+      ctx.beginPath();
+      ctx.arc(x, y, size * 0.004, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(210,255,255,0.5)";
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    // Faint horizontal scan bands across the whole face (subtle, like a
+    // slow depth-scan sweep) — a handful of thin translucent stripes.
+    for (let i = 0; i < 14; i++) {
+      const yy = -size * 0.34 + (i / 13) * size * 0.62;
+      ctx.fillStyle = `rgba(200,255,255,${rand(0.02, 0.06).toFixed(3)})`;
+      ctx.fillRect(-size * 0.3, yy, size * 0.6, Math.max(1, size * 0.0015));
+    }
+    ctx.globalCompositeOperation = "source-over";
 
     ctx.restore();
     return ctx.getImageData(0, 0, size, size);
@@ -267,7 +344,7 @@
     const positions = [];
     const alphas = [];
     const data = imageData.data;
-    const stride = 2; // sampling grid step in source pixels
+    const stride = 1; // sampling grid step in source pixels — 1 to resolve fine trace detail
     for (let y = 0; y < size; y += stride) {
       for (let x = 0; x < size; x += stride) {
         const idx = (y * size + x) * 4;
@@ -302,9 +379,9 @@
   const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
   camera.position.set(0, 0, 7.2);
 
-  const MASK_SIZE = 220;
+  const MASK_SIZE = 340;
   const mask = buildFaceMask(MASK_SIZE);
-  const { positions: rawPos, alphas } = sampleParticles(mask, MASK_SIZE, 15000);
+  const { positions: rawPos, alphas } = sampleParticles(mask, MASK_SIZE, 26000);
   const count = alphas.length;
 
   const geometry = new THREE.BufferGeometry();
