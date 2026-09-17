@@ -80,10 +80,43 @@ to a one-shot render without an unreasonable real-time rendering budget.
 If specific details still feel off, point at exactly which ones — that's
 a more useful next step than a general "make it closer" pass.
 
+## Verified end-to-end (not just "should work")
+
+Beyond the unit-level `observerBroadcast.test.ts`, this was checked against
+a real running Core process, not just in isolation: `bun run src/index.ts`
+started for real, this page opened in an actual browser against it, and a
+real device connected and registered over Core's real WebSocket protocol
+— the page's status genuinely flipped from `DEMO` to
+`LIVE · CONNECTED TO CORE` and displayed the real `device.registered`
+event, with no mocking on either side.
+
+Performance was also measured, not assumed: ~33fps sustained with
+**SwiftShader** (CPU software OpenGL — no GPU at all, the worst realistic
+case) rendering ~26,000 additive-blended particles at 1200x800. Any actual
+GPU, including an integrated one, comfortably clears 60fps here.
+
+## Accessibility & responsive layout
+
+- `prefers-reduced-motion: reduce` turns off every continuous motion
+  source — the plinth pulse/cursor-blink CSS animations, the shader's
+  idle drift and glitch displacement, head/ring auto-rotation, and
+  periodic glitch bursts stop scheduling entirely. Voice-reactive
+  pulsing stays on, since that's a direct response to real audio input
+  rather than ambient decoration.
+- A real `<=600px` layout (verified at 390x844, iPhone-sized): panels
+  shrink and drop their bar meters, the activity header stacks instead of
+  overlapping its status text, and title/plinth text scale down. Checked
+  for horizontal overflow and readability, not just "doesn't crash."
+- Not done: screen-reader semantics (this is a purely visual HUD with no
+  screen-reader-relevant content today) and touch-specific interactions
+  (the mic button works via a plain click/tap, nothing more elaborate is
+  needed yet).
+
 ## Known limitations
 
-- This is a visual mockup, not a production HUD — there's no accessibility
-  handling (screen readers, reduced-motion) and no mobile/touch layout.
-- Rendering ~15,000 additive-blended particles is comfortable on a modern
-  GPU but untested on low-power hardware; drop the particle target in
-  `sampleParticles(mask, MASK_SIZE, 15000)` if it stutters.
+- This is a live interactive page, not a one-shot cinematic render — see
+  "Visual fidelity" above for why exact parity with an AI-generated
+  reference video isn't the right bar.
+- No automated visual-regression testing (a pixel/perceptual diff against
+  a reference screenshot) — verification today is a manual
+  render-and-look pass each time, described above.
