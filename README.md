@@ -366,21 +366,36 @@ Visit `http://localhost:4770/` (or `/dashboard`) in a browser while Core is
 running to see a live-updating status page: registered devices and their
 online/offline state, registered tools, whether the phone gateway is
 enabled, and a rolling activity feed (recent tool executions, device
-connects/disconnects) via `ActivityLog` (`src/core/activity/ActivityLog.ts`
-— an in-memory ring buffer of the last 30 events, reset on restart). It's
-served directly by the same process — no build step, no extra dependency —
-and polls a plain JSON feed at `GET /status` every 3 seconds. This is the
-first step toward a real visual layer; it's read-only today (nothing on
-the page can trigger an action).
+connects/disconnects, and JARVIS's own thinking/responses — see below) via
+`ActivityLog` (`src/core/activity/ActivityLog.ts` — an in-memory ring
+buffer of the last 30 events, reset on restart). It's served directly by
+the same process — no build step, no extra dependency — and polls a plain
+JSON feed at `GET /status` every second. This is the first step toward a
+real visual layer; it's read-only today (nothing on the page can trigger
+an action).
 
-Styled as a hologram after the user shared reference images/video of a
-cinematic AI-generated holographic head with flanking data panels — a
-literal photoreal 3D face isn't realistic to reproduce as real-time
-browser graphics without a custom 3D asset pipeline, so this approximates
-the same idea with a hand-rolled wireframe sphere on `<canvas>` (no 3D
-library), flanking live readout panels (device/tool/phone counts pulled
-from real `/status` data, not fake narrative text), a typed boot-sequence
-line, and a brief glitch flash when the readouts actually change.
+Uses the user's own reference image directly (`src/communication/websocket/assets/hologram.jpg`,
+served at `GET /assets/hologram.jpg`) as the hero visual, styled with a
+scanline overlay, vignette, an ambient glow pulse, an occasional glitch
+flash, and a stronger glow while JARVIS is actively responding — rather
+than trying to procedurally reproduce a photoreal 3D render (not
+realistic as real-time browser graphics without a custom 3D asset
+pipeline). Flanking the image, live readout panels (device/tool/phone
+counts, pulled from real `/status` data) glitch-flash when they actually
+change, and a live ticker line beneath the image shows what JARVIS is
+doing right now:
+
+- **`JARVIS is thinking…`** while a request is being processed
+  (`brain.request`)
+- **the actual response text** once it replies (`brain.response`),
+  with a brighter glow on the hologram while this is showing
+- **`Running <tool>…`** while a tool call is in flight (`tool.requested`)
+
+All of this is wired to the real `EventBus`, not simulated — there is
+currently no web-browsing/search tool for JARVIS to visibly "browse" with
+(only `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION`, `SAVE_MEMORY`,
+`SEARCH_MEMORY` exist today), so the ticker reflects what JARVIS actually
+does, not a fabricated "browsing" animation.
 
 Verified in a real browser (headless Chromium) against the actual running
 server: the page loads, the live data (including the activity feed and

@@ -28,4 +28,16 @@ describe("ActivityLog", () => {
     expect(entry).toBeDefined();
     expect(() => new Date(entry!.timestamp).toISOString()).not.toThrow();
   });
+
+  test("defaults to kind 'info', but records the given kind", () => {
+    const log = new ActivityLog();
+    log.record("plain event");
+    log.record("JARVIS is thinking…", "thinking");
+    log.record("Here's your answer.", "speaking");
+
+    const [speaking, thinking, info] = log.list();
+    expect(info!.kind).toBe("info");
+    expect(thinking!.kind).toBe("thinking");
+    expect(speaking!.kind).toBe("speaking");
+  });
 });

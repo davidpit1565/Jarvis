@@ -1,5 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { join } from "node:path";
 import type { EventBus } from "@/core/events/EventBus";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { PairingService } from "@/devices/pairing/PairingService";
@@ -67,6 +68,7 @@ export interface JarvisWebSocketServerDependencies {
 }
 
 const SESSION_COOKIE = "jarvis_session";
+const HOLOGRAM_ASSET_PATH = join(import.meta.dir, "assets", "hologram.jpg");
 
 function readCookie(req: Request, name: string): string | null {
   const header = req.headers.get("cookie");
@@ -119,6 +121,10 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
             return this.handleStatusJson();
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/assets/hologram.jpg") {
+            return new Response(Bun.file(HOLOGRAM_ASSET_PATH));
           }
 
           if (!isUpgradeRequest && url.pathname.startsWith("/auth/")) {

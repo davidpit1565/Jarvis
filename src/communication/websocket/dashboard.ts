@@ -230,14 +230,77 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   @media (min-width: 640px) {
     .side-panel { display: block; }
   }
-  #core-canvas {
+  .hologram-frame {
+    position: relative;
     width: 220px;
     height: 220px;
+    border-radius: 12px;
+    overflow: hidden;
     filter: drop-shadow(0 0 18px var(--cyan-dim));
+    animation: hologramPulse 3.6s ease-in-out infinite;
+  }
+  .hologram-frame.speaking {
+    animation: hologramPulseSpeaking 0.9s ease-in-out infinite;
+    filter: drop-shadow(0 0 30px var(--cyan));
+  }
+  .hologram-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: brightness(1.05) contrast(1.1) saturate(1.15);
+  }
+  .hologram-frame::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(79, 214, 232, 0.08) 0px,
+      rgba(79, 214, 232, 0.08) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    pointer-events: none;
+    animation: scanScroll 6s linear infinite;
+  }
+  .hologram-frame::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 50% 40%, transparent 40%, rgba(5, 7, 10, 0.75) 100%);
+    pointer-events: none;
+  }
+  @keyframes hologramPulse {
+    0%, 100% { filter: drop-shadow(0 0 18px var(--cyan-dim)); }
+    50% { filter: drop-shadow(0 0 26px var(--cyan-dim)); }
+  }
+  @keyframes hologramPulseSpeaking {
+    0%, 100% { filter: drop-shadow(0 0 26px var(--cyan)); }
+    50% { filter: drop-shadow(0 0 40px var(--cyan)); }
+  }
+  @keyframes scanScroll {
+    from { background-position: 0 0; }
+    to { background-position: 0 40px; }
+  }
+  .hologram-frame.glitching .hologram-img {
+    animation: imgGlitch 0.2s steps(2, jump-none) 3;
+  }
+  @keyframes imgGlitch {
+    0%, 100% { transform: translate(0, 0); }
+    33% { transform: translate(-3px, 1px); filter: brightness(1.4) hue-rotate(160deg); }
+    66% { transform: translate(3px, -1px); filter: brightness(0.8) hue-rotate(120deg); }
   }
   @media (prefers-reduced-motion: reduce) {
-    #core-canvas { animation: none; }
+    .hologram-frame, .hologram-frame::before, .hologram-frame.speaking { animation: none; }
   }
+  .ticker {
+    max-width: 460px;
+    margin: 12px auto 0;
+    font-size: 12px;
+    color: var(--cyan);
+    min-height: 16px;
+  }
+  .ticker.thinking { color: var(--amber); font-style: italic; }
   h1 {
     letter-spacing: 0.3em;
     font-size: 15px;
@@ -365,11 +428,14 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   <header>
     <div class="hologram">
       <div class="side-panel" id="side-left"></div>
-      <canvas id="core-canvas" width="220" height="220"></canvas>
+      <div class="hologram-frame" id="hologram-frame">
+        <img src="/assets/hologram.jpg" class="hologram-img" alt="JARVIS" />
+      </div>
       <div class="side-panel right" id="side-right"></div>
     </div>
     <h1>JARVIS</h1>
     <div class="subtitle" id="statusline">connecting…</div>
+    <div class="ticker" id="ticker"></div>
   </header>
   <main>
     <section>
@@ -396,108 +462,23 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
       </div>
     </section>
   </main>
-  <footer>refreshes every 3s</footer>
+  <footer>refreshes every 1s</footer>
 <script>${WEBAUTHN_CLIENT_JS}</script>
 <script>
-  // --- Holographic core: a hand-rolled wireframe sphere, no 3D library.
-  // Inspired by a reference (an AI-generated cinematic hologram render) the
-  // user shared — a literal photoreal face isn't realistic to reproduce as
-  // live, real-time browser graphics, so this aims for the same idea (a
-  // rotating holographic "head/core" with glitch/scan artifacts) using
-  // plain wireframe geometry instead.
-  (function setupCore() {
-    var canvas = document.getElementById("core-canvas");
-    var ctx = canvas.getContext("2d");
-    var w = canvas.width, h = canvas.height;
-    var cx = w / 2, cy = h / 2;
-    var radius = 70;
-
-    var points = [];
-    var RINGS = 14, SEGMENTS = 20;
-    for (var ring = 0; ring <= RINGS; ring++) {
-      var lat = (ring / RINGS) * Math.PI - Math.PI / 2;
-      for (var seg = 0; seg < SEGMENTS; seg++) {
-        var lon = (seg / SEGMENTS) * Math.PI * 2;
-        points.push({
-          ring: ring,
-          seg: seg,
-          x: Math.cos(lat) * Math.cos(lon),
-          y: Math.sin(lat),
-          z: Math.cos(lat) * Math.sin(lon),
-        });
-      }
-    }
-
-    var angle = 0;
+  // Occasional idle glitch burst on the hologram image, echoing the
+  // reference's data-corruption look — cosmetic only, not tied to any
+  // real signal (a real fault is shown via the ticker/status line
+  // instead, so this glitch never implies an actual problem).
+  (function setupGlitch() {
+    var frame = document.getElementById("hologram-frame");
     var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    var glitchUntil = 0;
-
-    function project(p, rotY, rotX) {
-      var x = p.x * Math.cos(rotY) - p.z * Math.sin(rotY);
-      var z = p.x * Math.sin(rotY) + p.z * Math.cos(rotY);
-      var y = p.y * Math.cos(rotX) - z * Math.sin(rotX);
-      z = p.y * Math.sin(rotX) + z * Math.cos(rotX);
-      var scale = 1.4 / (2.4 + z);
-      return { x: cx + x * radius * scale, y: cy + y * radius * scale, z: z, depth: scale };
-    }
-
-    function draw() {
-      ctx.clearRect(0, 0, w, h);
-      var now = performance.now();
-      var isGlitching = now < glitchUntil;
-      var rotY = angle;
-      var rotX = 0.15 + Math.sin(angle * 0.4) * 0.05;
-
-      var projected = points.map(function (p) { return project(p, rotY, rotX); });
-
-      function drawEdge(a, b, alpha) {
-        var jitterX = isGlitching ? (Math.random() - 0.5) * 4 : 0;
-        ctx.strokeStyle = "rgba(79, 214, 232, " + alpha + ")";
-        ctx.beginPath();
-        ctx.moveTo(a.x + jitterX, a.y);
-        ctx.lineTo(b.x + jitterX, b.y);
-        ctx.stroke();
+    if (reduceMotion) return;
+    setInterval(function () {
+      if (Math.random() < 0.2) {
+        frame.classList.add("glitching");
+        setTimeout(function () { frame.classList.remove("glitching"); }, 250);
       }
-
-      for (var ring = 0; ring <= RINGS; ring++) {
-        for (var seg = 0; seg < SEGMENTS; seg++) {
-          var i = ring * SEGMENTS + seg;
-          var p = projected[i];
-          var alpha = Math.max(0.06, Math.min(0.55, 0.25 + p.z * 0.3));
-          var next = projected[ring * SEGMENTS + ((seg + 1) % SEGMENTS)];
-          drawEdge(p, next, alpha);
-          if (ring < RINGS) {
-            var below = projected[i + SEGMENTS];
-            drawEdge(p, below, alpha * 0.7);
-          }
-        }
-      }
-
-      // Core glow at center
-      var glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 22);
-      glow.addColorStop(0, "rgba(79, 214, 232, 0.9)");
-      glow.addColorStop(1, "rgba(79, 214, 232, 0)");
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 22, 0, Math.PI * 2);
-      ctx.fill();
-
-      if (!reduceMotion) angle += 0.006;
-      requestAnimationFrame(draw);
-    }
-
-    // Occasionally trigger a brief glitch burst, echoing the reference's
-    // data-corruption look — but this is cosmetic idle animation, not tied
-    // to any real signal (a real fault is shown via the side panels/status
-    // line instead, so the glitch here never implies an actual problem).
-    if (!reduceMotion) {
-      setInterval(function () {
-        if (Math.random() < 0.15) glitchUntil = performance.now() + 180;
-      }, 4000);
-      requestAnimationFrame(draw);
-    } else {
-      draw();
-    }
+    }, 3500);
   })();
 
   function renderSidePanel(el, rows) {
@@ -547,6 +528,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
 
   var bootedOnce = false;
   var lastCounts = null;
+  var lastTickerTimestamp = null;
 
   async function refresh() {
     const line = document.getElementById("statusline");
@@ -616,6 +598,23 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
           }).join("")
         : '<div class="empty">Nothing yet.</div>';
 
+      // Live ticker + hologram glow, driven by the most recent real
+      // activity entry (JARVIS thinking/responding, a tool running) —
+      // only reacts once per new entry, not on every 3s poll.
+      const latest = data.activity && data.activity[0];
+      const frameEl = document.getElementById("hologram-frame");
+      const tickerEl = document.getElementById("ticker");
+      if (latest && latest.timestamp !== lastTickerTimestamp) {
+        lastTickerTimestamp = latest.timestamp;
+        tickerEl.className = "ticker" + (latest.kind === "thinking" ? " thinking" : "");
+        var text = latest.message.length > 90 ? latest.message.slice(0, 90) + "…" : latest.message;
+        tickerEl.textContent = text;
+        if (latest.kind === "speaking") {
+          frameEl.classList.add("speaking");
+          setTimeout(function () { frameEl.classList.remove("speaking"); }, 4000);
+        }
+      }
+
       const faceIdBanner = document.getElementById("faceid-banner");
       faceIdBanner.style.display = data.webAuthnConfigured ? "none" : "block";
     } catch (err) {
@@ -624,7 +623,7 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   }
 
   refresh();
-  setInterval(refresh, 3000);
+  setInterval(refresh, 1000);
 </script>
 </body>
 </html>

@@ -112,8 +112,17 @@ function main() {
   });
   wsServer.start(config.port);
 
+  eventBus.on("brain.request", () => {
+    activityLog.record("JARVIS is thinking…", "thinking");
+  });
+
   eventBus.on("brain.response", ({ text, toolCallCount }) => {
     console.log(`[jarvis] brain responded (toolCalls=${toolCallCount}): ${text.slice(0, 120)}`);
+    if (text.trim()) activityLog.record(text, "speaking");
+  });
+
+  eventBus.on("tool.requested", ({ toolCall }) => {
+    activityLog.record(`Running ${toolCall.toolName}…`);
   });
 
   eventBus.on("device.registered", ({ device }) => {

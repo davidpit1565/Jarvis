@@ -140,9 +140,10 @@ describe("Dashboard HTTP routes", () => {
     activeHandle = handle;
 
     const response = await fetch(`http://localhost:${handle.port}/status`);
-    const data = (await response.json()) as { activity: { message: string }[] };
+    const data = (await response.json()) as { activity: { message: string; kind: string }[] };
 
     expect(data.activity.map((a) => a.message)).toEqual(["second thing happened", "first thing happened"]);
+    expect(data.activity.every((a) => a.kind === "info")).toBe(true);
   });
 
   test("GET /status returns an empty activity list when no ActivityLog is configured", async () => {
@@ -159,6 +160,24 @@ describe("Dashboard HTTP routes", () => {
     const response = await fetch(`http://localhost:${handle.port}/status`);
     const data = (await response.json()) as { activity: unknown[] };
     expect(data.activity).toEqual([]);
+  });
+
+  test("GET /assets/hologram.jpg serves the hero image", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/assets/hologram.jpg`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/jpeg");
+    const bytes = await response.arrayBuffer();
+    expect(bytes.byteLength).toBeGreaterThan(0);
   });
 
   test("a WebSocket upgrade request to \"/\" still connects instead of getting the HTML page", async () => {
