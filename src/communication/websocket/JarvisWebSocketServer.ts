@@ -29,12 +29,21 @@ export interface JarvisWebSocketServerDependencies {
  * messages and back.
  */
 export class JarvisWebSocketServer {
+  /** Sockets that have sent device.register but aren't authenticated yet, keyed by deviceId. */
+  private pendingConnections: Map<string, ServerWebSocket<SocketData>> = new Map();
+
   constructor(private readonly deps: JarvisWebSocketServerDependencies) {}
 
   start(port: number) {
     return Bun.serve<SocketData>({
       port,
-      fetch: (req, server) => {
+      fetch: async (req, server) => {
+        const url = new URL(req.url);
+
+        if (req.method === "POST" && url.pathname === "/pairing/approve") {
+          return this.handleApproveHttp(req);
+        }
+
         if (server.upgrade(req, { data: { deviceId: null } })) {
           return undefined;
         }
@@ -50,6 +59,7 @@ export class JarvisWebSocketServer {
         close: (ws) => {
           const deviceId = (ws as ServerWebSocket<SocketData>).data.deviceId;
           if (deviceId) {
+            this.pendingConnections.delete(deviceId);
             this.deps.deviceConnectionManager.handleDisconnect(deviceId, "socket_closed");
             this.deps.deviceRegistry.updateStatus(deviceId, "offline");
           }
@@ -114,7 +124,10 @@ export class JarvisWebSocketServer {
 
     if (!isAuthenticated) {
       const pairing = pairingService.requestPairing(deviceId);
-      ws.data.deviceId = null;
+      // Tracked as "known but not yet trusted" — deviceConnectionManager
+      // (the authenticated set) only learns about this socket once approved.
+      ws.data.deviceId = deviceId;
+      this.pendingConnections.set(deviceId, ws);
       this.send(ws, deviceId, "device.command", {
         command: "pairing.pending",
         args: { code: pairing.code, expiresAt: pairing.expiresAt },
@@ -122,10 +135,65 @@ export class JarvisWebSocketServer {
       return;
     }
 
+    this.pendingConnections.delete(deviceId);
     ws.data.deviceId = deviceId;
     deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data) });
     deviceRegistry.updateStatus(deviceId, "online");
     this.send(ws, deviceId, "device.command", { command: "pairing.approved" });
+  }
+
+  /**
+   * Approves a device's pending pairing code, mints its long-lived
+   * credential via PairingService, and — if the device's socket is still
+   * open and waiting — pushes the credential to it immediately and
+   * promotes the connection to authenticated. This is the only place a
+   * device transitions from "registered metadata" to "trusted connection".
+   */
+  approveDevice(deviceId: string, code: string): { credential: string } {
+    const { pairingService, deviceConnectionManager, deviceRegistry } = this.deps;
+    const { secret } = pairingService.approvePairing(deviceId, code);
+
+    const ws = this.pendingConnections.get(deviceId);
+    if (ws) {
+      this.pendingConnections.delete(deviceId);
+      ws.data.deviceId = deviceId;
+      deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data) });
+      deviceRegistry.updateStatus(deviceId, "online");
+      this.send(ws, deviceId, "device.command", {
+        command: "pairing.approved",
+        args: { credential: secret },
+      });
+    }
+
+    return { credential: secret };
+  }
+
+  private async handleApproveHttp(req: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      typeof (body as Record<string, unknown>).deviceId !== "string" ||
+      typeof (body as Record<string, unknown>).code !== "string"
+    ) {
+      return Response.json({ success: false, error: "Body must be { deviceId: string, code: string }" }, { status: 400 });
+    }
+
+    const { deviceId, code } = body as { deviceId: string; code: string };
+
+    try {
+      const result = this.approveDevice(deviceId, code);
+      return Response.json({ success: true, deviceId, credentialIssued: Boolean(result.credential) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to approve pairing";
+      return Response.json({ success: false, error: message }, { status: 400 });
+    }
   }
 
   private send(

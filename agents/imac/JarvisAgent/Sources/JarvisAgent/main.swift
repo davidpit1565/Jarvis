@@ -1,6 +1,7 @@
-// REQUIRES REAL macOS VALIDATION — never compiled or run in this
-// environment (no Xcode/macOS SDK available). This wires the pieces
-// together as designed; it has not been proven to actually build or run.
+// Builds successfully with `swift build` on a real Mac (verified). Runtime
+// behavior below — pairing, tool execution, Keychain — is still unverified
+// end to end; validate each step against a running JARVIS Core before
+// trusting it.
 
 import AppKit
 import Foundation
@@ -42,15 +43,91 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
     }
 
     func coreConnection(_ connection: CoreConnection, didReceive envelopeData: Data) {
-        // A real implementation decodes the envelope's `type` and routes:
-        // - "tool.request" -> AgentToolRegistry.execute, then send tool.result
-        // - "device.command" (pairing.pending/pairing.approved) -> update UI /
-        //   persist credential via KeychainStore
-        // - "ping" -> reply "pong"
-        // Deliberately not fleshed out further here: doing so without a real
-        // macOS runtime to validate JSON decoding, threading, and NSWorkspace
-        // behavior would risk shipping unverified logic as if it were tested.
-        Logger.shared.log("Received \(envelopeData.count) bytes from Core")
+        guard let header = try? JSONDecoder().decode(EnvelopeHeader.self, from: envelopeData) else {
+            Logger.shared.log("Failed to decode envelope header")
+            return
+        }
+
+        switch header.type {
+        case "device.command":
+            handleDeviceCommand(data: envelopeData)
+        case "tool.request":
+            handleToolRequest(data: envelopeData)
+        case "ping":
+            sendPong()
+        default:
+            Logger.shared.log("Unhandled message type: \(header.type)")
+        }
+    }
+
+    private func handleDeviceCommand(data: Data) {
+        guard let envelope = try? JSONDecoder().decode(Envelope<DeviceCommandPayload>.self, from: data) else {
+            Logger.shared.log("Failed to decode device.command payload")
+            return
+        }
+
+        switch envelope.payload.command {
+        case "pairing.pending":
+            guard
+                let args = envelope.payload.args,
+                let code = args["code"]?.value as? String
+            else {
+                Logger.shared.log("pairing.pending received with no code")
+                return
+            }
+            // Printed directly (not just logged) so it's visible in the
+            // terminal running this executable, without needing Console.app.
+            print("""
+
+            ==================================================
+             JARVIS pairing code: \(code)
+             Approve it from the Core machine with:
+               bun run approve-device \(deviceId) \(code)
+            ==================================================
+
+            """)
+            Logger.shared.log("Pairing code received for device \(deviceId)")
+
+        case "pairing.approved":
+            if let credential = envelope.payload.args?["credential"]?.value as? String {
+                let saved = KeychainStore.saveCredential(credential)
+                print(saved ? "[JarvisAgent] Paired — credential saved to Keychain." : "[JarvisAgent] Paired, but failed to save credential to Keychain.")
+            } else {
+                print("[JarvisAgent] Registration approved (reconnected with an existing credential).")
+            }
+            statusBar.update(status: .connected, deviceName: Host.current().localizedName)
+
+        default:
+            Logger.shared.log("Unhandled device.command: \(envelope.payload.command)")
+        }
+    }
+
+    private func handleToolRequest(data: Data) {
+        guard let envelope = try? JSONDecoder().decode(Envelope<ToolRequestPayload>.self, from: data) else {
+            Logger.shared.log("Failed to decode tool.request payload")
+            return
+        }
+
+        let result = tools.execute(name: envelope.payload.tool, input: envelope.payload.input)
+
+        let resultEnvelope = MessageFactory.makeEnvelope(
+            type: "tool.result",
+            payload: result,
+            deviceId: deviceId,
+            requestId: envelope.requestId
+        )
+
+        guard let resultData = try? JSONEncoder().encode(resultEnvelope) else {
+            Logger.shared.log("Failed to encode tool.result")
+            return
+        }
+        connection.send(data: resultData)
+    }
+
+    private func sendPong() {
+        let envelope = MessageFactory.makeEnvelope(type: "pong", payload: EmptyPayload(), deviceId: deviceId)
+        guard let data = try? JSONEncoder().encode(envelope) else { return }
+        connection.send(data: data)
     }
 
     private func register() {
@@ -67,10 +144,15 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             credential: credential
         )
 
+        // Always send our own persisted deviceId, even before pairing is
+        // approved — otherwise Core would mint a fresh random id (and a
+        // fresh pairing code) on every reconnect attempt while waiting for
+        // approval, since it falls back to a random id only when deviceId
+        // is null.
         let envelope = MessageFactory.makeEnvelope(
             type: "device.register",
             payload: payload,
-            deviceId: credential != nil ? deviceId : nil
+            deviceId: deviceId
         )
 
         guard let data = try? JSONEncoder().encode(envelope) else { return }

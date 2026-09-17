@@ -9,7 +9,8 @@
     "dev": "bun run src/index.ts",
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "approve-device": "bun run scripts/approve-device.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1"

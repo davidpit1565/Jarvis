@@ -1,10 +1,12 @@
 # JarvisAgent (iMac)
 
-Swift source for the macOS agent that will let JARVIS Core execute
-approved tools on the primary iMac. **This has never been compiled or run.**
-The Claude Code environment building it is Linux and has no Xcode, macOS
-SDK, or Swift macOS runtime — every file here is written against the
-Phase 2 architecture but is unvalidated source only.
+Swift source for the macOS agent that lets JARVIS Core execute approved
+tools on the primary iMac. Written in a Linux Claude Code environment with
+no Xcode/macOS SDK, so it's built blind — **but it has since been compiled
+with `swift build` and run on a real iMac**, completing a live
+`device.register` → pairing → Keychain-credential flow against a real Core
+instance. See "What requires further real iMac validation" below for what
+that run did and didn't confirm.
 
 ## Architecture
 
@@ -35,12 +37,24 @@ Hybrid menu bar app + `launchd` user agent, sharing one executable:
 - `StatusBar/StatusItemController.swift` — the menu bar UI.
 - `Logging/Logger.swift` — `OSLog` wrapper; never logs credentials.
 
-## What requires real iMac validation
+## What has been validated on a real iMac
 
-Everything. Specifically: Swift compilation itself, Keychain read/write,
-`NSWorkspace.frontmostApplication`, `launchd` load/restart behavior, actual
-WebSocket connectivity to a running JARVIS Core, code signing/notarization,
-and any Accessibility/local-network permission prompts.
+- `swift build` compiles this package cleanly.
+- The compiled Agent connects to a real Core over `ws://`, sends
+  `device.register`, receives its pairing code (printed to the terminal),
+  and — after `bun run approve-device <id> <code>` on the Core side —
+  receives and saves its credential via `KeychainStore`.
+
+## What requires further real iMac validation
+
+- Keychain persistence across an Agent restart (save path ran; a
+  restart-and-reconnect using the stored credential is unconfirmed)
+- `NSWorkspace.frontmostApplication` — an actual `GET_ACTIVE_APPLICATION`
+  tool call executed end to end from Core through this Agent
+- Menu bar UI rendering and permission prompts
+- `launchd` load/restart behavior
+- Code signing/notarization
+- Any Accessibility/local-network permission prompts
 
 ## Security
 

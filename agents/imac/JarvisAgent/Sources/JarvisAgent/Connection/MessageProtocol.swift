@@ -18,6 +18,16 @@ struct Envelope<Payload: Codable>: Codable {
     let payload: Payload
 }
 
+/// Decodes just the envelope's routing fields, ignoring `payload` (whose
+/// shape depends on `type`). Used to decide which concrete `Envelope<...>`
+/// to decode next.
+struct EnvelopeHeader: Codable {
+    let requestId: String
+    let timestamp: String
+    let deviceId: String?
+    let type: String
+}
+
 // MARK: - Device -> Core payloads
 
 struct DeviceRegisterPayload: Codable {

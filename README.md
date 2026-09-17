@@ -79,8 +79,10 @@ What's new in Phase 2:
   the user's language, including mixed Hebrew/English in one message. Tool
   IDs, protocol types, and all technical identifiers stay English-only —
   only the conversational layer is bilingual.
-- **iMac Agent source** (`agents/imac/JarvisAgent/`): Swift source for the
-  macOS agent, written but **never compiled or run** (see below).
+- **iMac Agent** (`agents/imac/JarvisAgent/`): Swift source for the macOS
+  agent — **now built and run on a real iMac**, completing a live
+  `device.register` → pairing → credential-in-Keychain flow against a real
+  Core instance (see below for exactly what is and isn't verified yet).
 
 **Explicitly out of scope for Phase 2** (not implemented, not stubbed as
 real functionality):
@@ -181,8 +183,23 @@ bun run dev
 On startup this registers `READ_ONLY_FILE_INFO` and `GET_ACTIVE_APPLICATION`,
 opens the local memory database, and starts the WebSocket server. A real
 device can connect and run through the `device.register` → pairing →
-`tool.request`/`tool.result` flow, but no real iMac Agent has been built or
-tested against it yet — see below.
+`tool.request`/`tool.result` flow — **verified against the real iMac Agent**
+(see `agents/imac/JarvisAgent/`, which now builds and runs on macOS).
+
+### Approving a device's pairing code
+
+When a device registers for the first time, Core logs a 6-digit pairing
+code (also printed directly by the Agent, if it's the one connecting).
+Approve it with:
+
+```bash
+bun run approve-device <deviceId> <code>
+```
+
+This calls Core's `POST /pairing/approve` endpoint, which mints the
+device's long-lived credential and — if the device's socket is still open
+— pushes the credential to it immediately, promoting the connection to
+authenticated in the same step.
 
 ## Test
 
@@ -229,20 +246,25 @@ contain no language-detection logic, by design.
   denied — no confirmation flow exists yet.
 - DeviceRegistry, PermissionService, and PairingService are all in-memory
   and reset on restart.
-- The pairing approval step is currently manual/out-of-band (the pairing
-  code is logged; there is no CLI/UI to approve it yet).
+- Pairing approval is a manual CLI step (`bun run approve-device`) — there
+  is no web UI for it yet.
 - No authentication beyond a placeholder `userId`.
-- The iMac Agent is **source only** — see the validation split below.
+- The iMac Agent's connection/pairing/tool-execution logic has been
+  compiled and run against a real Core instance; `NSWorkspace`-backed
+  `GET_ACTIVE_APPLICATION` execution itself is not yet confirmed end to end
+  from real hardware — see the validation split below.
 
 ## Linux vs. macOS validation
 
-This development environment is Linux with no Xcode, macOS SDK, Swift
-macOS runtime, Keychain, `NSWorkspace`, or `launchd`. Nothing macOS-specific
-claims to have been tested here.
+Core development happens in a Linux environment with no Xcode, macOS SDK,
+Swift macOS runtime, Keychain, `NSWorkspace`, or `launchd` — so the Swift
+Agent's source was originally written blind. It has since been built and
+run against a real Core instance on the actual target iMac, closing part
+of that gap; the rest is tracked explicitly below.
 
-**Validated in this (Linux) environment:**
+**Validated in the Linux Core environment:**
 - TypeScript typechecking (`bun run typecheck`) and the full Core test
-  suite (`bun test`, 100+ tests)
+  suite (`bun test`, 110+ tests)
 - WebSocket envelope protocol: valid/invalid envelopes, every message
   type, malformed payloads, wrong/missing `deviceId`
 - `DeviceRegistry`: registration, role assignment, primary-device
@@ -256,18 +278,25 @@ claims to have been tested here.
 - Full `Orchestrator` remote-tool lifecycle against a mocked iMac device
   (Core → Orchestrator → PermissionService → DeviceRegistry →
   DeviceConnectionManager → mock device → result → Claude)
-- Manual smoke test of the real `Bun.serve` WebSocket server completing a
-  live `device.register` → pairing-pending handshake over an actual socket
+- The real `Bun.serve` HTTP + WebSocket server end to end: a mock device
+  registers, receives a pairing code, `POST /pairing/approve` approves it,
+  and the credential is pushed back over the same open socket
+  (`tests/integration/pairingApprovalHttp.test.ts`)
 
-**Requires the real iMac (not done here):**
-- Compiling `agents/imac/JarvisAgent` with Swift/Xcode
-- Keychain read/write
-- `NSWorkspace.frontmostApplication` behavior
+**Validated on a real iMac:**
+- `swift build` compiles `agents/imac/JarvisAgent` cleanly
+- The compiled Agent connects to a real running Core instance over
+  `ws://`, completes `device.register`, receives its pairing code, and
+  (after `bun run approve-device`) receives and saves its credential
+
+**Still requires further real-iMac validation:**
+- Keychain persistence across Agent restarts (the save path ran; a
+  restart-and-reconnect using the stored credential hasn't been confirmed)
+- `NSWorkspace.frontmostApplication` — an actual `GET_ACTIVE_APPLICATION`
+  tool call executed end to end from Core through the Agent
 - Menu bar UI rendering and permission prompts
 - `launchd` load/restart/persistence behavior
-- A real WebSocket connection from macOS to a running Core instance
 - Code signing/notarization
-- The actual `GET_ACTIVE_APPLICATION` result end to end from real hardware
 
 ## Planned future phases
 
