@@ -90,6 +90,30 @@
     margin-top: 6px; color: #6fa9b8; font-size: 9px; letter-spacing: 4px; opacity: 0.7;
   }
 
+  /* Respect the OS-level reduced-motion preference: keep every visual
+     element (nothing here is functional-only) but stop continuous motion
+     — the CSS pulse/blink animations, and (via JS below, since idle
+     drift/rotation/glitch bursts are driven from the render loop, not
+     CSS) the equivalent JS-driven motion. */
+  @media (prefers-reduced-motion: reduce) {
+    #plinth-glow, #cursor { animation: none; }
+  }
+
+  /* Narrow/phone layout: the desktop side panels + wide activity heading
+     don't fit — shrink panels, drop the bar meters (the number alone
+     still reads fine at this size), and stack the activity header. */
+  @media (max-width: 600px) {
+    #hud-title { font-size: 9px; letter-spacing: 3px; width: 90%; }
+    .panel { width: 42vw; font-size: 9px; }
+    .panel .bar { display: none; }
+    .panel .row { white-space: normal; }
+    .panel .row .val { margin-left: 5px; }
+    #activity { bottom: 17%; font-size: 9px; }
+    #activity .heading { flex-direction: column; align-items: flex-start; gap: 2px; }
+    #jarvis-label { font-size: 16px; letter-spacing: 8px; }
+    #audio-ctl { font-size: 8px; padding: 5px 8px; }
+  }
+
   #glitch-banner {
     position: fixed; left: 50%; top: 46%; transform: translate(-50%, -50%);
     z-index: 6; background: rgba(10, 4, 4, 0.55); border: 1px solid rgba(255,120,90,0.55);
@@ -442,6 +466,7 @@
       uTime: { value: 0 },
       uGlitch: { value: 0 },
       uAudio: { value: 0 },
+      uReducedMotion: { value: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 1 : 0 },
     },
     vertexShader: `
       attribute float aSize;
@@ -450,13 +475,16 @@
       uniform float uTime;
       uniform float uGlitch;
       uniform float uAudio;
+      uniform float uReducedMotion;
       void main() {
         vColor = color;
         vec3 p = position;
-        // gentle idle drift so the hologram never looks static
-        p.x += sin(uTime * 0.6 + position.y * 3.0) * 0.006;
-        p.y += cos(uTime * 0.5 + position.x * 3.0) * 0.006;
-        p.x += uGlitch * (sin(position.y * 40.0 + uTime * 30.0)) * 0.12;
+        // gentle idle drift so the hologram never looks static — skipped
+        // under prefers-reduced-motion (uReducedMotion == 1.0)
+        float motion = 1.0 - uReducedMotion;
+        p.x += sin(uTime * 0.6 + position.y * 3.0) * 0.006 * motion;
+        p.y += cos(uTime * 0.5 + position.x * 3.0) * 0.006 * motion;
+        p.x += uGlitch * (sin(position.y * 40.0 + uTime * 30.0)) * 0.12 * motion;
         // voice-reactive: outward breathing pulse driven by live audio level,
         // strongest at the mouth/jaw (lower half of the face) so it reads
         // as "speaking" rather than a uniform global pulse
@@ -503,6 +531,8 @@
   let nextGlitchAt = 6 + Math.random() * 6;
   const rgbSplit = document.getElementById("rgb-split");
   const banner = document.getElementById("glitch-banner");
+  const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (REDUCED_MOTION) nextGlitchAt = Infinity; // no periodic glitch bursts at all
 
   function triggerGlitch() {
     const now = clock.getElapsedTime();
@@ -533,9 +563,11 @@
     material.uniforms.uGlitch.value = inGlitch ? 1.0 : Math.max(0, material.uniforms.uGlitch.value - 0.08);
     if (!inGlitch) rgbSplit.style.opacity = String(Math.max(0, parseFloat(rgbSplit.style.opacity || "0") - 0.06));
 
-    points.rotation.y = Math.sin(t * 0.18) * 0.35;
-    points.rotation.x = Math.sin(t * 0.11) * 0.06;
-    ring.rotation.z = t * 0.15;
+    if (!REDUCED_MOTION) {
+      points.rotation.y = Math.sin(t * 0.18) * 0.35;
+      points.rotation.x = Math.sin(t * 0.11) * 0.06;
+    }
+    if (!REDUCED_MOTION) ring.rotation.z = t * 0.15;
 
     renderer.render(scene, camera);
   }
