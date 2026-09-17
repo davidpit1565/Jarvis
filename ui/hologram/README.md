@@ -48,6 +48,25 @@ no long-running deployment yet), the panel honestly falls back to a
 clearly-labeled `DEMO` feed of representative events, so it's never
 ambiguous whether what's on screen is real.
 
+## Real dashboard numbers, not decoration — TOOL REGISTRY / DEVICES / OBSERVERS
+
+The two side panels also poll a second new endpoint, **`GET /status`**
+(also on `JarvisWebSocketServer.ts`), every second — real device counts,
+the real registered tool list, and how many observer sockets are
+connected. Each panel's heading shows `LIVE` or `NO DATA` for this
+specifically (independent of the activity feed's own status), and the
+three real rows show `—` rather than a fabricated-looking number while
+unreachable. `NEURAL SYNC` / `MEMORY LOAD` / `LATENCY` / `PROTOCOL` stay
+honestly cosmetic — Core exposes no CPU/process telemetry, so there's
+nothing real for them to show yet.
+
+`/status` sends `Access-Control-Allow-Origin: *` on purpose: this page is
+typically opened as a `file://` document, and without that header the
+browser silently blocks it from reading the response even though the
+request reaches Core fine (curl-testing it looks correct while the page
+still shows `NO DATA` — check this header first if that happens again).
+Covered by `tests/integration/statusHttp.test.ts`.
+
 Covered by `tests/integration/observerBroadcast.test.ts`.
 
 ## Voice reactivity — real audio analysis, no TTS to plug it into yet
@@ -88,7 +107,15 @@ started for real, this page opened in an actual browser against it, and a
 real device connected and registered over Core's real WebSocket protocol
 — the page's status genuinely flipped from `DEMO` to
 `LIVE · CONNECTED TO CORE` and displayed the real `device.registered`
-event, with no mocking on either side.
+event, with no mocking on either side. The same real-Core check was
+repeated for `/status`: `TOOL REGISTRY` showed the real `2 REGISTERED`
+tools, `DEVICES` correctly read `0/1 ONLINE` after a real device
+registered but before it was paired/approved (an accurate reflection of
+Core's actual pairing state, not a rounding-up), and `OBSERVERS` showed
+`1 CONNECTED` for the page's own socket. This is also how a real CORS bug
+was caught and fixed — the endpoint worked correctly over curl while the
+browser silently blocked the page from reading it, until
+`Access-Control-Allow-Origin` was added.
 
 Performance was also measured, not assumed: ~33fps sustained with
 **SwiftShader** (CPU software OpenGL — no GPU at all, the worst realistic

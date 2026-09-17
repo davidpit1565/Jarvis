@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { EventBus } from "@/core/events/EventBus";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { PairingService } from "@/devices/pairing/PairingService";
+import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import {
   makeEnvelope,
@@ -35,6 +36,8 @@ export interface JarvisWebSocketServerDependencies {
   deviceConnectionManager: DeviceConnectionManager;
   pairingService: PairingService;
   eventBus: EventBus;
+  /** Optional: only needed to serve real counts on GET /status. */
+  toolRegistry?: ToolRegistry;
 }
 
 /**
@@ -84,6 +87,10 @@ export class JarvisWebSocketServer {
 
           if (req.method === "POST" && url.pathname === "/pairing/approve") {
             return await this.handleApproveHttp(req);
+          }
+
+          if (req.method === "GET" && url.pathname === "/status") {
+            return this.handleStatusHttp();
           }
 
           if (url.pathname === "/observer") {
@@ -262,6 +269,36 @@ export class JarvisWebSocketServer {
       const message = error instanceof Error ? error.message : "unknown reason";
       console.log(`[jarvis] could not grant requested role to "${deviceId}": ${message}`);
     }
+  }
+
+  /**
+   * Real, read-only snapshot of Core's own state — device counts, the
+   * actually-registered tool list — for the hologram UI's dashboard
+   * panels to poll instead of showing invented numbers. Deliberately
+   * narrow: no device names/capabilities/secrets, nothing a public URL
+   * shouldn't leak to an unauthenticated caller (this endpoint has no
+   * auth today, same as the rest of Core's HTTP surface).
+   */
+  private handleStatusHttp(): Response {
+    const devices = this.deps.deviceRegistry.listDevices();
+    const online = devices.filter((d) => d.status === "online").length;
+    const tools = this.deps.toolRegistry?.listTools().map((t) => t.name) ?? [];
+
+    return Response.json(
+      {
+        devices: { total: devices.length, online },
+        tools,
+        observers: this.observers.size,
+      },
+      // CORS: the hologram UI is typically opened as a `file://` page (or
+      // a different origin/port than Core), so the browser needs this
+      // header to let a same-effort fetch() read the response at all —
+      // without it the request still reaches the server (as curl shows)
+      // but the browser silently blocks the page from seeing the body.
+      // Fine to leave wide open: this endpoint is already unauthenticated
+      // and intentionally exposes only aggregate counts and tool names.
+      { headers: { "Access-Control-Allow-Origin": "*" } }
+    );
   }
 
   private async handleApproveHttp(req: Request): Promise<Response> {

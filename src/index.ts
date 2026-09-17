@@ -44,6 +44,7 @@ function main() {
     deviceConnectionManager,
     pairingService,
     eventBus,
+    toolRegistry,
   });
   wsServer.start(config.port);
 

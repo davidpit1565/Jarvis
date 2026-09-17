@@ -45,8 +45,11 @@
   .panel .heading {
     color: #a8f2ff; font-size: 10px; letter-spacing: 3px;
     opacity: 0.85; margin-bottom: 10px; border-bottom: 1px solid rgba(111,216,232,0.25);
-    padding-bottom: 6px;
+    padding-bottom: 6px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
   }
+  .panel .heading .status { font-size: 8.5px; letter-spacing: 1px; opacity: 0.9; white-space: nowrap; }
+  .panel .heading .status.live { color: #8bffb0; }
+  .panel .heading .status.demo { color: #ffcf7f; }
   .panel .row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.9; }
   .panel .row .val { color: #ffd9a0; }
   .panel .bar {
@@ -181,13 +184,13 @@
   <div id="hud-title">J . A . R . V . I . S &nbsp; — &nbsp; CORE INTERFACE</div>
 
   <div class="panel left" id="panel-left">
-    <div class="heading">SYSTEM STATUS</div>
-    <div class="row" id="pl-0"></div>
+    <div class="heading">SYSTEM STATUS <span class="status demo" id="status-indicator-left">NO DATA</span></div>
+    <div class="rows" id="panel-left-rows"></div>
   </div>
 
   <div class="panel right" id="panel-right">
-    <div class="heading">DEVICE LINK</div>
-    <div class="row" id="pr-0"></div>
+    <div class="heading">CORE STATUS <span class="status demo" id="status-indicator-right">NO DATA</span></div>
+    <div class="rows" id="panel-right-rows"></div>
   </div>
 
   <div id="glitch-banner">
@@ -580,19 +583,24 @@
   });
 
   /* ---------------------------------------------------------------
-   * 4. HUD telemetry panels — placeholder data, swap for real Core
-   *    status once this is wired to JARVIS's WebSocket state.
+   * 4. HUD telemetry panels. NEURAL SYNC / MEMORY LOAD / LATENCY have no
+   *    real Core equivalent (Core exposes no CPU/process telemetry) and
+   *    stay honestly cosmetic — jittering flavor, not measurements. TOOL
+   *    REGISTRY and the device row ARE real: polled from GET /status
+   *    below and start in an honest "no data yet" state rather than a
+   *    fabricated-looking default, exactly like the bottom activity
+   *    panel's DEMO/LIVE distinction.
    * ------------------------------------------------------------- */
   const leftLines = [
     ["NEURAL SYNC", "98.2%", 0.98],
     ["MEMORY LOAD", "64%", 0.64],
-    ["TOOL REGISTRY", "12 ACTIVE", 0.8],
+    ["TOOL REGISTRY", "—", 0],
     ["PERMISSION GATE", "NOMINAL", 0.9],
   ];
   const rightLines = [
-    ["IMAC LINK", "CONNECTED", 0.95],
+    ["DEVICES", "—", 0],
     ["LATENCY", "18ms", 0.85],
-    ["DEVICE ROLE", "PRIMARY", 1.0],
+    ["OBSERVERS", "—", 0],
     ["PROTOCOL", "v2", 0.7],
   ];
 
@@ -601,10 +609,7 @@
     lines.forEach(([label, val, frac]) => {
       const row = document.createElement("div");
       row.className = "row";
-      row.innerHTML =
-        container.classList.contains("right")
-          ? `${label}<span class="bar"><span style="transform:scaleX(${frac})"></span></span><span class="val">${val}</span>`
-          : `${label}<span class="bar"><span style="transform:scaleX(${frac})"></span></span><span class="val">${val}</span>`;
+      row.innerHTML = `${label}<span class="bar"><span style="transform:scaleX(${frac})"></span></span><span class="val">${val}</span>`;
       container.appendChild(row);
     });
     const cursorRow = document.createElement("div");
@@ -612,17 +617,73 @@
     cursorRow.innerHTML = `&gt;<span id="cursor"></span>`;
     container.appendChild(cursorRow);
   }
-  renderPanel(document.getElementById("panel-left"), leftLines);
-  renderPanel(document.getElementById("panel-right"), rightLines);
+  const panelLeftRows = document.getElementById("panel-left-rows");
+  const panelRightRows = document.getElementById("panel-right-rows");
+  renderPanel(panelLeftRows, leftLines);
+  renderPanel(panelRightRows, rightLines);
 
   setInterval(() => {
-    // subtle live-feeling jitter on the numeric values only
+    // subtle live-feeling jitter on the purely-cosmetic values only —
+    // never on the real TOOL REGISTRY/DEVICES/OBSERVERS rows, which
+    // pollStatus() below owns exclusively.
     leftLines[0][2] = Math.min(1, Math.max(0.7, leftLines[0][2] + (Math.random() - 0.5) * 0.03));
     leftLines[0][1] = (leftLines[0][2] * 100).toFixed(1) + "%";
     rightLines[1][1] = Math.round(12 + Math.random() * 14) + "ms";
-    renderPanel(document.getElementById("panel-left"), leftLines);
-    renderPanel(document.getElementById("panel-right"), rightLines);
+    renderPanel(panelLeftRows, leftLines);
+    renderPanel(panelRightRows, rightLines);
   }, 1800);
+
+  /* ---------------------------------------------------------------
+   * 4b. Real status poll — GET /status on Core every 1s (matching the
+   *     cadence of the dashboard reference this was compared against).
+   *     Updates the TOOL REGISTRY / DEVICES / OBSERVERS rows with real
+   *     numbers and flips both panel headings to LIVE; on any failure
+   *     (Core offline, unreachable) they honestly read "NO DATA" rather
+   *     than silently keeping stale or fabricated-looking numbers.
+   * ------------------------------------------------------------- */
+  function corePort() { return new URLSearchParams(location.search).get("port") || "4770"; }
+  function coreHost() { return new URLSearchParams(location.search).get("host") || "localhost"; }
+
+  function setPanelStatus(isLive) {
+    for (const id of ["status-indicator-left", "status-indicator-right"]) {
+      const el = document.getElementById(id);
+      el.textContent = isLive ? "LIVE" : "NO DATA";
+      el.className = "status " + (isLive ? "live" : "demo");
+    }
+  }
+
+  async function pollStatus() {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 900);
+      const res = await fetch(`http://${coreHost()}:${corePort()}/status`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = await res.json();
+
+      leftLines[2][1] = `${data.tools.length} REGISTERED`;
+      leftLines[2][2] = Math.min(1, data.tools.length / 8);
+
+      rightLines[0][1] = data.devices.total === 0 ? "NONE REGISTERED" : `${data.devices.online}/${data.devices.total} ONLINE`;
+      rightLines[0][2] = data.devices.total === 0 ? 0 : data.devices.online / data.devices.total;
+      rightLines[2][1] = `${data.observers} CONNECTED`;
+      rightLines[2][2] = Math.min(1, data.observers / 3);
+
+      setPanelStatus(true);
+    } catch (e) {
+      leftLines[2][1] = "—";
+      leftLines[2][2] = 0;
+      rightLines[0][1] = "—";
+      rightLines[0][2] = 0;
+      rightLines[2][1] = "—";
+      rightLines[2][2] = 0;
+      setPanelStatus(false);
+    }
+    renderPanel(panelLeftRows, leftLines);
+    renderPanel(panelRightRows, rightLines);
+  }
+  pollStatus();
+  setInterval(pollStatus, 1000);
 
   /* ---------------------------------------------------------------
    * 5. Live "behind the scenes" activity feed. Connects to JARVIS
@@ -699,11 +760,9 @@
   }
 
   function connectObserver() {
-    const port = new URLSearchParams(location.search).get("port") || "4770";
-    const host = new URLSearchParams(location.search).get("host") || "localhost";
     let socket;
     try {
-      socket = new WebSocket(`ws://${host}:${port}/observer`);
+      socket = new WebSocket(`ws://${coreHost()}:${corePort()}/observer`);
     } catch (e) {
       setActivityStatus(false);
       startDemoFeed();
