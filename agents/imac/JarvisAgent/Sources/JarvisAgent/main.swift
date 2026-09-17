@@ -11,9 +11,12 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
     private let statusBar = StatusItemController()
     private var connection: CoreConnection!
 
-    // Configure via environment/config in a real build; hardcoded here only
-    // as a placeholder for the source structure.
-    private let coreURL = URL(string: "wss://localhost:4770")!
+    // JARVIS Core (Bun.serve) speaks plain WebSocket, not TLS, so this
+    // defaults to ws:// — wss:// would fail to connect. Override with
+    // JARVIS_CORE_URL for a non-default host/port.
+    private let coreURL = URL(
+        string: ProcessInfo.processInfo.environment["JARVIS_CORE_URL"] ?? "ws://localhost:4770"
+    )!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         connection = CoreConnection(coreURL: coreURL)
