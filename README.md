@@ -367,9 +367,16 @@ connects/disconnects) via `ActivityLog` (`src/core/activity/ActivityLog.ts`
 served directly by the same process — no build step, no extra dependency —
 and polls a plain JSON feed at `GET /status` every 3 seconds. This is the
 first step toward a real visual layer; it's read-only today (nothing on
-the page can trigger an action). Styled as a HUD (glowing core with a
-rotating scan sweep, boot-sequence status line) after looking at how
-several open-source Iron-Man-style JARVIS projects approach the same idea.
+the page can trigger an action).
+
+Styled as a hologram after the user shared reference images/video of a
+cinematic AI-generated holographic head with flanking data panels — a
+literal photoreal 3D face isn't realistic to reproduce as real-time
+browser graphics without a custom 3D asset pipeline, so this approximates
+the same idea with a hand-rolled wireframe sphere on `<canvas>` (no 3D
+library), flanking live readout panels (device/tool/phone counts pulled
+from real `/status` data, not fake narrative text), a typed boot-sequence
+line, and a brief glitch flash when the readouts actually change.
 
 Verified in a real browser (headless Chromium) against the actual running
 server: the page loads, the live data (including the activity feed and
