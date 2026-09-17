@@ -16,6 +16,7 @@ describe("EventBus", () => {
       type: "mac" as const,
       platform: "macOS",
       role: null,
+      requestedRole: null,
       agentVersion: "0.1.0",
       protocolVersion: "1",
       status: "unknown" as const,

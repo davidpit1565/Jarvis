@@ -96,6 +96,115 @@ describe("Pairing approval over HTTP", () => {
     ws.close();
   });
 
+  test("approving a device that requested primary actually grants it the role", async () => {
+    const { handle, port, deviceRegistry } = setupServer();
+    activeHandle = handle;
+
+    const deviceId = "test-imac-primary";
+    const ws = new WebSocket(`ws://localhost:${port}`);
+
+    const pairingCode = await new Promise<string>((resolve, reject) => {
+      ws.onopen = () => {
+        ws.send(
+          JSON.stringify({
+            requestId: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            deviceId,
+            type: "device.register",
+            payload: {
+              deviceName: "Test iMac",
+              deviceType: "mac",
+              platform: "macos",
+              agentVersion: "0.1.0",
+              protocolVersion: "1",
+              capabilities: [],
+              requestedRole: "primary",
+            },
+          })
+        );
+      };
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data as string);
+        if (message.payload?.command === "pairing.pending") resolve(message.payload.args.code);
+      };
+      ws.onerror = () => reject(new Error("WebSocket error"));
+      setTimeout(() => reject(new Error("Timed out waiting for pairing.pending")), 2000);
+    });
+
+    expect(deviceRegistry.getDevice(deviceId)?.role).toBeNull();
+
+    const httpResponse = await fetch(`http://localhost:${port}/pairing/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId, code: pairingCode }),
+    });
+    expect(httpResponse.status).toBe(200);
+
+    expect(deviceRegistry.getDevice(deviceId)?.role).toBe("primary");
+    expect(deviceRegistry.getPrimaryDevice()?.id).toBe(deviceId);
+
+    ws.close();
+  });
+
+  test("approving a second device that requested primary does not steal the role, and approval still succeeds", async () => {
+    const { handle, port, deviceRegistry } = setupServer();
+    activeHandle = handle;
+
+    deviceRegistry.registerDevice({
+      id: "already-primary",
+      name: "Existing Primary",
+      type: "mac",
+      platform: "macos",
+      agentVersion: "0.1.0",
+      protocolVersion: "1",
+    });
+    deviceRegistry.setRole("already-primary", "primary");
+
+    const deviceId = "second-device";
+    const ws = new WebSocket(`ws://localhost:${port}`);
+
+    const pairingCode = await new Promise<string>((resolve, reject) => {
+      ws.onopen = () => {
+        ws.send(
+          JSON.stringify({
+            requestId: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            deviceId,
+            type: "device.register",
+            payload: {
+              deviceName: "Second Device",
+              deviceType: "mac",
+              platform: "macos",
+              agentVersion: "0.1.0",
+              protocolVersion: "1",
+              capabilities: [],
+              requestedRole: "primary",
+            },
+          })
+        );
+      };
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data as string);
+        if (message.payload?.command === "pairing.pending") resolve(message.payload.args.code);
+      };
+      ws.onerror = () => reject(new Error("WebSocket error"));
+      setTimeout(() => reject(new Error("Timed out waiting for pairing.pending")), 2000);
+    });
+
+    const httpResponse = await fetch(`http://localhost:${port}/pairing/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId, code: pairingCode }),
+    });
+
+    // Approval itself must still succeed even though the role grant is skipped.
+    expect(httpResponse.status).toBe(200);
+    expect(deviceRegistry.getDevice(deviceId)?.role).toBeNull();
+    expect(deviceRegistry.getPrimaryDevice()?.id).toBe("already-primary");
+
+    ws.close();
+  });
+
   test("approving with the wrong code returns an HTTP error and does not authenticate the device", async () => {
     const { handle, port } = setupServer();
     activeHandle = handle;

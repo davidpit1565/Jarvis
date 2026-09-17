@@ -33,6 +33,8 @@ export interface Device {
   platform: string;
   /** Assigned by Core. Null until Core explicitly assigns a role. */
   role: DeviceRole | null;
+  /** The role this device asked for at registration, kept for reference — never authoritative. */
+  requestedRole: DeviceRole | null;
   agentVersion: string;
   protocolVersion: string;
   status: DeviceStatus;

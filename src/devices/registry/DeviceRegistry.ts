@@ -23,6 +23,7 @@ export class DeviceRegistry {
       type: input.type,
       platform: input.platform,
       role: null,
+      requestedRole: input.requestedRole ?? null,
       agentVersion: input.agentVersion,
       protocolVersion: input.protocolVersion,
       status: DeviceStatus.UNKNOWN,

@@ -148,6 +148,7 @@ export class JarvisWebSocketServer {
     ws.data.deviceId = deviceId;
     deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data) });
     deviceRegistry.updateStatus(deviceId, "online");
+    this.maybeAssignRequestedRole(deviceId);
     this.send(ws, deviceId, "device.command", { command: "pairing.approved" });
   }
 
@@ -157,10 +158,18 @@ export class JarvisWebSocketServer {
    * open and waiting — pushes the credential to it immediately and
    * promotes the connection to authenticated. This is the only place a
    * device transitions from "registered metadata" to "trusted connection".
+   *
+   * A human running this (via the approve-device CLI) *is* the Core
+   * decision the architecture calls for: if the device asked for a role
+   * (e.g. the iMac Agent requests "primary") and nothing else already
+   * holds it, approving pairing also grants it here — a device still
+   * never grants itself a role by claiming one in its own payload.
    */
   approveDevice(deviceId: string, code: string): { credential: string } {
     const { pairingService, deviceConnectionManager, deviceRegistry } = this.deps;
     const { secret } = pairingService.approvePairing(deviceId, code);
+
+    this.maybeAssignRequestedRole(deviceId);
 
     const ws = this.pendingConnections.get(deviceId);
     if (ws) {
@@ -175,6 +184,25 @@ export class JarvisWebSocketServer {
     }
 
     return { credential: secret };
+  }
+
+  /**
+   * Grants a device's originally-requested role, but only if it doesn't
+   * have one yet and nothing else already holds "primary" — never
+   * overrides an existing, deliberately-set role.
+   */
+  private maybeAssignRequestedRole(deviceId: string): void {
+    const { deviceRegistry } = this.deps;
+    const device = deviceRegistry.getDevice(deviceId);
+    if (!device || device.role !== null || !device.requestedRole) return;
+
+    try {
+      deviceRegistry.setRole(deviceId, device.requestedRole);
+      console.log(`[jarvis] device "${device.name}" (${deviceId}) granted role: ${device.requestedRole}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown reason";
+      console.log(`[jarvis] could not grant requested role to "${deviceId}": ${message}`);
+    }
   }
 
   private async handleApproveHttp(req: Request): Promise<Response> {
