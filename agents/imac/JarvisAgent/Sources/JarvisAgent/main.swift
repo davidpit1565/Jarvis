@@ -20,6 +20,7 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
     )!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        print("[JarvisAgent] Starting. deviceId=\(deviceId)")
         connection = CoreConnection(coreURL: coreURL)
         connection.delegate = self
 
@@ -34,6 +35,7 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
     }
 
     func coreConnectionDidOpen(_ connection: CoreConnection) {
+        print("[JarvisAgent] Connected to Core. Registering...")
         statusBar.update(status: .connected)
         register()
     }
@@ -155,7 +157,11 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             deviceId: deviceId
         )
 
-        guard let data = try? JSONEncoder().encode(envelope) else { return }
+        guard let data = try? JSONEncoder().encode(envelope) else {
+            print("[JarvisAgent] Failed to encode device.register envelope")
+            return
+        }
+        print("[JarvisAgent] Sending device.register (deviceId=\(deviceId), hasCredential=\(credential != nil))")
         connection.send(data: data)
     }
 }

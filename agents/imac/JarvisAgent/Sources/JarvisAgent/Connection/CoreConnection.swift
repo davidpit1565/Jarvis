@@ -37,6 +37,7 @@ final class CoreConnection: NSObject {
     }
 
     func connect() {
+        print("[JarvisAgent] Connecting to \(coreURL.absoluteString)...")
         isStopped = false
         let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         self.session = session
@@ -81,6 +82,7 @@ final class CoreConnection: NSObject {
                 }
                 self.receiveLoop()
             case .failure(let error):
+                print("[JarvisAgent] Connection error: \(error.localizedDescription)")
                 Logger.shared.log("CoreConnection receive failed: \(error.localizedDescription)")
                 self.scheduleReconnect(after: error)
             }
@@ -93,6 +95,7 @@ final class CoreConnection: NSObject {
 
         reconnectAttempt += 1
         let backoff = min(pow(2.0, Double(reconnectAttempt)), maxBackoffSeconds)
+        print("[JarvisAgent] Reconnecting in \(backoff)s (attempt \(reconnectAttempt))")
         Logger.shared.log("Reconnecting in \(backoff)s (attempt \(reconnectAttempt))")
 
         DispatchQueue.global().asyncAfter(deadline: .now() + backoff) { [weak self] in
@@ -108,8 +111,17 @@ extension CoreConnection: URLSessionWebSocketDelegate {
         webSocketTask: URLSessionWebSocketTask,
         didOpenWithProtocol protocol: String?
     ) {
+        print("[JarvisAgent] WebSocket connected.")
         reconnectAttempt = 0
         delegate?.coreConnectionDidOpen(self)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didCompleteWithError error: Error?
+    ) {
+        print("[JarvisAgent] Task completed with error: \(error?.localizedDescription ?? "none")")
     }
 
     func urlSession(
@@ -118,6 +130,7 @@ extension CoreConnection: URLSessionWebSocketDelegate {
         didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
         reason: Data?
     ) {
+        print("[JarvisAgent] WebSocket closed with code \(closeCode.rawValue).")
         scheduleReconnect(after: NSError(domain: "CoreConnection", code: closeCode.rawValue))
     }
 }
