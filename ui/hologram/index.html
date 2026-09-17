@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #030507; overflow: hidden;
+    font-family: "SF Mono", "JetBrains Mono", "Courier New", monospace;
+  }
+  #stage {
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse at 50% 38%, rgba(24,52,66,0.55) 0%, rgba(3,5,7,0.0) 55%),
+      radial-gradient(ellipse at 50% 100%, rgba(0,0,0,0.9) 0%, #030507 70%),
+      #030507;
+  }
+  canvas#gl { position: absolute; inset: 0; display: block; }
+
+  /* subtle CRT scanlines + vignette, purely decorative */
+  #scanlines {
+    position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    background: repeating-linear-gradient(
+      to bottom, rgba(255,255,255,0.028) 0px, rgba(255,255,255,0.028) 1px,
+      transparent 1px, transparent 3px
+    );
+    mix-blend-mode: overlay;
+  }
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    box-shadow: inset 0 0 18vw 4vw rgba(0,0,0,0.85);
+  }
+
+  .panel {
+    position: fixed; top: 12%; width: min(23vw, 300px);
+    color: #6fd8e8; font-size: 11px; line-height: 1.55;
+    letter-spacing: 0.3px; z-index: 4; user-select: none;
+    text-shadow: 0 0 6px rgba(111,216,232,0.55);
+  }
+  .panel.left { left: 4%; text-align: left; }
+  .panel.right { right: 4%; text-align: right; }
+  .panel .heading {
+    color: #a8f2ff; font-size: 10px; letter-spacing: 3px;
+    opacity: 0.85; margin-bottom: 10px; border-bottom: 1px solid rgba(111,216,232,0.25);
+    padding-bottom: 6px;
+  }
+  .panel .row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.9; }
+  .panel .row .val { color: #ffd9a0; }
+  .panel .bar {
+    display: inline-block; width: 70px; height: 4px; margin-inline: 6px;
+    background: rgba(111,216,232,0.15); vertical-align: middle; position: relative;
+  }
+  .panel.right .bar { width: 60px; }
+  .panel .bar > span {
+    position: absolute; inset: 0; background: #6fd8e8; transform-origin: left;
+    box-shadow: 0 0 6px #6fd8e8;
+  }
+  .panel.right .bar > span { transform-origin: right; right: 0; left: auto; }
+
+  #cursor { display: inline-block; width: 6px; height: 11px; background: #6fd8e8; margin-left: 2px; animation: blink 1s steps(1) infinite; vertical-align: -1px; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  #hud-title {
+    position: fixed; top: 4%; left: 50%; transform: translateX(-50%);
+    z-index: 4; color: #a8f2ff; font-size: 11px; letter-spacing: 6px;
+    opacity: 0.75; text-shadow: 0 0 8px rgba(111,216,232,0.6);
+    user-select: none;
+  }
+
+  #plinth-wrap {
+    position: fixed; left: 50%; bottom: 7%; transform: translateX(-50%);
+    z-index: 4; text-align: center; user-select: none;
+  }
+  #plinth-glow {
+    width: min(46vw, 560px); height: 6px; margin: 0 auto 14px;
+    background: linear-gradient(90deg, transparent, #6fd8e8, #a8f2ff, #6fd8e8, transparent);
+    box-shadow: 0 0 24px 4px rgba(111,216,232,0.55);
+    border-radius: 3px;
+    animation: pulse 2.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+  #jarvis-label {
+    color: #cdf4ff; font-size: 22px; letter-spacing: 14px; font-weight: 600;
+    text-shadow: 0 0 14px rgba(111,216,232,0.8), 0 0 40px rgba(111,216,232,0.35);
+  }
+  #jarvis-sub {
+    margin-top: 6px; color: #6fa9b8; font-size: 9px; letter-spacing: 4px; opacity: 0.7;
+  }
+
+  #glitch-banner {
+    position: fixed; left: 50%; top: 46%; transform: translate(-50%, -50%);
+    z-index: 6; background: rgba(10, 4, 4, 0.55); border: 1px solid rgba(255,120,90,0.55);
+    color: #ffb2a0; padding: 14px 22px; font-size: 12px; letter-spacing: 2px;
+    text-align: center; opacity: 0; pointer-events: none;
+    text-shadow: 0 0 8px rgba(255,90,60,0.7);
+  }
+  #glitch-banner .l1 { font-size: 10px; opacity: 0.85; }
+  #glitch-banner .l2 { font-size: 15px; font-weight: 700; margin: 4px 0; }
+  #glitch-banner .l3 { font-size: 9px; opacity: 0.7; }
+
+  #rgb-split { position: fixed; inset: 0; z-index: 3; pointer-events: none; opacity: 0; mix-blend-mode: screen; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="gl"></canvas>
+  </div>
+  <div id="scanlines"></div>
+  <div id="vignette"></div>
+  <div id="rgb-split"></div>
+
+  <div id="hud-title">J . A . R . V . I . S &nbsp; — &nbsp; CORE INTERFACE</div>
+
+  <div class="panel left" id="panel-left">
+    <div class="heading">SYSTEM STATUS</div>
+    <div class="row" id="pl-0"></div>
+  </div>
+
+  <div class="panel right" id="panel-right">
+    <div class="heading">DEVICE LINK</div>
+    <div class="row" id="pr-0"></div>
+  </div>
+
+  <div id="glitch-banner">
+    <div class="l1">ENERGY RESERVES CRITICAL</div>
+    <div class="l2">HUNGER PROTOCOL INITIATED</div>
+    <div class="l3">SYSTEM DEMAND: BIO-FUEL</div>
+  </div>
+
+  <div id="plinth-wrap">
+    <div id="plinth-glow"></div>
+    <div id="jarvis-label">JARVIS</div>
+    <div id="jarvis-sub">PERSONAL AI &nbsp;·&nbsp; CORE ONLINE</div>
+  </div>
+
+<script src="./three.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  /* ---------------------------------------------------------------
+   * 1. Build a luminance mask of a stylized front-facing face using
+   *    plain 2D canvas drawing (no external face model/asset needed).
+   *    Bright pixels become hologram particles.
+   * ------------------------------------------------------------- */
+  function buildFaceMask(size) {
+    const c = document.createElement("canvas");
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext("2d");
+    // Leave the canvas fully transparent (its default state) — sampling
+    // reads pixel alpha to decide where particles go, so an opaque fill
+    // here would make the whole square "visible" instead of just the face.
+
+    const cx = size / 2;
+    const cy = size / 2;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    // Head silhouette (soft-edged oval, slightly egg-shaped like a face).
+    const headGrad = ctx.createRadialGradient(0, -size * 0.02, size * 0.05, 0, 0, size * 0.42);
+    headGrad.addColorStop(0, "rgba(255,255,255,0.95)");
+    headGrad.addColorStop(0.72, "rgba(255,255,255,0.55)");
+    headGrad.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = headGrad;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, size * 0.27, size * 0.36, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.globalCompositeOperation = "destination-out";
+    // Carve eye sockets.
+    for (const sx of [-1, 1]) {
+      ctx.beginPath();
+      ctx.ellipse(sx * size * 0.115, -size * 0.045, size * 0.075, size * 0.045, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,1)";
+      ctx.fill();
+    }
+    // Carve under the nose / philtrum shadow.
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.14, size * 0.05, size * 0.03, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fill();
+    // Carve mouth line.
+    ctx.beginPath();
+    ctx.ellipse(0, size * 0.205, size * 0.075, size * 0.016, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,0.9)";
+    ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
+
+    // Add back soft highlights: brow ridge, nose bridge, cheekbones —
+    // circuit-like fine structure comes from the particle jitter/threshold,
+    // not from painting literal lines, so it never looks like a decal.
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.beginPath();
+    ctx.ellipse(0, -size * 0.01, size * 0.028, size * 0.11, 0, 0, Math.PI * 2);
+    ctx.fill();
+    for (const sx of [-1, 1]) {
+      ctx.beginPath();
+      ctx.ellipse(sx * size * 0.14, -size * 0.075, size * 0.06, size * 0.014, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.4)";
+      ctx.fill();
+    }
+
+    ctx.restore();
+    return ctx.getImageData(0, 0, size, size);
+  }
+
+  function sampleParticles(imageData, size, targetCount) {
+    const positions = [];
+    const alphas = [];
+    const data = imageData.data;
+    const stride = 2; // sampling grid step in source pixels
+    for (let y = 0; y < size; y += stride) {
+      for (let x = 0; x < size; x += stride) {
+        const idx = (y * size + x) * 4;
+        const a = data[idx + 3] / 255;
+        if (a < 0.08) continue;
+        if (Math.random() > a * 0.9 + 0.1) continue; // denser sampling where brighter
+        positions.push(x, y);
+        alphas.push(a);
+      }
+    }
+    // Downsample/upsample lightly toward targetCount by random pick.
+    if (positions.length / 2 > targetCount) {
+      const keep = new Set();
+      while (keep.size < targetCount) keep.add(Math.floor(Math.random() * (positions.length / 2)));
+      const p2 = [], a2 = [];
+      keep.forEach((i) => { p2.push(positions[i * 2], positions[i * 2 + 1]); a2.push(alphas[i]); });
+      return { positions: p2, alphas: a2 };
+    }
+    return { positions, alphas };
+  }
+
+  /* ---------------------------------------------------------------
+   * 2. Three.js scene: particle head as THREE.Points, gentle rotation,
+   *    occasional glitch pass, colour ramp cyan -> amber by depth/side.
+   * ------------------------------------------------------------- */
+  const canvas = document.getElementById("gl");
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.position.set(0, 0, 7.2);
+
+  const MASK_SIZE = 220;
+  const mask = buildFaceMask(MASK_SIZE);
+  const { positions: rawPos, alphas } = sampleParticles(mask, MASK_SIZE, 15000);
+  const count = alphas.length;
+
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+
+  const cyan = new THREE.Color(0x6fd8e8);
+  const brightCyan = new THREE.Color(0xbdf3ff);
+  const amber = new THREE.Color(0xffb15c);
+
+  const scale = 5.4 / MASK_SIZE;
+  for (let i = 0; i < count; i++) {
+    const px = rawPos[i * 2];
+    const py = rawPos[i * 2 + 1];
+    const x = (px - MASK_SIZE / 2) * scale;
+    const y = -(py - MASK_SIZE / 2) * scale;
+    const depthJitter = (Math.random() - 0.5) * 0.9 * (1 - Math.min(Math.abs(x) / 2.4, 1));
+    const z = depthJitter;
+
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = z;
+
+    // Colour: mostly cyan hologram, warm amber rim on the right-facing edge,
+    // brighter core near the vertical midline (echoes the reference stills).
+    const rim = Math.max(0, x / 2.2);
+    const core = Math.max(0, 1 - Math.abs(x) / 0.6);
+    const col = cyan.clone().lerp(amber, rim * 0.5).lerp(brightCyan, core * 0.5 * Math.random());
+    const flick = 0.75 + Math.random() * 0.25;
+    colors[i * 3] = col.r * flick;
+    colors[i * 3 + 1] = col.g * flick;
+    colors[i * 3 + 2] = col.b * flick;
+
+    sizes[i] = (0.02 + Math.random() * 0.022) * (0.6 + alphas[i]);
+  }
+
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geometry.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
+
+  // Soft round sprite so points read as glowing dots, not hard squares.
+  const spriteCanvas = document.createElement("canvas");
+  spriteCanvas.width = spriteCanvas.height = 32;
+  const sctx = spriteCanvas.getContext("2d");
+  const grad = sctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.4, "rgba(255,255,255,0.7)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  sctx.fillStyle = grad;
+  sctx.fillRect(0, 0, 32, 32);
+  const spriteTex = new THREE.CanvasTexture(spriteCanvas);
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uTexture: { value: spriteTex },
+      uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) },
+      uTime: { value: 0 },
+      uGlitch: { value: 0 },
+    },
+    vertexShader: `
+      attribute float aSize;
+      varying vec3 vColor;
+      uniform float uPixelRatio;
+      uniform float uTime;
+      uniform float uGlitch;
+      void main() {
+        vColor = color;
+        vec3 p = position;
+        // gentle idle drift so the hologram never looks static
+        p.x += sin(uTime * 0.6 + position.y * 3.0) * 0.006;
+        p.y += cos(uTime * 0.5 + position.x * 3.0) * 0.006;
+        p.x += uGlitch * (sin(position.y * 40.0 + uTime * 30.0)) * 0.12;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_PointSize = aSize * uPixelRatio * (340.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vColor;
+      uniform sampler2D uTexture;
+      void main() {
+        vec4 tex = texture2D(uTexture, gl_PointCoord);
+        if (tex.a < 0.05) discard;
+        gl_FragColor = vec4(vColor, tex.a);
+      }
+    `,
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const points = new THREE.Points(geometry, material);
+  scene.add(points);
+
+  /* Thin wireframe ring beneath the head, like a scan plane. */
+  const ringGeo = new THREE.RingGeometry(1.55, 1.58, 64);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x6fd8e8, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI / 2 - 0.15;
+  ring.position.y = -2.05;
+  scene.add(ring);
+
+  /* ---------------------------------------------------------------
+   * 3. Animation loop: slow auto-rotate, idle shader time, periodic
+   *    glitch burst (visual only — no functional state here).
+   * ------------------------------------------------------------- */
+  const clock = new THREE.Clock();
+  let glitchUntil = 0;
+  let nextGlitchAt = 6 + Math.random() * 6;
+  const rgbSplit = document.getElementById("rgb-split");
+  const banner = document.getElementById("glitch-banner");
+
+  function triggerGlitch() {
+    const now = clock.getElapsedTime();
+    glitchUntil = now + 0.5 + Math.random() * 0.4;
+    rgbSplit.style.opacity = "0.5";
+    rgbSplit.style.background =
+      "linear-gradient(90deg, rgba(255,60,60,0.12), transparent 40%, rgba(60,200,255,0.12))";
+    if (Math.random() < 0.5) {
+      banner.style.transition = "none";
+      banner.style.opacity = "1";
+      setTimeout(() => {
+        banner.style.transition = "opacity 0.6s ease";
+        banner.style.opacity = "0";
+      }, 550);
+    }
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+    material.uniforms.uTime.value = t;
+
+    if (t > nextGlitchAt) {
+      triggerGlitch();
+      nextGlitchAt = t + 7 + Math.random() * 8;
+    }
+    const inGlitch = t < glitchUntil;
+    material.uniforms.uGlitch.value = inGlitch ? 1.0 : Math.max(0, material.uniforms.uGlitch.value - 0.08);
+    if (!inGlitch) rgbSplit.style.opacity = String(Math.max(0, parseFloat(rgbSplit.style.opacity || "0") - 0.06));
+
+    points.rotation.y = Math.sin(t * 0.18) * 0.35;
+    points.rotation.x = Math.sin(t * 0.11) * 0.06;
+    ring.rotation.z = t * 0.15;
+
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  /* ---------------------------------------------------------------
+   * 4. HUD telemetry panels — placeholder data, swap for real Core
+   *    status once this is wired to JARVIS's WebSocket state.
+   * ------------------------------------------------------------- */
+  const leftLines = [
+    ["NEURAL SYNC", "98.2%", 0.98],
+    ["MEMORY LOAD", "64%", 0.64],
+    ["TOOL REGISTRY", "12 ACTIVE", 0.8],
+    ["PERMISSION GATE", "NOMINAL", 0.9],
+  ];
+  const rightLines = [
+    ["IMAC LINK", "CONNECTED", 0.95],
+    ["LATENCY", "18ms", 0.85],
+    ["DEVICE ROLE", "PRIMARY", 1.0],
+    ["PROTOCOL", "v2", 0.7],
+  ];
+
+  function renderPanel(container, lines) {
+    container.innerHTML = "";
+    lines.forEach(([label, val, frac]) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML =
+        container.classList.contains("right")
+          ? `${label}<span class="bar"><span style="transform:scaleX(${frac})"></span></span><span class="val">${val}</span>`
+          : `${label}<span class="bar"><span style="transform:scaleX(${frac})"></span></span><span class="val">${val}</span>`;
+      container.appendChild(row);
+    });
+    const cursorRow = document.createElement("div");
+    cursorRow.className = "row";
+    cursorRow.innerHTML = `&gt;<span id="cursor"></span>`;
+    container.appendChild(cursorRow);
+  }
+  renderPanel(document.getElementById("panel-left"), leftLines);
+  renderPanel(document.getElementById("panel-right"), rightLines);
+
+  setInterval(() => {
+    // subtle live-feeling jitter on the numeric values only
+    leftLines[0][2] = Math.min(1, Math.max(0.7, leftLines[0][2] + (Math.random() - 0.5) * 0.03));
+    leftLines[0][1] = (leftLines[0][2] * 100).toFixed(1) + "%";
+    rightLines[1][1] = Math.round(12 + Math.random() * 14) + "ms";
+    renderPanel(document.getElementById("panel-left"), leftLines);
+    renderPanel(document.getElementById("panel-right"), rightLines);
+  }, 1800);
+})();
+</script>
+</body>
+</html>
