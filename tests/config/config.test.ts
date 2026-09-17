@@ -10,6 +10,8 @@ const ENV_KEYS = [
   "TWILIO_ALLOWED_CALLERS",
   "TWILIO_VOICE",
   "JARVIS_ADMIN_TOKEN",
+  "JARVIS_WEB_SEARCH",
+  "JARVIS_WEB_SEARCH_MAX_USES",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -99,5 +101,28 @@ describe("loadConfig", () => {
   test("leaves twilioVoice undefined when unset", () => {
     const config = loadConfig();
     expect(config.twilioVoice).toBeUndefined();
+  });
+
+  test("web search is disabled by default with the default max_uses", () => {
+    const config = loadConfig();
+    expect(config.webSearchEnabled).toBe(false);
+    expect(config.webSearchMaxUses).toBe(5);
+  });
+
+  test("enables web search via JARVIS_WEB_SEARCH=true", () => {
+    process.env.JARVIS_WEB_SEARCH = "true";
+    const config = loadConfig();
+    expect(config.webSearchEnabled).toBe(true);
+  });
+
+  test("reads a custom JARVIS_WEB_SEARCH_MAX_USES", () => {
+    process.env.JARVIS_WEB_SEARCH_MAX_USES = "10";
+    const config = loadConfig();
+    expect(config.webSearchMaxUses).toBe(10);
+  });
+
+  test("rejects a non-positive JARVIS_WEB_SEARCH_MAX_USES", () => {
+    process.env.JARVIS_WEB_SEARCH_MAX_USES = "0";
+    expect(() => loadConfig()).toThrow(ConfigError);
   });
 });

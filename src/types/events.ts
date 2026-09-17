@@ -6,7 +6,7 @@ import type { ToolResult } from "./tools";
 export interface JarvisEventMap {
   "conversation.message": { message: ConversationMessage };
   "brain.request": { messageCount: number };
-  "brain.response": { text: string; toolCallCount: number };
+  "brain.response": { text: string; toolCallCount: number; serverToolUses?: string[] };
   "tool.requested": { toolCall: ToolCallRequest };
   "tool.executed": { toolName: string; requestId: string; result: ToolResult };
   "tool.dispatched": { toolName: string; deviceId: string; requestId: string };

@@ -63,6 +63,7 @@ export class Orchestrator {
       eventBus.emit("brain.response", {
         text: response.text,
         toolCallCount: response.toolCalls.length,
+        serverToolUses: response.serverToolUses,
       });
 
       if (response.toolCalls.length === 0) {

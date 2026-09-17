@@ -25,6 +25,15 @@ export interface JarvisConfig {
    * a fake device. Optional for purely local development.
    */
   adminToken?: string;
+  /**
+   * Enables Anthropic's own server-side web_search tool — real internet
+   * search billed through the same Anthropic account, no separate vendor.
+   * Off by default: it changes what JARVIS can see and costs extra per
+   * search, so it's an explicit opt-in.
+   */
+  webSearchEnabled: boolean;
+  /** Caps how many searches Claude may run in a single turn. */
+  webSearchMaxUses: number;
 }
 
 class ConfigError extends Error {}
@@ -65,6 +74,12 @@ export function loadConfig(): JarvisConfig {
     .filter((n) => n.length > 0);
   const twilioVoice = process.env.TWILIO_VOICE?.trim() || undefined;
   const adminToken = process.env.JARVIS_ADMIN_TOKEN?.trim() || undefined;
+  const webSearchEnabled = process.env.JARVIS_WEB_SEARCH?.trim().toLowerCase() === "true";
+  const webSearchMaxUses = Number(process.env.JARVIS_WEB_SEARCH_MAX_USES ?? "5");
+
+  if (!Number.isInteger(webSearchMaxUses) || webSearchMaxUses <= 0) {
+    throw new ConfigError("Invalid JARVIS_WEB_SEARCH_MAX_USES: must be a positive integer");
+  }
 
   if (twilioAuthToken && twilioPublicBaseUrl && !adminToken) {
     throw new ConfigError(
@@ -84,6 +99,8 @@ export function loadConfig(): JarvisConfig {
     twilioAllowedCallers,
     twilioVoice,
     adminToken,
+    webSearchEnabled,
+    webSearchMaxUses,
   };
 }
 

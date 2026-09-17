@@ -233,6 +233,38 @@ Then set `ANTHROPIC_API_KEY` in `.env`. Optional variables:
 - `JARVIS_ADMIN_TOKEN` — **required** once the two Twilio variables above
   are set (also a `ConfigError` if missing then); optional otherwise. See
   "Security controls" below for why.
+- `JARVIS_WEB_SEARCH` — set to `true` to give JARVIS real internet search
+  (see below). Off by default.
+- `JARVIS_WEB_SEARCH_MAX_USES` — caps searches per turn (default `5`).
+
+## Real internet search
+
+JARVIS previously had no way to search the internet at all — only
+`READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION`, `SAVE_MEMORY`, and
+`SEARCH_MEMORY` existed. Setting `JARVIS_WEB_SEARCH=true` enables
+Anthropic's own server-side `web_search` tool
+(`src/core/brain/ClaudeBrain.ts`) — real search that runs entirely on
+Anthropic's infrastructure and is billed through the same
+`ANTHROPIC_API_KEY`, with **no separate vendor, account, or API key**.
+
+- This isn't a tool JARVIS's own `Orchestrator`/`ToolRegistry` executes —
+  it's resolved server-side inside a single Anthropic API call, so it
+  needed no changes to the tool-execution loop at all, only to how
+  `ClaudeBrain` builds its request and reads the response.
+- The dashboard's live ticker (see "Status dashboard" below) shows
+  "Searching the web…" when a search actually happens, detected from the
+  real `server_tool_use` content block Anthropic returns — not simulated.
+- `JARVIS_WEB_SEARCH_MAX_USES` caps how many searches Claude may run in
+  one turn (default 5), since each search has its own cost.
+- **Known limitation**: when a later turn's conversation history is
+  replayed to Claude, only the final synthesized text response is
+  preserved — the raw search results/queries themselves aren't currently
+  stored and replayed. The substance of what was found is retained in the
+  text; the raw search trace is not.
+- **Not yet verified against the real Anthropic API** — the request/response
+  shaping logic is unit-tested (`tests/brain/ClaudeBrain.test.ts`), but no
+  real API key was available in this environment to confirm an actual
+  search executes end to end.
 
 ## Run
 
@@ -387,15 +419,15 @@ doing right now:
 
 - **`JARVIS is thinking…`** while a request is being processed
   (`brain.request`)
+- **`Searching the web…`** when JARVIS actually invokes the `web_search`
+  server tool (see "Real internet search" above) — only when
+  `JARVIS_WEB_SEARCH=true` and a search genuinely happens
 - **the actual response text** once it replies (`brain.response`),
   with a brighter glow on the hologram while this is showing
 - **`Running <tool>…`** while a tool call is in flight (`tool.requested`)
 
-All of this is wired to the real `EventBus`, not simulated — there is
-currently no web-browsing/search tool for JARVIS to visibly "browse" with
-(only `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION`, `SAVE_MEMORY`,
-`SEARCH_MEMORY` exist today), so the ticker reflects what JARVIS actually
-does, not a fabricated "browsing" animation.
+All of this is wired to the real `EventBus`, not simulated — the ticker
+only ever reflects what JARVIS actually does.
 
 Verified in a real browser (headless Chromium) against the actual running
 server: the page loads, the live data (including the activity feed and
@@ -523,9 +555,12 @@ contain no language-detection logic, by design.
 
 ## Current limitations
 
-- Only four tools exist: `READ_ONLY_FILE_INFO` (local),
+- Only four registry-based tools exist: `READ_ONLY_FILE_INFO` (local),
   `GET_ACTIVE_APPLICATION` (device — app name/bundle ID only),
   `SAVE_MEMORY` and `SEARCH_MEMORY` (local, persistent key/value memory).
+  Real internet search exists separately, as Anthropic's own server-side
+  `web_search` tool (opt-in via `JARVIS_WEB_SEARCH=true`), not through this
+  registry — see "Real internet search" above.
 - DeviceRegistry, PermissionService, and PairingService are all in-memory
   and reset on restart. (`MemoryStore` is the one exception — it is
   SQLite-backed and persists across restarts.)

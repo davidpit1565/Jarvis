@@ -56,7 +56,10 @@ function main() {
   const pairingService = new PairingService();
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const conversation = new ConversationManager(eventBus);
-  const brain = new ClaudeBrain(config.anthropicApiKey);
+  const brain = new ClaudeBrain(config.anthropicApiKey, {
+    webSearchEnabled: config.webSearchEnabled,
+    webSearchMaxUses: config.webSearchMaxUses,
+  });
   const confirmationService = new ConfirmationService(confirmViaChat);
 
   const orchestrator = new Orchestrator({
@@ -116,8 +119,11 @@ function main() {
     activityLog.record("JARVIS is thinking…", "thinking");
   });
 
-  eventBus.on("brain.response", ({ text, toolCallCount }) => {
+  eventBus.on("brain.response", ({ text, toolCallCount, serverToolUses }) => {
     console.log(`[jarvis] brain responded (toolCalls=${toolCallCount}): ${text.slice(0, 120)}`);
+    if (serverToolUses?.includes("web_search")) {
+      activityLog.record("Searching the web…", "thinking");
+    }
     if (text.trim()) activityLog.record(text, "speaking");
   });
 
