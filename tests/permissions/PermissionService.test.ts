@@ -76,4 +76,73 @@ describe("PermissionService", () => {
 
     expect(result.allowed).toBe(false);
   });
+
+  test("a device-scoped grant allows the tool on that device", () => {
+    const service = new PermissionService();
+    service.grant("user-1", "GET_ACTIVE_APPLICATION", "imac-1");
+
+    const result = service.check({
+      subject: { userId: "user-1" },
+      toolId: "GET_ACTIVE_APPLICATION",
+      requiredLevel: PermissionLevel.SAFE_ACTION,
+      deviceId: "imac-1",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  test("a grant scoped to one device does not authorize the same tool on a different device", () => {
+    const service = new PermissionService();
+    service.grant("user-1", "GET_ACTIVE_APPLICATION", "imac-1");
+
+    const result = service.check({
+      subject: { userId: "user-1" },
+      toolId: "GET_ACTIVE_APPLICATION",
+      requiredLevel: PermissionLevel.SAFE_ACTION,
+      deviceId: "macbook-1",
+    });
+
+    expect(result.allowed).toBe(false);
+  });
+
+  test("a local (no-device) grant does not authorize the same tool on a device", () => {
+    const service = new PermissionService();
+    service.grant("user-1", "SOME_TOOL"); // no deviceId: local scope
+
+    const result = service.check({
+      subject: { userId: "user-1" },
+      toolId: "SOME_TOOL",
+      requiredLevel: PermissionLevel.SAFE_ACTION,
+      deviceId: "imac-1",
+    });
+
+    expect(result.allowed).toBe(false);
+  });
+
+  test("revoke removes a device-scoped grant", () => {
+    const service = new PermissionService();
+    service.grant("user-1", "GET_ACTIVE_APPLICATION", "imac-1");
+    service.revoke("user-1", "GET_ACTIVE_APPLICATION", "imac-1");
+
+    const result = service.check({
+      subject: { userId: "user-1" },
+      toolId: "GET_ACTIVE_APPLICATION",
+      requiredLevel: PermissionLevel.SAFE_ACTION,
+      deviceId: "imac-1",
+    });
+
+    expect(result.allowed).toBe(false);
+  });
+
+  test("READ-level tools are allowed regardless of device", () => {
+    const service = new PermissionService();
+    const result = service.check({
+      subject: { userId: "user-1" },
+      toolId: "GET_ACTIVE_APPLICATION",
+      requiredLevel: PermissionLevel.READ,
+      deviceId: "imac-1",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
 });

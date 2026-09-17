@@ -9,8 +9,11 @@ export interface JarvisEventMap {
   "brain.response": { text: string; toolCallCount: number };
   "tool.requested": { toolCall: ToolCallRequest };
   "tool.executed": { toolName: string; requestId: string; result: ToolResult };
+  "tool.dispatched": { toolName: string; deviceId: string; requestId: string };
   "permission.checked": { toolId: string; result: PermissionCheckResult };
   "device.registered": { device: Device };
+  "device.connected": { deviceId: string };
+  "device.disconnected": { deviceId: string; reason: string };
 }
 
 export type JarvisEventName = keyof JarvisEventMap;

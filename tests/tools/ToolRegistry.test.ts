@@ -1,15 +1,16 @@
 import { describe, test, expect } from "bun:test";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionLevel } from "@/types/permissions";
-import type { Tool } from "@/types/tools";
+import type { LocalTool } from "@/types/tools";
 
-function makeTool(id: string, name: string): Tool {
+function makeTool(id: string, name: string): LocalTool {
   return {
     id,
     name,
     description: `Test tool ${name}`,
     inputSchema: { type: "object", properties: {} },
     requiredPermission: PermissionLevel.READ,
+    target: "local",
     execute: async () => ({ success: true }),
   };
 }

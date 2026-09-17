@@ -26,6 +26,13 @@ export interface PermissionCheckRequest {
   subject: PermissionSubject;
   toolId: string;
   requiredLevel: PermissionLevel;
+  /**
+   * The device the tool would run on, if any. Omitted (or undefined) for
+   * tools that always run locally in Core. A grant scoped to one device
+   * never applies to another — granting GET_ACTIVE_APPLICATION on the
+   * iMac must not authorize it on a future MacBook.
+   */
+  deviceId?: string;
 }
 
 export interface PermissionCheckResult {

@@ -6,8 +6,11 @@ import { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionService } from "@/permissions/PermissionService";
 import { readOnlyFileInfoTool } from "@/tools/filesystem/ReadOnlyFileInfoTool";
+import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationTool";
 import { MemoryStore } from "@/memory/MemoryStore";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
+import { PairingService } from "@/devices/pairing/PairingService";
+import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 
 function main() {
@@ -16,10 +19,13 @@ function main() {
   const eventBus = new EventBus();
   const toolRegistry = new ToolRegistry();
   toolRegistry.registerTool(readOnlyFileInfoTool);
+  toolRegistry.registerTool(getActiveApplicationTool);
 
   const permissionService = new PermissionService();
   const memoryStore = new MemoryStore(config.memoryDbPath);
   const deviceRegistry = new DeviceRegistry();
+  const pairingService = new PairingService();
+  const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const conversation = new ConversationManager(eventBus);
   const brain = new ClaudeBrain(config.anthropicApiKey);
 
@@ -29,13 +35,32 @@ function main() {
     toolRegistry,
     permissionService,
     eventBus,
+    deviceRegistry,
+    deviceConnectionManager,
   });
 
-  const wsServer = new JarvisWebSocketServer();
+  const wsServer = new JarvisWebSocketServer({
+    deviceRegistry,
+    deviceConnectionManager,
+    pairingService,
+    eventBus,
+  });
   wsServer.start(config.port);
 
   eventBus.on("brain.response", ({ text, toolCallCount }) => {
     console.log(`[jarvis] brain responded (toolCalls=${toolCallCount}): ${text.slice(0, 120)}`);
+  });
+
+  eventBus.on("device.registered", ({ device }) => {
+    console.log(`[jarvis] device registered: ${device.name} (${device.id}), pending pairing approval`);
+  });
+
+  eventBus.on("device.connected", ({ deviceId }) => {
+    console.log(`[jarvis] device connected: ${deviceId}`);
+  });
+
+  eventBus.on("device.disconnected", ({ deviceId, reason }) => {
+    console.log(`[jarvis] device disconnected: ${deviceId} (${reason})`);
   });
 
   console.log(`JARVIS Core listening on port ${config.port}`);
@@ -47,7 +72,16 @@ function main() {
   });
 
   // Exposed for future entry points (HTTP handler, CLI, tests).
-  return { orchestrator, memoryStore, deviceRegistry, toolRegistry, permissionService, eventBus };
+  return {
+    orchestrator,
+    memoryStore,
+    deviceRegistry,
+    pairingService,
+    deviceConnectionManager,
+    toolRegistry,
+    permissionService,
+    eventBus,
+  };
 }
 
 if (import.meta.main) {

@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import { PermissionLevel } from "@/types/permissions";
-import type { Tool, ToolExecutionContext, ToolResult } from "@/types/tools";
+import type { LocalTool, ToolExecutionContext, ToolResult } from "@/types/tools";
 import { validateFilePath } from "./pathValidation";
 
 export interface ReadOnlyFileInfoInput extends Record<string, unknown> {
@@ -17,7 +17,7 @@ export interface FileInfo {
  * The only tool in Phase 1. Returns non-sensitive metadata about a file
  * without ever reading its contents, writing, or executing anything.
  */
-export const readOnlyFileInfoTool: Tool<ReadOnlyFileInfoInput> = {
+export const readOnlyFileInfoTool: LocalTool<ReadOnlyFileInfoInput> = {
   id: "READ_ONLY_FILE_INFO",
   name: "read_only_file_info",
   description:
@@ -34,6 +34,7 @@ export const readOnlyFileInfoTool: Tool<ReadOnlyFileInfoInput> = {
     required: ["path"],
   },
   requiredPermission: PermissionLevel.READ,
+  target: "local",
 
   async execute(input: ReadOnlyFileInfoInput, _context: ToolExecutionContext): Promise<ToolResult> {
     const validation = validateFilePath(input.path);

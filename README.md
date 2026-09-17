@@ -1,32 +1,101 @@
 # JARVIS
 
-JARVIS is a personal AI assistant project. The long-term vision connects a
-MacBook, an iMac, and an iPhone into one system where Claude reasons about
+JARVIS is a personal AI assistant project. The long-term vision connects an
+iMac, an iPhone, and a MacBook into one system where Claude reasons about
 what to do, and JARVIS executes actions on the user's behalf — with
-persistent memory, permissioned tool access, and voice interaction.
+persistent memory, permissioned tool access, and voice interaction, in
+both Hebrew and English.
 
-This repository is at the very beginning of that vision.
+This repository is still early in that vision.
 
-## Phase 1 scope
+## Primary device model
 
-This phase builds and validates the **JARVIS Core foundation only**. It
-proves one loop end to end, entirely in a single local process:
+The user's **iMac is the primary/main computer**. Device rollout order:
+
+1. **iMac — primary computer** (Phase 2, in progress: architecture and Core
+   support exist; the real Swift agent is unbuilt/unvalidated)
+2. **iPhone — mobile client** (not started)
+3. **MacBook — secondary computer** (not started)
+
+"Primary" is a Core-side data/policy distinction, not special-cased code:
+a `Device.role` field (`"primary" | "secondary" | "mobile"`) is assigned by
+Core only after a human approves a device's pairing — a device can
+*request* a role (e.g. the iMac Agent requests `"primary"`) but can never
+assign one to itself. Exactly one device may hold `"primary"` at a time.
+Tool calls that don't name an explicit target device route to whichever
+device is currently primary.
+
+**The iMac is an execution/context device, not a second brain.** Claude
+lives only in JARVIS Core; the iMac Agent has no path to call Claude
+directly and never decides what should happen — it only executes tools
+Core has already approved.
+
+## Phase 1 scope (complete)
+
+Proves the core loop end to end in a single local process:
 
 ```
 USER → JARVIS → CLAUDE → TOOL DECISION → PERMISSION CHECK
      → TOOL EXECUTION → TOOL RESULT → CLAUDE → RESPONSE
 ```
 
-**Explicitly out of scope for Phase 1** (not implemented, not stubbed as
+## Phase 2 scope (this phase)
+
+Extends the loop so a tool can execute on a **real device** instead of only
+locally in Core:
+
+```
+USER → JARVIS CORE → CLAUDE → ORCHESTRATOR → PERMISSION SERVICE
+     → TOOL REGISTRY → DEVICE REGISTRY → DEVICE CONNECTION MANAGER
+     → WebSocket tool.request → iMac AGENT → explicit tool → tool.result
+     → back through Core → CLAUDE → RESPONSE
+```
+
+What's new in Phase 2:
+
+- Device model extended with `role`, `agentVersion`, `protocolVersion`
+  (`src/types/devices.ts`), and `DeviceRegistry.setRole()` /
+  `getPrimaryDevice()`.
+- A typed, versioned WebSocket **envelope protocol**
+  (`src/communication/websocket/protocol.ts`) replacing Phase 1's
+  placeholder message shapes — every message carries `requestId`,
+  `timestamp`, `deviceId` (null only for a device's very first
+  `device.register`), `type`, and a validated `payload`.
+- **Pairing/authentication** (`src/devices/pairing/PairingService.ts`):
+  first connection requires a human-approved pairing code; approval mints
+  a long-lived credential whose hash (never the plaintext) Core retains.
+- **Device-scoped permissions**: a grant is now `(userId, toolId, deviceId)`
+  — granting a tool on the iMac never authorizes it on a future MacBook.
+- **Remote tool execution**: tools now declare `target: "local"` or
+  `target: "device"`. The `Orchestrator` resolves a target device (explicit
+  `deviceId` input, or the primary device), and a new
+  `DeviceConnectionManager` owns the WebSocket request/response lifecycle
+  (unique request IDs, timeouts, cleanup on disconnect) so the Orchestrator
+  never touches a raw socket.
+- **First device tool**: `GET_ACTIVE_APPLICATION` — read-only, reports the
+  frontmost application's name and bundle ID on the target device.
+- **Bilingual (Hebrew + English) conversation**: a fixed system instruction
+  (`src/core/brain/systemPrompt.ts`) tells Claude to detect and respond in
+  the user's language, including mixed Hebrew/English in one message. Tool
+  IDs, protocol types, and all technical identifiers stay English-only —
+  only the conversational layer is bilingual.
+- **iMac Agent source** (`agents/imac/JarvisAgent/`): Swift source for the
+  macOS agent, written but **never compiled or run** (see below).
+
+**Explicitly out of scope for Phase 2** (not implemented, not stubbed as
 real functionality):
 
-- MacBook agent, iMac agent, iPhone client
+- iPhone client, MacBook agent
 - Voice (speech-to-text / text-to-speech)
 - Browser automation
-- Arbitrary terminal/shell execution
-- Any destructive filesystem operation (write, delete, modify)
-- Authentication beyond a placeholder `userId`
+- Arbitrary shell/AppleScript execution, sudo, process injection
+- Unrestricted keyboard/mouse/application automation
+- Any destructive filesystem operation
 - A confirmation UI for `CONFIRM`/`DANGEROUS` permission levels
+- Persistent (disk-backed) device registry, permission grants, or pairing
+  store — all in-memory, matching Phase 1's pattern
+- Continuous/high-frequency context monitoring (e.g. streaming
+  `active_window.changed` events)
 
 ## Architecture
 
@@ -35,38 +104,55 @@ src/
 ├── core/
 │   ├── conversation/   ConversationManager — in-memory turn state
 │   ├── brain/          ClaudeBrain — talks to Anthropic, never executes tools
+│   │                   systemPrompt.ts — bilingual (Hebrew/English) instruction
 │   ├── events/         EventBus — typed pub/sub for orchestration events
-│   └── orchestrator/   Orchestrator — the central control loop
+│   └── orchestrator/   Orchestrator — routes tool calls to local execute()
+│                       or to a device via DeviceConnectionManager
 ├── tools/
 │   ├── registry/       ToolRegistry — allowlist of tools Claude may call
-│   └── filesystem/     READ_ONLY_FILE_INFO — the one tool in Phase 1
-├── permissions/        PermissionService — grants + permission levels
-├── memory/             MemoryStore — SQLite-backed explicit key/value store
-├── devices/registry/   DeviceRegistry — device metadata, no live devices
-├── communication/websocket/  Typed message protocol + minimal server
-├── config/             Environment variable loading and validation
-└── types/              Shared TypeScript types across all modules
+│   ├── filesystem/     READ_ONLY_FILE_INFO — local tool
+│   └── system/         GET_ACTIVE_APPLICATION — device tool (iMac first)
+├── permissions/         PermissionService — (userId, toolId, deviceId) grants
+├── memory/              MemoryStore — SQLite-backed explicit key/value store
+├── devices/
+│   ├── registry/        DeviceRegistry — device metadata + role assignment
+│   └── pairing/         PairingService — pairing codes, credential hashes
+├── communication/websocket/
+│   ├── protocol.ts               Typed, validated envelope protocol
+│   ├── DeviceConnectionManager.ts  Owns connections + tool request/response lifecycle
+│   └── JarvisWebSocketServer.ts    Thin transport: bytes <-> validated messages
+├── config/              Environment variable loading and validation
+└── types/               Shared TypeScript types across all modules
+
+agents/
+└── imac/JarvisAgent/    Swift source for the macOS iMac Agent (unbuilt —
+                         see "Linux vs. macOS validation" below)
 ```
 
 Design principles carried through every module:
 
 - **Claude reasons, JARVIS executes.** `ClaudeBrain` only returns text and
-  requested tool calls — it never has the ability to run a tool. The
-  `Orchestrator` is the sole place that decides whether a tool actually runs.
+  requested tool calls. The `Orchestrator` is the sole place that decides
+  whether a tool runs, and whether it runs locally or on a device.
 - **Every tool requires an explicit permission level** (`READ`,
-  `SAFE_ACTION`, `CONFIRM`, `DANGEROUS`), checked before execution.
-- **Tools are allowlisted** through the `ToolRegistry` — nothing runs that
-  wasn't explicitly registered.
-- **The Core does not assume macOS.** Nothing here depends on a specific
-  operating system; device-specific behavior is designed to live behind
-  future device agents, not in Core.
+  `SAFE_ACTION`, `CONFIRM`, `DANGEROUS`), checked before execution — scoped
+  per device for device tools.
+- **Tools are allowlisted** in two independent places: Core's
+  `ToolRegistry`, and (for device tools) the Agent's own compiled-in tool
+  table. Core approval alone is never sufficient — the device must also
+  recognize and be willing to run the tool.
+- **The Core does not assume macOS.** Device-specific behavior lives only
+  in a device agent, never in Core.
 - **No secrets in git.** Configuration is loaded from environment
-  variables and validated at startup; `.env` is git-ignored.
+  variables and validated at startup; `.env` is git-ignored. Device
+  credentials are hashed in Core and stored in the Keychain on the device.
 
 ## Requirements
 
 - [Bun](https://bun.sh) (developed against 1.3.x)
 - An Anthropic API key
+- For the iMac Agent only: a real Mac with Xcode — **not available or
+  used in this development environment**
 
 ## Install
 
@@ -92,9 +178,11 @@ Then set `ANTHROPIC_API_KEY` in `.env`. Optional variables:
 bun run dev
 ```
 
-On startup this registers the one available tool, opens the local memory
-database, and starts the WebSocket server. No device connects
-automatically — this only proves the transport and protocol exist.
+On startup this registers `READ_ONLY_FILE_INFO` and `GET_ACTIVE_APPLICATION`,
+opens the local memory database, and starts the WebSocket server. A real
+device can connect and run through the `device.register` → pairing →
+`tool.request`/`tool.result` flow, but no real iMac Agent has been built or
+tested against it yet — see below.
 
 ## Test
 
@@ -103,33 +191,94 @@ bun run typecheck
 bun test
 ```
 
-Tests use a scripted mock `Brain` implementation and never call the real
-Anthropic API, so the suite runs without network access or a real API key.
+Tests use a scripted mock `Brain` and mocked device connections; the suite
+runs without network access, a real API key, or macOS.
+
+## Hebrew + English support
+
+JARVIS detects the user's language per message and responds in kind,
+including messages that mix Hebrew and English (e.g. *"Jarvis, open Chrome
+and תחפש לי את האתר של Apple"*). This is owned entirely by the
+conversational layer (`ClaudeBrain` + a fixed system prompt) — the
+`ToolRegistry`, `DeviceRegistry`, and wire protocol are English-only and
+contain no language-detection logic, by design.
+
+## Security controls
+
+- No arbitrary shell execution, AppleScript execution, sudo, process
+  injection, or unrestricted keyboard/mouse/application automation —
+  anywhere in Core or the Agent source.
+- Every capability is an explicitly registered tool with an ID, schema,
+  permission level, and (for device tools) a named, compiled-in Agent
+  function — never a generic "run this" path.
+- Defense in depth for device tools: Core's tool allowlist + Core's
+  device-scoped permission check + the Agent's own independent tool
+  allowlist, before anything executes.
+- Device credentials: a human must approve a pairing code before a device
+  is trusted; Core stores only a SHA-256 hash (constant-time compared),
+  never the plaintext; the Agent is designed to store its credential only
+  in the macOS Keychain, never on disk or in logs.
+- Device-scoped permission grants: authorizing a tool on one device never
+  authorizes it on another.
 
 ## Current limitations
 
-- Only one tool exists (`READ_ONLY_FILE_INFO`), and it can only report
-  whether a file exists, its type, and its size — it cannot read contents.
-- Permission grants are in-memory and reset on restart; there is no
-  persistent ACL store yet.
-- `CONFIRM` and `DANGEROUS` permission levels are defined but always denied,
-  since no confirmation flow exists yet.
-- The WebSocket server validates and acknowledges messages but does not yet
-  dispatch real tool requests to a connected device — no device agent
-  exists to receive them.
-- Memory is a flat key/value store with substring search; there is no
-  embeddings-based or semantic search.
-- There is no authentication; `userId` is passed in directly by the caller.
+- Only two tools exist: `READ_ONLY_FILE_INFO` (local) and
+  `GET_ACTIVE_APPLICATION` (device — app name/bundle ID only).
+- `CONFIRM` and `DANGEROUS` permission levels are defined but always
+  denied — no confirmation flow exists yet.
+- DeviceRegistry, PermissionService, and PairingService are all in-memory
+  and reset on restart.
+- The pairing approval step is currently manual/out-of-band (the pairing
+  code is logged; there is no CLI/UI to approve it yet).
+- No authentication beyond a placeholder `userId`.
+- The iMac Agent is **source only** — see the validation split below.
+
+## Linux vs. macOS validation
+
+This development environment is Linux with no Xcode, macOS SDK, Swift
+macOS runtime, Keychain, `NSWorkspace`, or `launchd`. Nothing macOS-specific
+claims to have been tested here.
+
+**Validated in this (Linux) environment:**
+- TypeScript typechecking (`bun run typecheck`) and the full Core test
+  suite (`bun test`, 100+ tests)
+- WebSocket envelope protocol: valid/invalid envelopes, every message
+  type, malformed payloads, wrong/missing `deviceId`
+- `DeviceRegistry`: registration, role assignment, primary-device
+  invariants
+- `PairingService`: code generation/expiration, approval, credential
+  verification (constant-time), revocation
+- Device-scoped `PermissionService` checks
+- `DeviceConnectionManager` against a mocked `DeviceConnection`: successful
+  remote tool execution, timeout, disconnect cleanup, unknown device,
+  requestId mismatch protection, malformed results
+- Full `Orchestrator` remote-tool lifecycle against a mocked iMac device
+  (Core → Orchestrator → PermissionService → DeviceRegistry →
+  DeviceConnectionManager → mock device → result → Claude)
+- Manual smoke test of the real `Bun.serve` WebSocket server completing a
+  live `device.register` → pairing-pending handshake over an actual socket
+
+**Requires the real iMac (not done here):**
+- Compiling `agents/imac/JarvisAgent` with Swift/Xcode
+- Keychain read/write
+- `NSWorkspace.frontmostApplication` behavior
+- Menu bar UI rendering and permission prompts
+- `launchd` load/restart/persistence behavior
+- A real WebSocket connection from macOS to a running Core instance
+- Code signing/notarization
+- The actual `GET_ACTIVE_APPLICATION` result end to end from real hardware
 
 ## Planned future phases
 
-1. Confirmation flow for `CONFIRM`/`DANGEROUS` tools, plus persistent
-   permission grants.
-2. First real device agent (likely MacBook) as a WebSocket client
-   implementing the existing protocol.
-3. Additional tools behind the same registry/permission model: safe
-   application control, screenshots, broader (still non-destructive)
-   filesystem access.
-4. iPhone client.
-5. Voice input/output layered on top of the existing conversation loop.
-6. Device-to-device communication and a richer device capability model.
+1. iPhone mobile client.
+2. MacBook secondary-computer client.
+3. Confirmation flow for `CONFIRM`/`DANGEROUS` tools, plus persistent
+   permission/pairing storage.
+4. Voice input/output (Hebrew + English, provider-agnostic STT/TTS)
+   layered on top of the existing conversation loop.
+5. Additional device tools behind the same registry/permission model:
+   safe application control, screenshots, broader (still non-destructive)
+   filesystem access, richer context events (`active_window.changed`,
+   `user.idle`, etc.) — kept low-frequency and privacy-conscious.
+6. Device-to-device communication.
