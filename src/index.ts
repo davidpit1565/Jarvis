@@ -1,33 +1,54 @@
+import { createInterface } from "node:readline/promises";
 import { loadConfig } from "@/config";
 import { EventBus } from "@/core/events/EventBus";
 import { ConversationManager } from "@/core/conversation/ConversationManager";
 import { ClaudeBrain } from "@/core/brain/ClaudeBrain";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
+import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionService } from "@/permissions/PermissionService";
 import { readOnlyFileInfoTool } from "@/tools/filesystem/ReadOnlyFileInfoTool";
 import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationTool";
+import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
+import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { MemoryStore } from "@/memory/MemoryStore";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 
+const DEFAULT_USER_ID = "local-user";
+
+// Shared across the chat loop and any confirmation prompts it triggers —
+// there is only ever one reader of stdin, and confirmation questions are
+// always asked (and resolved) from inside a single in-flight chat turn,
+// never concurrently with the loop's own next question() call.
+const rl = createInterface({ input: process.stdin, output: process.stdout });
+
 function main() {
   const config = loadConfig();
 
   const eventBus = new EventBus();
   const toolRegistry = new ToolRegistry();
+  const memoryStore = new MemoryStore(config.memoryDbPath);
+
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
+  toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
+  toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
 
   const permissionService = new PermissionService();
-  const memoryStore = new MemoryStore(config.memoryDbPath);
+  // This is a single-user personal assistant, not a multi-tenant system —
+  // memory writes are SAFE_ACTION-level but standing-granted to the one
+  // local user rather than asked about every time.
+  permissionService.grant(DEFAULT_USER_ID, "SAVE_MEMORY");
+
   const deviceRegistry = new DeviceRegistry();
   const pairingService = new PairingService();
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const conversation = new ConversationManager(eventBus);
   const brain = new ClaudeBrain(config.anthropicApiKey);
+  const confirmationService = new ConfirmationService(confirmViaChat);
 
   const orchestrator = new Orchestrator({
     brain,
@@ -37,6 +58,7 @@ function main() {
     eventBus,
     deviceRegistry,
     deviceConnectionManager,
+    confirmationService,
   });
 
   const wsServer = new JarvisWebSocketServer({
@@ -68,6 +90,7 @@ function main() {
 
   process.on("SIGINT", () => {
     memoryStore.close();
+    rl.close();
     process.exit(0);
   });
 
@@ -82,11 +105,24 @@ function main() {
     deviceConnectionManager,
     toolRegistry,
     permissionService,
+    confirmationService,
     eventBus,
   };
 }
 
-const DEFAULT_USER_ID = "local-user";
+/**
+ * Asks the human directly in the terminal whether a CONFIRM/DANGEROUS tool
+ * call may proceed. This is today's only confirmation channel; a future
+ * channel (push notification, phone call) would just be a different
+ * ConfirmationPrompter passed to the same ConfirmationService.
+ */
+async function confirmViaChat(request: ConfirmationRequest): Promise<boolean> {
+  const inputSummary = JSON.stringify(request.input);
+  const answer = await rl.question(
+    `\n⚠️  JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Approve? (yes/no): `
+  );
+  return answer.trim().toLowerCase().startsWith("y");
+}
 
 /**
  * Minimal interactive CLI for talking to JARVIS from the same process that
@@ -97,9 +133,18 @@ const DEFAULT_USER_ID = "local-user";
  * WebSocket connection and the Orchestrator's registries only exist here.
  */
 async function runChatLoop(orchestrator: Orchestrator): Promise<void> {
-  console.log('\nJARVIS is ready. Type a message and press Enter (Ctrl+C to quit).\n');
+  console.log("\nJARVIS is ready. Type a message and press Enter (Ctrl+C to quit).\n");
 
-  for await (const line of console) {
+  while (true) {
+    let line: string;
+    try {
+      line = await rl.question("");
+    } catch {
+      // stdin closed (e.g. a piped input ended, or Ctrl+D) — exit quietly
+      // instead of crashing on the next question() call.
+      return;
+    }
+
     const message = line.trim();
     if (!message) continue;
 
@@ -117,4 +162,4 @@ if (import.meta.main) {
   main();
 }
 
-export { main };
+export { main, DEFAULT_USER_ID };
