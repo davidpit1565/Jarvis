@@ -161,8 +161,10 @@ src/
 │   ├── websocket/
 │   │   ├── protocol.ts               Typed, validated envelope protocol
 │   │   ├── DeviceConnectionManager.ts  Owns connections + tool request/response lifecycle
-│   │   └── JarvisWebSocketServer.ts    Thin transport: bytes <-> validated messages,
-│   │                                    plus routing for the /voice/* webhooks below
+│   │   ├── JarvisWebSocketServer.ts    Thin transport: bytes <-> validated messages,
+│   │   │                                plus routing for the /voice/* webhooks below
+│   │   │                                and the GET / /status status dashboard
+│   │   └── dashboard.ts                Self-contained HTML for the live status page
 │   └── phone/
 │       ├── TwilioVoiceGateway.ts   Per-call session + TwiML generation
 │       └── twilioSignature.ts      Twilio webhook signature verification
@@ -341,6 +343,20 @@ server (`tests/phone/`). What is **not** validated is an actual phone call
 through a real Twilio account — that requires the account/number setup
 above, which hasn't been done in this environment.
 
+## Status dashboard
+
+Visit `http://localhost:4770/` (or `/dashboard`) in a browser while Core is
+running to see a live-updating status page: registered devices and their
+online/offline state, registered tools, and whether the phone gateway is
+enabled. It's served directly by the same process — no build step, no
+extra dependency — and polls a plain JSON feed at `GET /status` every 3
+seconds. This is the first step toward a real visual layer; it's read-only
+today (nothing on the page can trigger an action).
+
+Verified in a real browser (headless Chromium) against the actual running
+server: the page loads, the live data renders correctly for both empty and
+populated states, and there are no console errors.
+
 ## Test
 
 ```bash
@@ -472,10 +488,11 @@ of that gap; the rest is tracked explicitly below.
    provider-agnostic `SpeechToText`/`TextToSpeech` interfaces already
    defined in `src/types/voice.ts`, for channels other than the phone
    gateway (which already has voice via Twilio).
-5. Caller-identity verification for the phone gateway, so an arbitrary
-   caller to the configured number can't reach the full assistant.
-6. Additional device tools behind the same registry/permission model:
+5. Additional device tools behind the same registry/permission model:
    safe application control, screenshots, broader (still non-destructive)
    filesystem access, richer context events (`active_window.changed`,
    `user.idle`, etc.) — kept low-frequency and privacy-conscious.
+6. Growing the status dashboard from read-only (today) into a real visual
+   control surface — device pairing approval, confirmation prompts, and
+   memory browsing from the browser instead of only the terminal/CLI.
 7. Device-to-device communication.

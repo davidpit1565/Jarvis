@@ -3,9 +3,11 @@ import { randomUUID } from "node:crypto";
 import type { EventBus } from "@/core/events/EventBus";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { PairingService } from "@/devices/pairing/PairingService";
+import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
+import { DASHBOARD_HTML } from "./dashboard";
 import {
   makeEnvelope,
   parseDeviceToCoreMessage,
@@ -22,6 +24,8 @@ export interface JarvisWebSocketServerDependencies {
   deviceConnectionManager: DeviceConnectionManager;
   pairingService: PairingService;
   eventBus: EventBus;
+  /** Optional: enables tool names/targets in the GET /status dashboard feed. */
+  toolRegistry?: ToolRegistry;
   /** All three required together to enable the Twilio phone gateway; otherwise its routes 404. */
   phoneGateway?: TwilioVoiceGateway;
   twilioAuthToken?: string;
@@ -60,6 +64,19 @@ export class JarvisWebSocketServer {
 
           if (req.method === "POST" && url.pathname.startsWith("/voice/")) {
             return await this.handleVoiceWebhook(req, url);
+          }
+
+          // A WebSocket handshake is itself an HTTP GET with an Upgrade
+          // header — device agents connect to "/", so these routes must
+          // never intercept that or every device connection would break.
+          const isUpgradeRequest = req.headers.get("upgrade")?.toLowerCase() === "websocket";
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
+            return this.handleStatusJson();
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
+            return new Response(DASHBOARD_HTML, { headers: { "Content-Type": "text/html" } });
           }
 
           if (server.upgrade(req, { data: { deviceId: null } })) {
@@ -283,6 +300,27 @@ export class JarvisWebSocketServer {
       default:
         return new Response("Not found", { status: 404 });
     }
+  }
+
+  /** GET /status — read-only JSON feed the dashboard polls; no auth today, matching the rest of Core. */
+  private handleStatusJson(): Response {
+    const { deviceRegistry, toolRegistry, phoneGateway } = this.deps;
+
+    const devices = deviceRegistry.listDevices().map((device) => ({
+      id: device.id,
+      name: device.name,
+      type: device.type,
+      role: device.role,
+      status: device.status,
+      lastSeen: device.lastSeen,
+    }));
+
+    const tools = (toolRegistry?.listTools() ?? []).map((tool) => ({
+      name: tool.name,
+      target: tool.target,
+    }));
+
+    return Response.json({ devices, tools, phoneGatewayEnabled: Boolean(phoneGateway) });
   }
 
   private async handleApproveHttp(req: Request): Promise<Response> {

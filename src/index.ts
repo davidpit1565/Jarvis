@@ -90,6 +90,7 @@ function main() {
     deviceConnectionManager,
     pairingService,
     eventBus,
+    toolRegistry,
     phoneGateway,
     twilioAuthToken: config.twilioAuthToken,
     twilioPublicBaseUrl: config.twilioPublicBaseUrl,
