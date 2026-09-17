@@ -100,6 +100,7 @@ function main() {
     twilioAuthToken: config.twilioAuthToken,
     twilioPublicBaseUrl: config.twilioPublicBaseUrl,
     twilioAllowedCallers: config.twilioAllowedCallers,
+    adminToken: config.adminToken,
   });
   wsServer.start(config.port);
 
@@ -133,6 +134,13 @@ function main() {
       ? "Phone gateway: enabled (POST /voice/incoming, /voice/gather, /voice/status)"
       : "Phone gateway: disabled (set TWILIO_AUTH_TOKEN and TWILIO_PUBLIC_BASE_URL to enable)"
   );
+  if (phoneGateway && (!config.twilioAllowedCallers || config.twilioAllowedCallers.length === 0)) {
+    console.warn(
+      "[jarvis] WARNING: phone gateway is enabled with no TWILIO_ALLOWED_CALLERS set — " +
+        "anyone who calls the configured number reaches full JARVIS, including tools like SAVE_MEMORY. " +
+        "Set TWILIO_ALLOWED_CALLERS before giving the number to anyone but yourself."
+    );
+  }
 
   process.on("SIGINT", () => {
     memoryStore.close();

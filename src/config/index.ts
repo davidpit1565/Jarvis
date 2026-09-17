@@ -15,6 +15,14 @@ export interface JarvisConfig {
   twilioAllowedCallers?: string[];
   /** Twilio <Say> voice name (e.g. "Polly.Matthew-Neural"); unset uses the gateway's own default. */
   twilioVoice?: string;
+  /**
+   * Shared secret required on POST /pairing/approve. Mandatory once the
+   * phone gateway is configured, since that makes this same server
+   * reachable from the public internet — without it, the pairing code
+   * alone (handed back to whoever requested it) is enough to self-approve
+   * a fake device. Optional for purely local development.
+   */
+  adminToken?: string;
 }
 
 class ConfigError extends Error {}
@@ -53,6 +61,15 @@ export function loadConfig(): JarvisConfig {
     .map((n) => n.trim())
     .filter((n) => n.length > 0);
   const twilioVoice = process.env.TWILIO_VOICE?.trim() || undefined;
+  const adminToken = process.env.JARVIS_ADMIN_TOKEN?.trim() || undefined;
+
+  if (twilioAuthToken && twilioPublicBaseUrl && !adminToken) {
+    throw new ConfigError(
+      "JARVIS_ADMIN_TOKEN is required once the phone gateway is configured (TWILIO_AUTH_TOKEN/TWILIO_PUBLIC_BASE_URL) — " +
+        "this server becomes reachable from the public internet, and POST /pairing/approve needs a secret independent of " +
+        "the pairing code itself to stay safe from self-approved fake devices. Set JARVIS_ADMIN_TOKEN to any long random value."
+    );
+  }
 
   return {
     anthropicApiKey,
@@ -62,6 +79,7 @@ export function loadConfig(): JarvisConfig {
     twilioPublicBaseUrl,
     twilioAllowedCallers,
     twilioVoice,
+    adminToken,
   };
 }
 

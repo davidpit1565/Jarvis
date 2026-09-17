@@ -280,3 +280,143 @@ describe("Pairing approval over HTTP", () => {
     expect(httpResponse.status).toBe(400);
   });
 });
+
+describe("Pairing approval with an admin token configured", () => {
+  let activeHandle: { stop: () => void } | undefined;
+
+  afterEach(() => {
+    activeHandle?.stop();
+    activeHandle = undefined;
+  });
+
+  function setupServerWithAdminToken(adminToken: string) {
+    const eventBus = new EventBus();
+    const deviceRegistry = new DeviceRegistry();
+    const pairingService = new PairingService();
+    const deviceConnectionManager = new DeviceConnectionManager(eventBus);
+    const server = new JarvisWebSocketServer({
+      deviceRegistry,
+      deviceConnectionManager,
+      pairingService,
+      eventBus,
+      adminToken,
+    });
+    const handle = server.start(0);
+    return { handle, port: handle.port };
+  }
+
+  /**
+   * Regression test for the self-approval bypass: without an admin token,
+   * anything that can register a device and read its own pairing code
+   * back over the socket can immediately approve itself. With one
+   * configured, knowing the code is no longer sufficient.
+   */
+  test("an attacker who registers their own device and reads its pairing code still cannot self-approve without the admin token", async () => {
+    const { handle, port } = setupServerWithAdminToken("correct-admin-secret");
+    activeHandle = handle;
+
+    const deviceId = "attacker-device";
+    const ws = new WebSocket(`ws://localhost:${port}`);
+
+    const pairingCode = await new Promise<string>((resolve, reject) => {
+      ws.onopen = () => {
+        ws.send(
+          JSON.stringify({
+            requestId: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            deviceId,
+            type: "device.register",
+            payload: {
+              deviceName: "Attacker's fake device",
+              deviceType: "mac",
+              platform: "macos",
+              agentVersion: "0.1.0",
+              protocolVersion: "1",
+              capabilities: [],
+              requestedRole: "primary",
+            },
+          })
+        );
+      };
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data as string);
+        if (message.payload?.command === "pairing.pending") resolve(message.payload.args.code);
+      };
+      ws.onerror = () => reject(new Error("WebSocket error"));
+      setTimeout(() => reject(new Error("Timed out waiting for pairing.pending")), 2000);
+    });
+
+    // The attacker has the real, correct pairing code — but no admin token.
+    const httpResponse = await fetch(`http://localhost:${port}/pairing/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId, code: pairingCode }),
+    });
+    const httpBody = (await httpResponse.json()) as { success: boolean };
+
+    expect(httpResponse.status).toBe(401);
+    expect(httpBody.success).toBe(false);
+
+    ws.close();
+  });
+
+  test("rejects a request with the wrong admin token even if the pairing code is correct", async () => {
+    const { handle, port } = setupServerWithAdminToken("correct-admin-secret");
+    activeHandle = handle;
+
+    const httpResponse = await fetch(`http://localhost:${port}/pairing/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Jarvis-Admin-Token": "wrong-token" },
+      body: JSON.stringify({ deviceId: "some-device", code: "123456" }),
+    });
+
+    expect(httpResponse.status).toBe(401);
+  });
+
+  test("succeeds with the correct admin token", async () => {
+    const { handle, port } = setupServerWithAdminToken("correct-admin-secret");
+    activeHandle = handle;
+
+    const deviceId = "legit-device";
+    const ws = new WebSocket(`ws://localhost:${port}`);
+
+    const pairingCode = await new Promise<string>((resolve, reject) => {
+      ws.onopen = () => {
+        ws.send(
+          JSON.stringify({
+            requestId: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            deviceId,
+            type: "device.register",
+            payload: {
+              deviceName: "Legit device",
+              deviceType: "mac",
+              platform: "macos",
+              agentVersion: "0.1.0",
+              protocolVersion: "1",
+              capabilities: [],
+            },
+          })
+        );
+      };
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data as string);
+        if (message.payload?.command === "pairing.pending") resolve(message.payload.args.code);
+      };
+      ws.onerror = () => reject(new Error("WebSocket error"));
+      setTimeout(() => reject(new Error("Timed out waiting for pairing.pending")), 2000);
+    });
+
+    const httpResponse = await fetch(`http://localhost:${port}/pairing/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Jarvis-Admin-Token": "correct-admin-secret" },
+      body: JSON.stringify({ deviceId, code: pairingCode }),
+    });
+    const httpBody = (await httpResponse.json()) as { success: boolean };
+
+    expect(httpResponse.status).toBe(200);
+    expect(httpBody.success).toBe(true);
+
+    ws.close();
+  });
+});

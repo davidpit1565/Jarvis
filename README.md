@@ -226,6 +226,9 @@ Then set `ANTHROPIC_API_KEY` in `.env`. Optional variables:
   channel (see below). **Both or neither** — setting only one throws a
   `ConfigError` at startup, since request-signature verification needs
   both to be meaningful.
+- `JARVIS_ADMIN_TOKEN` — **required** once the two Twilio variables above
+  are set (also a `ConfigError` if missing then); optional otherwise. See
+  "Security controls" below for why.
 
 ## Run
 
@@ -410,6 +413,17 @@ contain no language-detection logic, by design.
   is trusted; Core stores only a SHA-256 hash (constant-time compared),
   never the plaintext; the Agent is designed to store its credential only
   in the macOS Keychain, never on disk or in logs.
+- `POST /pairing/approve` requires `JARVIS_ADMIN_TOKEN` (via the
+  `X-Jarvis-Admin-Token` header, constant-time compared) whenever it's
+  configured — **mandatory once the phone gateway is enabled**, because
+  at that point this same HTTP server is reachable from the public
+  internet. Without an admin token, the pairing code alone is the only
+  gate on approval — and that code is handed back to whoever requested
+  it over the same socket, so anyone who can open a WebSocket connection
+  could register a fake device, read its own pairing code, and
+  self-approve it into a trusted device with no human involved. Found
+  and fixed during this session's own review, once the new `Dockerfile`/
+  `fly.toml` made this endpoint publicly reachable for the first time.
 - Device-scoped permission grants: authorizing a tool on one device never
   authorizes it on another.
 - `CONFIRM`/`DANGEROUS` tools require a fresh, per-call human confirmation
@@ -434,8 +448,10 @@ contain no language-detection logic, by design.
 - The phone gateway's caller allowlist (`TWILIO_ALLOWED_CALLERS`) is
   optional and off by default — if you don't set it, anyone who calls the
   configured Twilio number reaches the same JARVIS conversation as the
-  terminal chat, with the same tool access. Set it before giving the
-  number to anyone but yourself.
+  terminal chat, with the same tool access (including `SAVE_MEMORY`, with
+  no per-call confirmation). Core prints a startup warning when the phone
+  gateway is enabled without it, but doesn't refuse to start — set it
+  before giving the number to anyone but yourself.
 - Pairing approval is a manual CLI step (`bun run approve-device`) — there
   is no web UI for it yet.
 - No authentication beyond a placeholder `userId`.

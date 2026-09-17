@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from "bun";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { EventBus } from "@/core/events/EventBus";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { PairingService } from "@/devices/pairing/PairingService";
@@ -40,6 +40,18 @@ export interface JarvisWebSocketServerDependencies {
    * the full assistant — the phone number itself is then the only gate.
    */
   twilioAllowedCallers?: string[];
+  /**
+   * Shared secret required on POST /pairing/approve, via the
+   * X-Jarvis-Admin-Token header. Without this, the pairing code itself is
+   * the only thing standing between a self-registered device and a valid
+   * credential — and that code is handed back to whoever requested it, so
+   * an attacker who registers a fake device can read its own code and
+   * immediately self-approve. Required whenever this server is reachable
+   * from the public internet (i.e. the phone gateway is configured, since
+   * both share this same Bun.serve process); optional for purely local
+   * development.
+   */
+  adminToken?: string;
 }
 
 /**
@@ -332,6 +344,11 @@ export class JarvisWebSocketServer {
   }
 
   private async handleApproveHttp(req: Request): Promise<Response> {
+    const { adminToken } = this.deps;
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ success: false, error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
     let body: unknown;
     try {
       body = await req.json();
@@ -367,4 +384,11 @@ export class JarvisWebSocketServer {
   ): void {
     ws.send(JSON.stringify(makeEnvelope(type, payload, deviceId, randomUUID())));
   }
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  const bufferA = Buffer.from(a, "utf8");
+  const bufferB = Buffer.from(b, "utf8");
+  if (bufferA.length !== bufferB.length) return false;
+  return timingSafeEqual(bufferA, bufferB);
 }

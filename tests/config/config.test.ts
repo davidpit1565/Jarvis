@@ -9,6 +9,7 @@ const ENV_KEYS = [
   "TWILIO_PUBLIC_BASE_URL",
   "TWILIO_ALLOWED_CALLERS",
   "TWILIO_VOICE",
+  "JARVIS_ADMIN_TOKEN",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -41,13 +42,26 @@ describe("loadConfig", () => {
     expect(config.twilioPublicBaseUrl).toBeUndefined();
   });
 
-  test("loads Twilio settings when both are provided", () => {
+  test("loads Twilio settings when both are provided along with an admin token", () => {
     process.env.TWILIO_AUTH_TOKEN = "token123";
     process.env.TWILIO_PUBLIC_BASE_URL = "https://example.ngrok.io";
+    process.env.JARVIS_ADMIN_TOKEN = "admin-secret";
 
     const config = loadConfig();
     expect(config.twilioAuthToken).toBe("token123");
     expect(config.twilioPublicBaseUrl).toBe("https://example.ngrok.io");
+    expect(config.adminToken).toBe("admin-secret");
+  });
+
+  test("throws when the phone gateway is configured without JARVIS_ADMIN_TOKEN", () => {
+    process.env.TWILIO_AUTH_TOKEN = "token123";
+    process.env.TWILIO_PUBLIC_BASE_URL = "https://example.ngrok.io";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("leaves adminToken undefined when the phone gateway isn't configured", () => {
+    const config = loadConfig();
+    expect(config.adminToken).toBeUndefined();
   });
 
   test("throws when only TWILIO_AUTH_TOKEN is set", () => {
