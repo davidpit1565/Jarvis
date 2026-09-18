@@ -661,7 +661,9 @@ automated from here):
 - **`LIST_CALENDAR_EVENTS`** (`READ`) — the user's upcoming events,
   soonest first, via Google's Calendar API v3 (`src/calendar/GoogleCalendarClient.ts`,
   raw `fetch` calls, no SDK dependency, matching this project's existing
-  style — see `TwilioOutboundCaller`).
+  style — see `TwilioOutboundCaller`). Both this and `SEARCH_CALENDAR_EVENTS`
+  cap `maxResults` at 50 even if a caller asks for more, so one request
+  can't pull an unbounded number of events' full field set.
 - **`SEARCH_CALENDAR_EVENTS`** (`READ`) — finds events (past or future) by
   free-text query against title/description/location/attendees, via
   Google's own `q` search parameter — for "when was my dentist

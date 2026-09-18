@@ -129,6 +129,19 @@ describe("GoogleCalendarClient.listUpcomingEvents", () => {
       { id: "ev2", summary: "(no title)", start: "2026-01-16", end: "2026-01-17", location: null },
     ]);
   });
+
+  test("caps maxResults at 50 even if a larger value is requested", async () => {
+    let capturedMaxResults: string | null = null;
+    global.fetch = (async (url: string) => {
+      capturedMaxResults = new URL(url).searchParams.get("maxResults");
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.listUpcomingEvents(500);
+
+    expect(capturedMaxResults as unknown as string).toBe("50");
+  });
 });
 
 function makeLinkedTokenStore(): CalendarTokenStore {
@@ -177,6 +190,19 @@ describe("GoogleCalendarClient.searchEvents", () => {
 
     const { client } = makeClient(makeLinkedTokenStore());
     await expect(client.searchEvents("dentist")).rejects.toThrow(/400/);
+  });
+
+  test("caps maxResults at 50 even if a larger value is requested", async () => {
+    let capturedMaxResults: string | null = null;
+    global.fetch = (async (url: string) => {
+      capturedMaxResults = new URL(url).searchParams.get("maxResults");
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.searchEvents("dentist", 500);
+
+    expect(capturedMaxResults as unknown as string).toBe("50");
   });
 });
 

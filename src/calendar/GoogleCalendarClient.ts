@@ -23,6 +23,11 @@ const GOOGLE_SCOPES =
 // rather than ours.
 const TOKEN_EXPIRY_SAFETY_MARGIN_MS = 60_000;
 
+// Same reasoning as GmailClient's own cap: a caller passing an
+// unreasonably large maxResults shouldn't be able to pull an unbounded
+// number of events (and their full field set) in one request.
+const MAX_RESULTS_CAP = 50;
+
 /**
  * Google Calendar access via raw fetch calls to Google's OAuth2 and
  * Calendar v3 REST APIs — no SDK dependency, matching this project's
@@ -131,7 +136,7 @@ export class GoogleCalendarClient {
 
     const url = new URL(GOOGLE_CALENDAR_EVENTS_URL);
     url.searchParams.set("timeMin", new Date().toISOString());
-    url.searchParams.set("maxResults", String(maxResults));
+    url.searchParams.set("maxResults", String(Math.min(maxResults, MAX_RESULTS_CAP)));
     url.searchParams.set("singleEvents", "true");
     url.searchParams.set("orderBy", "startTime");
 
@@ -168,7 +173,7 @@ export class GoogleCalendarClient {
 
     const url = new URL(GOOGLE_CALENDAR_EVENTS_URL);
     url.searchParams.set("q", query);
-    url.searchParams.set("maxResults", String(maxResults));
+    url.searchParams.set("maxResults", String(Math.min(maxResults, MAX_RESULTS_CAP)));
     url.searchParams.set("singleEvents", "true");
     url.searchParams.set("orderBy", "startTime");
 
