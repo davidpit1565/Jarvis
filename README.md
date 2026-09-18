@@ -74,6 +74,24 @@ What's new in Phase 2:
   never touches a raw socket.
 - **First device tool**: `GET_ACTIVE_APPLICATION` — read-only, reports the
   frontmost application's name and bundle ID on the target device.
+- **First SAFE_ACTION device tools** — the first tools that actually *do*
+  something on the device rather than just reporting on it:
+  `OPEN_URL` (launches a URL in the default browser; only `http`/`https`
+  is accepted), `OPEN_APPLICATION` (launches a named, already-installed
+  application, matched by exact display name against `/Applications`,
+  `/System/Applications`, and `~/Applications` only), and
+  `COMPOSE_EMAIL_DRAFT` (opens a pre-filled `mailto:` draft in the default
+  mail client — **never sends**; the user reviews and sends it themselves).
+  Each has its own input validation (`src/tools/system/*Validation.ts`) run
+  by the Orchestrator via a new optional `DeviceTool.validateInput` hook
+  *before* the request is ever sent to a device — real defense in depth on
+  top of (never instead of) the Agent's own validation. Deliberately not
+  in scope: actually sending an email, closing/quitting an application, or
+  any form of arbitrary UI automation (moving the mouse, clicking a
+  specific on-screen element) — those are categorically riskier and each
+  deserves its own explicit, separately-considered decision rather than
+  being bundled in as "the next logical tool." See "Linux vs. macOS
+  validation" below for what's verified vs. still needs a real Mac.
 - **Bilingual (Hebrew + English) conversation**: a fixed system instruction
   (`src/core/brain/systemPrompt.ts`) tells Claude to detect and respond in
   the user's language, including mixed Hebrew/English in one message. Tool
@@ -150,7 +168,10 @@ src/
 ├── tools/
 │   ├── registry/       ToolRegistry — allowlist of tools Claude may call
 │   ├── filesystem/     READ_ONLY_FILE_INFO — local tool
-│   ├── system/         GET_ACTIVE_APPLICATION — device tool (iMac first)
+│   ├── system/         GET_ACTIVE_APPLICATION (read-only) plus the first
+│   │                   SAFE_ACTION device tools — OPEN_URL, OPEN_APPLICATION,
+│   │                   COMPOSE_EMAIL_DRAFT — each with its own *Validation.ts
+│   │                   checked by the Orchestrator before dispatch
 │   └── memory/         SAVE_MEMORY / SEARCH_MEMORY — local, persistent memory tools
 ├── permissions/         PermissionService — (userId, toolId, deviceId) grants
 ├── memory/              MemoryStore — SQLite-backed explicit key/value store
@@ -632,12 +653,17 @@ contain no language-detection logic, by design.
 
 ## Current limitations
 
-- Only four registry-based tools exist: `READ_ONLY_FILE_INFO` (local),
-  `GET_ACTIVE_APPLICATION` (device — app name/bundle ID only),
-  `SAVE_MEMORY` and `SEARCH_MEMORY` (local, persistent key/value memory).
-  Real internet search exists separately, as Anthropic's own server-side
-  `web_search` tool (opt-in via `JARVIS_WEB_SEARCH=true`), not through this
-  registry — see "Real internet search" above.
+- Seven registry-based tools exist: `READ_ONLY_FILE_INFO` (local),
+  `GET_ACTIVE_APPLICATION` (device, read-only), `OPEN_URL`/
+  `OPEN_APPLICATION`/`COMPOSE_EMAIL_DRAFT` (device, SAFE_ACTION — the Agent
+  side is unverified, see "Linux vs. macOS validation"), and `SAVE_MEMORY`/
+  `SEARCH_MEMORY` (local, persistent key/value memory). Real internet
+  search exists separately, as Anthropic's own server-side `web_search`
+  tool (opt-in via `JARVIS_WEB_SEARCH=true`), not through this registry —
+  see "Real internet search" above. No arbitrary UI automation (no tool
+  moves the mouse or clicks a specific on-screen element) and no tool
+  actually sends an email or closes/quits an application — deliberately
+  out of scope, see "Phase 2 scope" above.
 - DeviceRegistry, PermissionService, and PairingService are all in-memory
   and reset on restart. (`MemoryStore` is the one exception — it is
   SQLite-backed and persists across restarts.)
@@ -708,6 +734,25 @@ of that gap; the rest is tracked explicitly below.
 - Menu bar UI rendering and permission prompts
 - `launchd` load/restart/persistence behavior
 - Code signing/notarization
+- **The three new SAFE_ACTION device tools** (`OPEN_URL`, `OPEN_APPLICATION`,
+  `COMPOSE_EMAIL_DRAFT` — see "Phase 2 scope" below): the Core-side tool
+  definitions, permission wiring, and input validation
+  (`validateUrl`/`validateAppName`/`validateEmailAddress`) are covered by
+  real, passing tests in this Linux environment (`tests/tools/
+  SystemActionTools.test.ts`, plus an Orchestrator test proving a device
+  tool's `validateInput` blocks dispatch before it ever reaches a device).
+  **The Swift Agent implementations
+  (`OpenUrl.swift`/`OpenApplication.swift`/`ComposeEmailDraft.swift`) are
+  unverified** — written following this repo's own established practice for
+  every Agent tool (see the header comment each carries: "REQUIRES REAL
+  macOS VALIDATION... never compiled or run in this environment") — not a
+  new exception to the rule, the existing rule applied to new code. Real
+  validation needed before relying on them: `swift build` succeeds, each
+  tool actually launches a URL/application/mail-compose window when called
+  end to end from Core through a real Agent, and `OpenApplicationTool`'s
+  name-to-path matching (checked against `/Applications`,
+  `/System/Applications`, `~/Applications` only, by design — see the file's
+  own comment) actually finds real installed apps by their display name.
 
 ## Planned future phases
 

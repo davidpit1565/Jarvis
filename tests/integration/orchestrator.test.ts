@@ -247,6 +247,46 @@ describe("Orchestrator remote tool execution", () => {
     expect(parsed).toEqual({ success: true, data: { application: "Google Chrome", bundleId: "com.google.Chrome" } });
   });
 
+  test("rejects a device tool call whose input fails validateInput before ever contacting the device", async () => {
+    const { deviceRegistry, deviceConnectionManager } = setupWithMockDevice();
+    let sent = false;
+    const tool: DeviceTool = {
+      id: "VALIDATED_TOOL",
+      name: "validated_tool",
+      description: "A device tool with its own input validation",
+      inputSchema: { type: "object", properties: { url: { type: "string" } } },
+      requiredPermission: PermissionLevel.SAFE_ACTION,
+      target: "device",
+      validateInput: (input) => (input.url === "javascript:evil()" ? { valid: false, reason: "bad scheme" } : { valid: true }),
+    };
+    // A connection that would flag if the (invalid) request ever reached it.
+    deviceConnectionManager.registerConnection(
+      "imac-1",
+      new MockDeviceConnection(() => {
+        sent = true;
+      })
+    );
+
+    const brain = new ScriptedBrain([
+      {
+        text: "",
+        toolCalls: [{ id: "call-1", toolName: "validated_tool", input: { url: "javascript:evil()" } }],
+        stopReason: "tool_use",
+      },
+      { text: "Done.", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const { orchestrator, conversation, permissionService } = setup(brain, [tool], { deviceRegistry, deviceConnectionManager });
+    permissionService.grant("user-1", "VALIDATED_TOOL", "imac-1");
+    await orchestrator.handleUserMessage("user-1", "open that link");
+
+    expect(sent).toBe(false);
+    const toolResult = conversation.getMessages().find((m) => m.role === "tool");
+    const parsed = JSON.parse((toolResult as { content: string }).content);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toMatch(/invalid input.*bad scheme/i);
+  });
+
   test("times out a device tool call when the device never responds", async () => {
     const { deviceRegistry, deviceConnectionManager } = setupWithMockDevice();
     const tool = makeDeviceTool("SLOW_TOOL");

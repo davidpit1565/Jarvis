@@ -9,6 +9,9 @@ import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionService } from "@/permissions/PermissionService";
 import { readOnlyFileInfoTool } from "@/tools/filesystem/ReadOnlyFileInfoTool";
 import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationTool";
+import { openUrlTool } from "@/tools/system/OpenUrlTool";
+import { openApplicationTool } from "@/tools/system/OpenApplicationTool";
+import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { MemoryStore } from "@/memory/MemoryStore";
@@ -44,6 +47,9 @@ function main() {
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
+  toolRegistry.registerTool(openUrlTool);
+  toolRegistry.registerTool(openApplicationTool);
+  toolRegistry.registerTool(composeEmailDraftTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
 
