@@ -818,9 +818,11 @@ to free as possible" goal. Find your own coordinates at any map site
 Setting `JARVIS_NEWS_RSS_URL` enables **`GET_NEWS`** (`READ`) — real
 headlines from that one RSS feed (any news site's RSS URL works), via a
 small regex-based reader (`src/news/RssNewsClient.ts`) rather than a full
-XML parser dependency. No API key, no account, and deliberately scoped to
-whichever single feed you configure, not a general web-wide news
-aggregator.
+XML parser dependency — and **`SEARCH_NEWS`** (`READ`) — filters that same
+feed's headlines to ones whose title matches a keyword, for "anything
+about X in the news" instead of scanning the unfiltered top 5. No API
+key, no account, and deliberately scoped to whichever single feed you
+configure, not a general web-wide news aggregator.
 
 ## Live audio waveform (see JARVIS's voice on a call)
 

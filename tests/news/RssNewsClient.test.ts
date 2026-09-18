@@ -54,3 +54,39 @@ describe("RssNewsClient.getTopHeadlines", () => {
     await expect(client.getTopHeadlines()).rejects.toThrow(/404/);
   });
 });
+
+describe("RssNewsClient.searchHeadlines", () => {
+  test("filters headlines whose title matches the query, case-insensitively", async () => {
+    global.fetch = (async () => new Response(SAMPLE_FEED, { status: 200 })) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    const headlines = await client.searchHeadlines("SECOND");
+
+    expect(headlines).toEqual([{ title: "Second headline", link: "https://example.com/2" }]);
+  });
+
+  test("returns an empty array when nothing matches", async () => {
+    global.fetch = (async () => new Response(SAMPLE_FEED, { status: 200 })) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    const headlines = await client.searchHeadlines("nonexistent-topic");
+
+    expect(headlines).toEqual([]);
+  });
+
+  test("caps results at maxItems", async () => {
+    global.fetch = (async () => new Response(SAMPLE_FEED, { status: 200 })) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    const headlines = await client.searchHeadlines("headline", 1);
+
+    expect(headlines).toHaveLength(1);
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    await expect(client.searchHeadlines("headline")).rejects.toThrow(/404/);
+  });
+});

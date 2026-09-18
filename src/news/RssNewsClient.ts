@@ -31,7 +31,7 @@ function decodeXmlText(raw: string): string {
 export class RssNewsClient {
   constructor(private readonly feedUrl: string) {}
 
-  async getTopHeadlines(maxItems: number = 5): Promise<NewsHeadline[]> {
+  private async fetchAllItems(): Promise<NewsHeadline[]> {
     const response = await fetch(this.feedUrl);
     if (!response.ok) {
       throw new Error(`RSS feed request failed (${response.status}): ${await response.text().catch(() => "")}`);
@@ -41,8 +41,6 @@ export class RssNewsClient {
     const headlines: NewsHeadline[] = [];
 
     for (const match of xml.matchAll(ITEM_PATTERN)) {
-      if (headlines.length >= maxItems) break;
-
       const itemXml = match[1] ?? "";
       const titleMatch = itemXml.match(TITLE_PATTERN);
       const linkMatch = itemXml.match(LINK_PATTERN);
@@ -54,5 +52,17 @@ export class RssNewsClient {
     }
 
     return headlines;
+  }
+
+  async getTopHeadlines(maxItems: number = 5): Promise<NewsHeadline[]> {
+    const headlines = await this.fetchAllItems();
+    return headlines.slice(0, maxItems);
+  }
+
+  /** Headlines whose title contains `query` (case-insensitive), most-recent-first order preserved from the feed. */
+  async searchHeadlines(query: string, maxItems: number = 5): Promise<NewsHeadline[]> {
+    const headlines = await this.fetchAllItems();
+    const needle = query.toLowerCase();
+    return headlines.filter((h) => h.title.toLowerCase().includes(needle)).slice(0, maxItems);
   }
 }

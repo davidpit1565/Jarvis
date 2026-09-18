@@ -58,6 +58,7 @@ import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
 import { createGetWeatherForecastTool } from "@/tools/weather/GetWeatherForecastTool";
 import { RssNewsClient } from "@/news/RssNewsClient";
 import { createGetNewsTool } from "@/tools/news/GetNewsTool";
+import { createSearchNewsTool } from "@/tools/news/SearchNewsTool";
 import { isWeeklyDigestDue } from "@/digest/isWeeklyDigestDue";
 import { formatWeeklyDigest } from "@/digest/formatWeeklyDigest";
 import { isCheckinDue } from "@/digest/isCheckinDue";
@@ -177,6 +178,7 @@ function main() {
   if (config.newsRssUrl) {
     const newsClient = new RssNewsClient(config.newsRssUrl);
     toolRegistry.registerTool(createGetNewsTool(newsClient));
+    toolRegistry.registerTool(createSearchNewsTool(newsClient));
   }
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
