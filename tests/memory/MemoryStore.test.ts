@@ -28,6 +28,17 @@ describe("MemoryStore", () => {
     store.close();
   });
 
+  test("searches records by value fragment too, not just key", () => {
+    const store = new MemoryStore(":memory:");
+    store.save({ key: "pets.name", value: "a golden retriever named Max" });
+    store.save({ key: "user.name", value: "David" });
+
+    const results = store.search("retriever");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.key).toBe("pets.name");
+    store.close();
+  });
+
   test("deletes a record", () => {
     const store = new MemoryStore(":memory:");
     const record = store.save({ key: "temp", value: "value" });

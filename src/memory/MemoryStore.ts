@@ -76,12 +76,18 @@ export class MemoryStore {
     return row ?? null;
   }
 
-  search(keyFragment: string): MemoryRecord[] {
+  /**
+   * Matches `fragment` against either the key or the value — without
+   * this, "what did I say about my dog" would miss a fact saved under an
+   * unrelated key (e.g. "pets.name") whose value happens to mention
+   * "dog", since only the key was ever searched.
+   */
+  search(fragment: string): MemoryRecord[] {
     const rows = this.db
       .query(
-        `SELECT id, key, value, created_at as createdAt FROM memory_records WHERE key LIKE ? ORDER BY created_at DESC`
+        `SELECT id, key, value, created_at as createdAt FROM memory_records WHERE key LIKE ? OR value LIKE ? ORDER BY created_at DESC`
       )
-      .all(`%${keyFragment}%`) as MemoryRecord[];
+      .all(`%${fragment}%`, `%${fragment}%`) as MemoryRecord[];
     return rows;
   }
 

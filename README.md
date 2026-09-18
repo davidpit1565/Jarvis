@@ -112,7 +112,9 @@ memory store (`src/memory/MemoryStore.ts`) that survives restarts:
   replaces the old value rather than adding a conflicting second row.
 - **`SEARCH_MEMORY`** (`src/tools/memory/SearchMemoryTool.ts`) — `READ`
   level. Lets Claude recall previously saved facts by a text fragment
-  before answering.
+  before answering, matched against either the key or the value — "what
+  did I say about my dog" finds a fact even when "dog" only appears in
+  the value, not the key.
 - **`DELETE_MEMORY`** (`src/tools/memory/DeleteMemoryTool.ts`) —
   `SAFE_ACTION`, standing-granted. Actually forgets a fact by key, for when
   it's no longer true and there's nothing to replace it with. Undoable
