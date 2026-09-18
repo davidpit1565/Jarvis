@@ -238,6 +238,10 @@ export class JarvisWebSocketServer {
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
+            const { webAuthnService } = this.deps;
+            if (webAuthnService?.hasCredentials() && !this.hasValidSession(req)) {
+              return Response.json({ error: "Locked" }, { status: 401 });
+            }
             return this.handleStatusJson();
           }
 
@@ -558,7 +562,14 @@ export class JarvisWebSocketServer {
     audioLevelBroadcaster.broadcast(computeAudioLevel(payload), track);
   }
 
-  /** GET /status — read-only JSON feed the dashboard polls; no auth today, matching the rest of Core. */
+  /**
+   * GET /status — read-only JSON feed the dashboard polls. Gated the same
+   * way as GET / and GET /dashboard: once any Face ID/Touch ID credential
+   * is registered, a valid session is required here too — otherwise the
+   * dashboard lock would be purely cosmetic, since this feed carries
+   * everything the locked page shows (devices, activity, token/tool usage,
+   * record counts) and more.
+   */
   private handleStatusJson(): Response {
     const {
       deviceRegistry,

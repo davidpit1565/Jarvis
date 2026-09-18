@@ -736,6 +736,11 @@ contain no language-detection logic, by design.
 - Optional Face ID/Touch ID lock for the dashboard (see below): real
   WebAuthn, not a custom biometric integration; registering the first
   credential requires `JARVIS_ADMIN_TOKEN` so setup can't be hijacked.
+  `GET /status` is gated by the same session check as the dashboard page
+  itself — found and fixed during this session's own review: the page was
+  locked, but the JSON feed it polls (devices, activity, token/tool usage,
+  record counts) was still served to anyone, unauthenticated, making the
+  lock purely cosmetic.
 - Every HTTP response carries `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer`
   (`withSecurityHeaders` in `JarvisWebSocketServer.ts`) — stops the
