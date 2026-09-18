@@ -133,6 +133,30 @@ describe("Orchestrator integration", () => {
     });
   });
 
+  test("tool.executed carries the userId and exact input, for a durable audit trail", async () => {
+    const tool = makeEchoTool("ECHO_TOOL");
+    const brain = new ScriptedBrain([
+      {
+        text: "",
+        toolCalls: [{ id: "call-1", toolName: "echo_tool", input: { hello: "world" } }],
+        stopReason: "tool_use",
+      },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const { orchestrator, eventBus } = setup(brain, [tool]);
+    let captured: { toolName: string; userId: string; input: Record<string, unknown> } | undefined;
+    eventBus.on("tool.executed", (payload) => {
+      captured = payload;
+    });
+
+    await orchestrator.handleUserMessage("user-42", "please echo hello world");
+
+    expect(captured?.toolName).toBe("echo_tool");
+    expect(captured?.userId).toBe("user-42");
+    expect(captured?.input).toEqual({ hello: "world" });
+  });
+
   test("returns Claude's text directly when no tool call is requested", async () => {
     const brain = new ScriptedBrain([{ text: "Just chatting, no tools needed.", toolCalls: [], stopReason: "end_turn" }]);
     const { orchestrator } = setup(brain);

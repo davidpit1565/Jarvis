@@ -15,6 +15,7 @@ import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
 import { MemoryStore } from "@/memory/MemoryStore";
 import { ReminderStore } from "@/reminders/ReminderStore";
 import { dueRemindersNote } from "@/reminders/dueRemindersNote";
+import { ToolAuditLog } from "@/audit/ToolAuditLog";
 import { createCreateReminderTool } from "@/tools/reminders/CreateReminderTool";
 import { createListRemindersTool } from "@/tools/reminders/ListRemindersTool";
 import { createCompleteReminderTool } from "@/tools/reminders/CompleteReminderTool";
@@ -75,6 +76,7 @@ function main() {
   const reminderStore = new ReminderStore(config.remindersDbPath);
   const conversationHistoryStore = new ConversationHistoryStore(config.conversationHistoryDbPath);
   const activityLog = new ActivityLog(config.activityLogDbPath);
+  const toolAuditLog = new ToolAuditLog(config.toolAuditLogDbPath);
   const webAuthnStore = new WebAuthnStore(config.webauthnDbPath);
   const webAuthnService = new WebAuthnService(webAuthnStore);
   const sessionStore = new SessionStore();
@@ -229,7 +231,8 @@ function main() {
     }
   });
 
-  eventBus.on("tool.executed", ({ toolName, result }) => {
+  eventBus.on("tool.executed", ({ toolName, result, userId, input }) => {
+    toolAuditLog.record(toolName, userId, input, result);
     activityLog.record(`${toolName} → ${result.success ? "ok" : `failed: ${result.error}`}`);
   });
 
@@ -269,6 +272,7 @@ function main() {
     reminderStore.close();
     conversationHistoryStore.close();
     activityLog.close();
+    toolAuditLog.close();
     deviceRegistry.close();
     pairingService.close();
     webAuthnStore.close();

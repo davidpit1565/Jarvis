@@ -8,7 +8,13 @@ export interface JarvisEventMap {
   "brain.request": { messageCount: number };
   "brain.response": { text: string; toolCallCount: number; serverToolUses?: string[] };
   "tool.requested": { toolCall: ToolCallRequest };
-  "tool.executed": { toolName: string; requestId: string; result: ToolResult };
+  "tool.executed": {
+    toolName: string;
+    requestId: string;
+    result: ToolResult;
+    userId: string;
+    input: Record<string, unknown>;
+  };
   "tool.dispatched": { toolName: string; deviceId: string; requestId: string };
   "permission.checked": { toolId: string; result: PermissionCheckResult };
   "device.registered": { device: Device };

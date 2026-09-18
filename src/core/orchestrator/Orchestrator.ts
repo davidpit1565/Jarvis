@@ -194,7 +194,7 @@ export class Orchestrator {
     const requestId = randomUUID();
     const result = await tool.execute(toolCall.input, { userId, requestId });
 
-    eventBus.emit("tool.executed", { toolName: tool.name, requestId, result });
+    eventBus.emit("tool.executed", { toolName: tool.name, requestId, result, userId, input: toolCall.input });
     this.completeToolCall(toolCall, result);
   }
 
@@ -237,7 +237,13 @@ export class Orchestrator {
 
     try {
       const result = await deviceConnectionManager.sendToolRequest(targetDevice.id, tool.name, toolCall.input);
-      eventBus.emit("tool.executed", { toolName: tool.name, requestId: toolCall.id, result });
+      eventBus.emit("tool.executed", {
+        toolName: tool.name,
+        requestId: toolCall.id,
+        result,
+        userId,
+        input: toolCall.input,
+      });
       this.completeToolCall(toolCall, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Remote tool execution failed";

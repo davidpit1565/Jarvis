@@ -18,6 +18,8 @@ export interface JarvisConfig {
   pairingDbPath: string;
   /** Path to the SQLite database storing device identity/role, so a device doesn't lose its role after every restart. */
   deviceRegistryDbPath: string;
+  /** Path to the SQLite database storing the structured tool-execution audit trail. */
+  toolAuditLogDbPath: string;
   /** Both must be set together to enable the optional Twilio phone gateway. */
   twilioAuthToken?: string;
   /**
@@ -106,6 +108,7 @@ export function loadConfig(): JarvisConfig {
     process.env.JARVIS_CONVERSATION_HISTORY_DB_PATH ?? "./data/jarvis-conversation-history.sqlite";
   const pairingDbPath = process.env.JARVIS_PAIRING_DB_PATH ?? "./data/jarvis-pairing.sqlite";
   const deviceRegistryDbPath = process.env.JARVIS_DEVICE_REGISTRY_DB_PATH ?? "./data/jarvis-devices.sqlite";
+  const toolAuditLogDbPath = process.env.JARVIS_TOOL_AUDIT_LOG_DB_PATH ?? "./data/jarvis-tool-audit.sqlite";
 
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new ConfigError(`Invalid JARVIS_PORT: must be an integer between 1 and 65535`);
@@ -161,6 +164,7 @@ export function loadConfig(): JarvisConfig {
     conversationHistoryDbPath,
     pairingDbPath,
     deviceRegistryDbPath,
+    toolAuditLogDbPath,
     twilioAuthToken,
     twilioPublicBaseUrl,
     twilioAllowedCallers,

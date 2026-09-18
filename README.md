@@ -731,6 +731,19 @@ contain no language-detection logic, by design.
   cosmetic waveform — it cannot inject text into the Orchestrator or
   trigger any tool call.
 
+## Tool audit trail
+
+Every tool JARVIS actually runs — its name, the exact input, who ran it,
+and whether it succeeded — is durably logged to SQLite
+(`src/audit/ToolAuditLog.ts`, `JARVIS_TOOL_AUDIT_LOG_DB_PATH`) via the
+`tool.executed` event, which now also carries `userId`/`input` for exactly
+this reason. Distinct from `ActivityLog`: that's a small, display-only
+ring buffer of human-readable strings for the live dashboard (last 30
+entries, gone on restart before this session's persistence work); this is
+the actual accountability record — "what did JARVIS do, exactly, and
+when" — for a `SAFE_ACTION`/`CONFIRM`/`DANGEROUS` tool, in a form that
+could genuinely be audited later, not just skimmed live.
+
 ## Reliability
 
 A handful of additions aimed specifically at "survives a real cloud
