@@ -4,6 +4,8 @@ import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
+import { PermissionService } from "@/permissions/PermissionService";
+import { PermissionLevel } from "@/types/permissions";
 
 /**
  * Exercises the real Bun.serve HTTP + WebSocket server end to end: a mock
@@ -144,6 +146,82 @@ describe("Pairing approval over HTTP", () => {
     expect(deviceRegistry.getPrimaryDevice()?.id).toBe(deviceId);
 
     ws.close();
+  });
+
+  test("approving a device grants it exactly the configured tool list, scoped to that device only", () => {
+    // Direct user decision: broader "control the computer" tools are
+    // wanted, but must never be usable until the human has explicitly
+    // trusted a specific device — approving its pairing (this test's
+    // whole subject) is that one explicit moment in this system.
+    const eventBus = new EventBus();
+    const deviceRegistry = new DeviceRegistry();
+    const pairingService = new PairingService();
+    const deviceConnectionManager = new DeviceConnectionManager(eventBus);
+    const permissionService = new PermissionService();
+    const deviceId = "test-imac-grant";
+    const userId = "local-user";
+
+    deviceRegistry.registerDevice({
+      id: deviceId,
+      name: "Test iMac",
+      type: "mac",
+      platform: "macos",
+      agentVersion: "0.1.0",
+      protocolVersion: "1",
+      capabilities: [],
+    });
+    const pairing = pairingService.requestPairing(deviceId);
+
+    const server = new JarvisWebSocketServer({
+      deviceRegistry,
+      deviceConnectionManager,
+      pairingService,
+      eventBus,
+      permissionService,
+      defaultUserId: userId,
+      autoGrantToolIdsOnApproval: ["OPEN_URL", "CLICK_ELEMENT"],
+    });
+
+    server.approveDevice(deviceId, pairing.code);
+
+    const openUrl = permissionService.check({
+      subject: { userId },
+      toolId: "OPEN_URL",
+      requiredLevel: PermissionLevel.SAFE_ACTION,
+      deviceId,
+    });
+    expect(openUrl.allowed).toBe(true);
+    expect(openUrl.requiresConfirmation).toBe(false);
+
+    const clickElement = permissionService.check({
+      subject: { userId },
+      toolId: "CLICK_ELEMENT",
+      requiredLevel: PermissionLevel.CONFIRM,
+      deviceId,
+    });
+    expect(clickElement.allowed).toBe(true);
+    // A grant is never enough on its own for CONFIRM — real-time human
+    // approval is still required for every single invocation.
+    expect(clickElement.requiresConfirmation).toBe(true);
+
+    // Not in the auto-grant list — approving the device must not
+    // silently grant every device tool that exists.
+    const typeText = permissionService.check({
+      subject: { userId },
+      toolId: "TYPE_TEXT",
+      requiredLevel: PermissionLevel.CONFIRM,
+      deviceId,
+    });
+    expect(typeText.allowed).toBe(false);
+
+    // Scoped to this device only — never leaks to a different one.
+    const wrongDevice = permissionService.check({
+      subject: { userId },
+      toolId: "OPEN_URL",
+      requiredLevel: PermissionLevel.SAFE_ACTION,
+      deviceId: "some-other-device",
+    });
+    expect(wrongDevice.allowed).toBe(false);
   });
 
   test("approving a second device that requested primary does not steal the role, and approval still succeeds", async () => {

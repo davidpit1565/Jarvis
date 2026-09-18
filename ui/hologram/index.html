@@ -154,7 +154,8 @@
     .panel .bar { display: none; }
     .panel .row { white-space: normal; }
     .panel .row .val { margin-left: 5px; }
-    #activity { bottom: 17%; font-size: 9px; }
+    #activity { bottom: 17%; font-size: 9px; max-height: 15vh; }
+    #activity-lines { max-height: calc(15vh - 20px); }
     #activity .heading { flex-direction: column; align-items: flex-start; gap: 2px; }
     #jarvis-label { font-size: 16px; letter-spacing: 8px; }
     /* Real overlap found by screenshot: these two buttons kept their
@@ -190,13 +191,15 @@
 
   #activity {
     position: fixed; left: 4%; right: 4%; bottom: 20%;
-    max-height: 15vh; overflow: hidden; z-index: 4;
+    max-height: 24vh; overflow: visible; z-index: 4;
     font-size: 10.5px; line-height: 1.6; color: #7fe0c8;
-    background: linear-gradient(180deg, rgba(6,14,16,0.0), rgba(6,14,16,0.35));
+    /* Darkened a bit from 0.35 at the bottom — real bloom (added
+       alongside this) is bright enough to bleed through the previous,
+       more translucent gradient and reduce legibility of the busiest
+       part of the feed (the newest, bottom-most lines). */
+    background: linear-gradient(180deg, rgba(6,14,16,0.05), rgba(6,14,16,0.55));
     border-top: 1px solid rgba(127,224,200,0.18);
     padding-top: 6px; user-select: none;
-    -webkit-mask-image: linear-gradient(to bottom, transparent, black 30%, black 85%, transparent);
-    mask-image: linear-gradient(to bottom, transparent, black 30%, black 85%, transparent);
   }
   #activity .heading {
     color: #a8f2ff; font-size: 10px; letter-spacing: 3px; opacity: 0.8;
@@ -205,8 +208,20 @@
   #activity .heading .status { font-size: 9px; letter-spacing: 1px; }
   #activity .heading .status.live { color: #8bffb0; }
   #activity .heading .status.demo { color: #ffcf7f; }
-  #activity-lines { margin-top: 4px; }
-  #activity-lines .line { opacity: 0.9; white-space: pre; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 0 5px rgba(127,224,200,0.4); }
+  /* A real scrollback now (was overflow:hidden, capped at 7 lines with a
+     fade-out — anything older just vanished). Per direct request ("I
+     always want to be able to see all its code, everything it does"),
+     this now keeps 60 lines and scrolls, auto-following the newest line
+     unless the user has manually scrolled up to read history (see the
+     wasNearBottom check in pushActivityLine()). Fades in gently at the
+     top only — the bottom edge (the live, newest line) must stay fully
+     legible, not faded out, since that's the whole point of watching it. */
+  #activity-lines {
+    margin-top: 4px; max-height: calc(24vh - 20px); overflow-y: auto;
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 12%);
+    mask-image: linear-gradient(to bottom, transparent, black 12%);
+  }
+  #activity-lines .line { opacity: 0.9; white-space: pre-wrap; word-break: break-all; text-shadow: 0 0 5px rgba(127,224,200,0.4); }
   #activity-lines .line .t { opacity: 0.55; }
   #activity-lines .line .k-tool { color: #ffd9a0; }
   #activity-lines .line .k-brain { color: #9fd8ff; }
@@ -268,8 +283,19 @@
      #voice-bars above) — "let me see how it's actually speaking," per
      direct request, styled as its own side panel matching SYSTEM STATUS/
      CORE STATUS rather than a decoration near the plinth. */
-  .panel.voice { top: 46%; }
-  #voice-spectrum { width: 100%; height: 64px; display: block; opacity: 0.9; }
+  .panel.voice { top: 40%; }
+  /* Two independent meters, per direct request: "for each of us, me and
+     Jarvis, a row like this with our voice so we can see the pitch/tone" —
+     YOU (cyan, fed by the mic button) and JARVIS (amber, fed by
+     connectAudioElement() once Core has real TTS output — see the JS
+     below) rather than one shared meter that can't tell the two apart. */
+  .voice-row { margin-top: 10px; }
+  .voice-label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 8.5px; letter-spacing: 2px; opacity: 0.85; margin-bottom: 4px;
+  }
+  .voice-label.jarvis { color: #ffb15c; }
+  #voice-spectrum, #voice-spectrum-jarvis { width: 100%; height: 48px; display: block; opacity: 0.9; }
 </style>
 </head>
 <body>
@@ -302,8 +328,15 @@
   </div>
 
   <div class="panel right voice" id="panel-voice">
-    <div class="heading">VOICE <span class="status demo" id="voice-status">IDLE</span></div>
-    <canvas id="voice-spectrum"></canvas>
+    <div class="heading">VOICE</div>
+    <div class="voice-row">
+      <div class="voice-label">YOU <span class="status demo" id="voice-status">IDLE</span></div>
+      <canvas id="voice-spectrum"></canvas>
+    </div>
+    <div class="voice-row">
+      <div class="voice-label jarvis">JARVIS <span class="status demo" id="voice-status-jarvis">IDLE</span></div>
+      <canvas id="voice-spectrum-jarvis"></canvas>
+    </div>
   </div>
 
   <div id="glitch-banner">
@@ -344,6 +377,19 @@
   </div>
 
 <script src="./three.min.js"></script>
+<!-- Real bloom (UnrealBloomPass), not the "poor man's" duplicate-and-fade
+     shell trick used everywhere on this page until now. These are the
+     official Three.js r128 example scripts (matching the vendored
+     three.min.js exactly), fetched from the same public npm release, not
+     hand-written — MIT licensed, same as three.js itself. Load order
+     matters: EffectComposer.js defines THREE.Pass, which RenderPass/
+     ShaderPass/UnrealBloomPass all extend at class-definition time. -->
+<script src="./postprocessing/EffectComposer.js"></script>
+<script src="./postprocessing/RenderPass.js"></script>
+<script src="./postprocessing/ShaderPass.js"></script>
+<script src="./shaders/CopyShader.js"></script>
+<script src="./shaders/LuminosityHighPassShader.js"></script>
+<script src="./postprocessing/UnrealBloomPass.js"></script>
 <script>
 (function () {
   "use strict";
@@ -417,6 +463,26 @@
   camera.position.set(0, 0, 12);
 
   /* ---------------------------------------------------------------
+   * Real bloom (UnrealBloomPass) — replaces the "poor man's bloom" this
+   * page used everywhere until now (re-drawing the same wireframe bigger
+   * and fainter underneath it). That trick only ever fakes glow around
+   * literal duplicated line geometry; real bloom picks up genuinely
+   * bright pixels wherever they are — the energy surface's fresnel rim,
+   * the flow-field particles, the brain — with zero extra per-object
+   * work. threshold/strength/radius tuned against real screenshots (see
+   * ui/hologram/README.md), not guessed.
+   * ------------------------------------------------------------- */
+  const composer = new THREE.EffectComposer(renderer);
+  composer.addPass(new THREE.RenderPass(scene, camera));
+  const bloomPass = new THREE.UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    0.42,
+    0.4,
+    0.35
+  );
+  composer.addPass(bloomPass);
+
+  /* ---------------------------------------------------------------
    * 2a. Manual orbit — drag to inspect the head from any angle (side,
    *     back, above). This moves the CAMERA around a fixed head; it's
    *     deliberately independent of webcam face-tracking (further down),
@@ -451,7 +517,13 @@
   let lastPointerY = 0;
 
   function updateCameraFromOrbit() {
-    const elev = Math.max(-1.2, Math.min(1.2, camElevation));
+    // Was capped at +-1.2 rad (~69 deg) — direct request was to be able to
+    // spin the Core all the way up and down, not just side to side, since
+    // it's meant to be inspected/played with from any angle (it's round,
+    // not a flat panel). +-1.55 rad (~88.8 deg) gets you almost straight
+    // overhead/underneath without the camera flipping through the exact
+    // pole, which is the one real gimbal-lock artifact full 90 deg risks.
+    const elev = Math.max(-1.55, Math.min(1.55, camElevation));
     camera.position.set(
       camDistance * Math.sin(camAzimuth) * Math.cos(elev),
       camDistance * Math.sin(elev),
@@ -552,6 +624,110 @@
       material.userData.shader = shader;
     };
     material.needsUpdate = true;
+  }
+
+  /* ---------------------------------------------------------------
+   * Curl noise — a divergence-free vector field derived from the CURL of
+   * a simplex-noise potential, not the noise itself. This is the actual,
+   * named technique (widely documented — Three.js Journey's "GPGPU Flow
+   * Field Particles" lesson, al-ro's "3D Curl Noise" writeup) behind the
+   * organic, swirling, never-converging/never-repeating look of a real
+   * energy/plasma/smoke sim, as opposed to a geometric wireframe (which
+   * inevitably reads as "a globe" — it has visible latitude/longitude
+   * lines because it IS a UV-sphere) or independent per-particle sine
+   * jitter (visibly synchronized/mechanical once you watch it a few
+   * seconds). Every particle samples the SAME smooth field, so nearby
+   * particles swirl together in coherent tendrils, exactly the "brain
+   * with waves" look from the reference images, instead of independently
+   * wobbling in place.
+   *
+   * Implementation: a compact public-domain 3D simplex noise (same
+   * Gustavson/Ashima algorithm family as the GLSL version already used
+   * for the energy surface above, ported to JS since this needs to run
+   * per-particle on the CPU every frame — no GPGPU/render-to-texture
+   * pipeline in this vendored Three.js r128 setup), then curl computed
+   * via the standard numerical-derivative formula: three offset noise
+   * samples build a vector potential Ψ, and curl(Ψ) = the field that's
+   * actually divergence-free (particles swirl around each other, never
+   * pile up or fly apart) — central-difference partial derivatives of
+   * each Ψ component, combined per the textbook 3D curl definition.
+   * ------------------------------------------------------------- */
+  const CURL_PERM = (() => {
+    const p = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) p[i] = i;
+    let seed = 1337;
+    function rand() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+    for (let i = 255; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      const tmp = p[i]; p[i] = p[j]; p[j] = tmp;
+    }
+    const perm = new Uint8Array(512);
+    for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+    return perm;
+  })();
+  const CURL_GRAD3 = [
+    [1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],
+    [0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1],
+  ];
+  function simplex3(xin, yin, zin) {
+    const F3 = 1 / 3, G3 = 1 / 6;
+    const s = (xin + yin + zin) * F3;
+    const i = Math.floor(xin + s), j = Math.floor(yin + s), k = Math.floor(zin + s);
+    const t = (i + j + k) * G3;
+    const x0 = xin - (i - t), y0 = yin - (j - t), z0 = zin - (k - t);
+    let i1, j1, k1, i2, j2, k2;
+    if (x0 >= y0) {
+      if (y0 >= z0) { i1=1;j1=0;k1=0; i2=1;j2=1;k2=0; }
+      else if (x0 >= z0) { i1=1;j1=0;k1=0; i2=1;j2=0;k2=1; }
+      else { i1=0;j1=0;k1=1; i2=1;j2=0;k2=1; }
+    } else {
+      if (y0 < z0) { i1=0;j1=0;k1=1; i2=0;j2=1;k2=1; }
+      else if (x0 < z0) { i1=0;j1=1;k1=0; i2=0;j2=1;k2=1; }
+      else { i1=0;j1=1;k1=0; i2=1;j2=1;k2=0; }
+    }
+    const x1 = x0 - i1 + G3, y1 = y0 - j1 + G3, z1 = z0 - k1 + G3;
+    const x2 = x0 - i2 + 2*G3, y2 = y0 - j2 + 2*G3, z2 = z0 - k2 + 2*G3;
+    const x3 = x0 - 1 + 3*G3, y3 = y0 - 1 + 3*G3, z3 = z0 - 1 + 3*G3;
+    const ii = i & 255, jj = j & 255, kk = k & 255;
+    function corner(gi, x, y, z) {
+      let t2 = 0.6 - x*x - y*y - z*z;
+      if (t2 < 0) return 0;
+      const g = CURL_GRAD3[gi % 12];
+      t2 *= t2;
+      return t2 * t2 * (g[0]*x + g[1]*y + g[2]*z);
+    }
+    const gi0 = CURL_PERM[ii + CURL_PERM[jj + CURL_PERM[kk]]];
+    const gi1 = CURL_PERM[ii+i1 + CURL_PERM[jj+j1 + CURL_PERM[kk+k1]]];
+    const gi2 = CURL_PERM[ii+i2 + CURL_PERM[jj+j2 + CURL_PERM[kk+k2]]];
+    const gi3 = CURL_PERM[ii+1 + CURL_PERM[jj+1 + CURL_PERM[kk+1]]];
+    const n0 = corner(gi0, x0, y0, z0);
+    const n1 = corner(gi1, x1, y1, z1);
+    const n2 = corner(gi2, x2, y2, z2);
+    const n3 = corner(gi3, x3, y3, z3);
+    return 32 * (n0 + n1 + n2 + n3);
+  }
+  const CURL_EPS = 0.09;
+  const curlOut = new Float32Array(3);
+  // Three independent potential-field components, Psi = (p, q, r) —
+  // offset from each other in noise-space (a standard trick to decorrelate
+  // them cheaply, rather than three unrelated noise functions). curl(Psi)
+  // needs exactly six partial derivatives (textbook 3D curl definition):
+  // p's y- and z-derivative, q's z- and x-derivative, r's x- and
+  // y-derivative — each a central difference, 12 noise samples total.
+  function curlNoise3(x, y, z) {
+    const e = CURL_EPS;
+    const dPx_dy = (simplex3(x, y + e, z) - simplex3(x, y - e, z)) / (2 * e);
+    const dPx_dz = (simplex3(x, y, z + e) - simplex3(x, y, z - e)) / (2 * e);
+    const qx = x + 31.4;
+    const dPy_dz = (simplex3(qx, y, z + e) - simplex3(qx, y, z - e)) / (2 * e);
+    const dPy_dx = (simplex3(qx + e, y, z) - simplex3(qx - e, y, z)) / (2 * e);
+    const rx = x + 62.8;
+    const dPz_dx = (simplex3(rx + e, y, z) - simplex3(rx - e, y, z)) / (2 * e);
+    const dPz_dy = (simplex3(rx, y + e, z) - simplex3(rx, y - e, z)) / (2 * e);
+    curlOut[0] = dPz_dy - dPy_dz;
+    curlOut[1] = dPx_dz - dPz_dx;
+    curlOut[2] = dPy_dx - dPx_dy;
+    return curlOut;
   }
 
   /* A visible "brain" inside the translucent skull — the rendering above
@@ -656,38 +832,97 @@
    *     - deliberately not faked; see README.
    * ------------------------------------------------------------- */
 
-  // Outer shell — the "body": brightens, grows, and spins faster with
-  // real voice activity (audioGlow, in animate()/audioLoop() below).
-  const outerGeo = new THREE.SphereGeometry(1.7, 26, 20);
-  const outerWire = new THREE.WireframeGeometry(outerGeo);
-  const outerMat = new THREE.LineBasicMaterial({
-    color: 0xe8fbff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
-  });
-  const outerShell = new THREE.LineSegments(outerWire, outerMat);
-  faceGroup.add(outerShell);
-  // A second, larger + dimmer copy of the same shell for a cheap "poor
-  // man's bloom" — no EffectComposer/UnrealBloomPass in this vendored
-  // r128 setup, so the glow is faked by re-drawing the shell bigger and
-  // fainter underneath, same technique used throughout this page.
-  const outerGlowMat = new THREE.LineBasicMaterial({
-    color: 0xafeeff, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending,
-  });
-  const outerGlow = new THREE.LineSegments(outerWire, outerGlowMat);
-  faceGroup.add(outerGlow);
+  // Outer shell — the "body": a real curl-noise flow field (see the
+  // curlNoise3() writeup above), not a wireframe UV-sphere. A clean
+  // geometric sphere has visible latitude/longitude lines because that's
+  // literally what it is — direct feedback was that this reads as "a
+  // globe," not a living AI core. Every particle is seeded at an
+  // irregular radius around a rough sphere (not a perfect one — the
+  // "brain with waves" envelope from the reference images), then advected
+  // by the SAME smooth curl field every frame, so nearby particles swirl
+  // together in coherent tendrils rather than independently wobbling.
+  // Shared by buildFlowShell()'s initial seeding (so the shape is already
+  // organic before the first frame, and stays that way under
+  // prefers-reduced-motion, which freezes here rather than animating) and
+  // animate()'s per-frame advection (which just calls this again with a
+  // moving t) — one formula, not two copies that could quietly drift.
+  // Two octaves (a big low-frequency lobe shape, plus finer secondary
+  // bumps) is the standard technique for organic/blob shapes — a single
+  // frequency reads as either "bumpy sphere" (high freq) or just "a
+  // slightly squashed sphere" (low freq alone), not a real amoeba outline.
+  function blobRadius(baseRadius, dx, dy, dz, t) {
+    const blobT = t * 0.05;
+    const lobe = simplex3(dx * 0.55 + blobT, dy * 0.55 - blobT * 0.6, dz * 0.55 + blobT * 0.8);
+    const lobe2 = simplex3(dx * 1.3 - blobT * 1.4, dy * 1.3, dz * 1.3 + blobT * 1.1);
+    return baseRadius * (0.5 + (lobe * 0.5 + 0.5) * 0.85 + (lobe2 * 0.5 + 0.5) * 0.25);
+  }
 
-  // Individually pulsing dots on the outer shell (see addSizePulse
-  // above) — every dot grows/shrinks on its own random phase instead of
-  // a fixed size, the "always alive" look.
-  const outerDotsMat = new THREE.PointsMaterial({
-    size: 0.045, map: spriteTex, transparent: true, depthWrite: false,
-    blending: THREE.AdditiveBlending, color: 0x6fd8e8, opacity: 0.7,
-  });
-  const outerPhases = new Float32Array(outerGeo.attributes.position.count);
-  for (let i = 0; i < outerPhases.length; i++) outerPhases[i] = Math.random() * Math.PI * 2;
-  outerGeo.setAttribute("aPhase", new THREE.BufferAttribute(outerPhases, 1));
-  addSizePulse(outerDotsMat, 1.6, 0.45);
-  const faceDotsMat = outerDotsMat;
-  faceGroup.add(new THREE.Points(outerGeo, outerDotsMat));
+  function buildFlowShell(baseRadius, count, color, lineColor) {
+    const n = count;
+    const basePositions = new Float32Array(n * 3);
+    const positions = new Float32Array(n * 3);
+    const directions = new Float32Array(n * 3);
+    const phases = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const u = Math.random(), v = Math.random();
+      const theta = 2 * Math.PI * u;
+      const phi = Math.acos(2 * v - 1);
+      const dx = Math.sin(phi) * Math.cos(theta);
+      const dy = Math.sin(phi) * Math.sin(theta);
+      const dz = Math.cos(phi);
+      directions[i * 3] = dx; directions[i * 3 + 1] = dy; directions[i * 3 + 2] = dz;
+      // The real organic body shape (blobRadius, t=0 — static until
+      // animate() advects it), not a near-uniform radius: this is what's
+      // seen immediately on load and under prefers-reduced-motion (which
+      // freezes here rather than animating), so it needs to already look
+      // like a real amoeba/cell outline, not "a sphere that happens to
+      // move later." A uniform-ish radius here is exactly why direct
+      // feedback was "still looks like a planet/galaxy" — a round
+      // silhouette reads as a sphere regardless of surface texture.
+      const r = blobRadius(baseRadius, dx, dy, dz, 0) * (0.97 + Math.random() * 0.06);
+      const x = dx * r, y = dy * r, z = dz * r;
+      basePositions[i * 3] = x; basePositions[i * 3 + 1] = y; basePositions[i * 3 + 2] = z;
+      positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
+      phases[i] = Math.random() * Math.PI * 2;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute("aPhase", new THREE.BufferAttribute(phases, 1));
+    const mat = new THREE.PointsMaterial({
+      size: 0.05, map: spriteTex, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, color, opacity: 0.78,
+    });
+    addSizePulse(mat, 1.4, 0.4);
+    const points = new THREE.Points(geo, mat);
+
+    // Tendril threads connecting random pairs, periodically re-picked —
+    // the same technique buildBrain() already uses for synapses, applied
+    // here to get the connected-energy-thread look the reference footage
+    // shows instead of isolated floating dots.
+    const lineCount = Math.round(n * 0.12);
+    const lineEndpoints = new Array(lineCount);
+    const linePositions = new Float32Array(lineCount * 2 * 3);
+    function rewireLine(i) {
+      lineEndpoints[i] = [Math.floor(Math.random() * n), Math.floor(Math.random() * n)];
+    }
+    for (let i = 0; i < lineCount; i++) rewireLine(i);
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
+    const lineMat = new THREE.LineBasicMaterial({
+      color: lineColor, transparent: true, opacity: 0.26, blending: THREE.AdditiveBlending,
+    });
+    const lines = new THREE.LineSegments(lineGeo, lineMat);
+
+    const group = new THREE.Group();
+    group.add(points, lines);
+    return {
+      group, pointsMat: mat, n, basePositions, positions, directions, baseRadius,
+      posAttr: geo.attributes.position, lineEndpoints, lineGeo, rewireLine,
+    };
+  }
+  const flowShell = buildFlowShell(1.7, 1200, 0x8fe6f2, 0x6fd8e8);
+  faceGroup.add(flowShell.group);
+  const faceDotsMat = flowShell.pointsMat;
 
   // The "energy surface" — a real fresnel-rim-lit, simplex-noise-displaced
   // shader surface (not another wireframe) sitting just inside the outer
@@ -879,6 +1114,7 @@
   let brainPulse = 0;
   let brainIntensity = 0;
   let nextBrainRewireAt = 0;
+  let nextFlowRewireAt = 0;
   // Declared here (before animate() first runs) rather than down by
   // audioLoop() below, for the same reason as the `let`s above — a
   // variable referenced inside animate() must already exist the first
@@ -979,23 +1215,72 @@
       faceDotsMat.userData.shader.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
     }
 
-    // Outer "body" shell + orbit rings: brighten, grow, and spin faster
-    // with real voice activity (audioGlow — fed by the mic today via
-    // audioLoop() below, ready for real Core TTS output later, same
-    // hooks that used to drive the old head's mouth-open animation).
+    // Outer "body" flow shell + orbit rings: brighten, grow, and swirl
+    // faster with real voice activity (audioGlow — fed by the mic today
+    // via audioLoop() below, ready for real Core TTS output later, same
+    // hooks that used to drive the old head's mouth-open animation, then
+    // the old wireframe shell's rotation).
     {
       const voiceScale = 1 + audioGlow * 0.35;
-      outerShell.scale.setScalar(voiceScale);
-      outerGlow.scale.setScalar(1.035 * voiceScale);
-      outerMat.opacity = Math.min(1, 0.7 + audioGlow * 0.3);
+      flowShell.group.scale.setScalar(voiceScale);
       energySurface.scale.setScalar(voiceScale);
       energyMat.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
       energyMat.uniforms.uAudio.value = audioGlow;
       energyMat.uniforms.uThink.value = brainPulse;
       if (!REDUCED_MOTION) {
-        outerShell.rotation.y = t * (0.08 + audioGlow * 0.4);
         ringsGroup.rotation.z = t * (0.12 + audioGlow * 0.35);
         ringsGroup.rotation.x = Math.sin(t * 0.2) * 0.15;
+
+        // Real curl-noise advection (see curlNoise3() above): every
+        // particle samples the same smooth field at its current position
+        // and drifts along it, then gets pulled back a little toward its
+        // anchor point so the flow swirls AROUND the core's envelope
+        // instead of drifting away or collapsing inward — the standard
+        // way to keep a curl-noise field visually bounded to a shape.
+        // Amplitude never hits zero (turbBase) — per direct request, the
+        // Core must never sit still like a flat image — and grows further
+        // with real thinking/voice activity, same as every other signal
+        // on this page.
+        const turbBase = 0.22;
+        const turbAmp = turbBase + audioGlow * 0.85 + brainPulse * 0.55;
+        const flowT = t * 0.15;
+        const fp = flowShell.positions;
+        const fd = flowShell.directions;
+        const fbr = flowShell.baseRadius;
+        // Real body deformation, not just surface texture — see
+        // blobRadius() above: each particle's fixed DIRECTION from center
+        // (not its drifting position, so nearby directions stay
+        // correlated) plus real elapsed time drives real lobes/pseudopods
+        // that slowly migrate around the body, not a static bumpy sphere.
+        // This is the actual fix for "still looks like a planet/galaxy":
+        // direct feedback was that a round silhouette reads as a sphere
+        // no matter how organic its surface texture is — it needs to move
+        // "like a bacterium or a living cell," i.e. the outline itself
+        // has to undulate.
+        for (let i = 0; i < flowShell.n; i++) {
+          const ix = i * 3, iy = ix + 1, iz = ix + 2;
+          const dx = fd[ix], dy = fd[iy], dz = fd[iz];
+          const dynRadius = blobRadius(fbr, dx, dy, dz, t);
+          const targetX = dx * dynRadius, targetY = dy * dynRadius, targetZ = dz * dynRadius;
+          const c = curlNoise3(fp[ix] * 0.55 + flowT, fp[iy] * 0.55, fp[iz] * 0.55 - flowT * 0.7);
+          fp[ix] += c[0] * turbAmp * 0.018 - (fp[ix] - targetX) * 0.05;
+          fp[iy] += c[1] * turbAmp * 0.018 - (fp[iy] - targetY) * 0.05;
+          fp[iz] += c[2] * turbAmp * 0.018 - (fp[iz] - targetZ) * 0.05;
+        }
+        flowShell.posAttr.needsUpdate = true;
+
+        const flp = flowShell.lineGeo.attributes.position.array;
+        for (let i = 0; i < flowShell.lineEndpoints.length; i++) {
+          const [ia, ib] = flowShell.lineEndpoints[i];
+          flp[i * 6] = fp[ia * 3]; flp[i * 6 + 1] = fp[ia * 3 + 1]; flp[i * 6 + 2] = fp[ia * 3 + 2];
+          flp[i * 6 + 3] = fp[ib * 3]; flp[i * 6 + 4] = fp[ib * 3 + 1]; flp[i * 6 + 5] = fp[ib * 3 + 2];
+        }
+        flowShell.lineGeo.attributes.position.needsUpdate = true;
+
+        if (t > nextFlowRewireAt) {
+          for (let k = 0; k < 3; k++) flowShell.rewireLine(Math.floor(Math.random() * flowShell.lineEndpoints.length));
+          nextFlowRewireAt = t + 0.9;
+        }
       }
     }
 
@@ -1071,7 +1356,7 @@
     }
     if (!REDUCED_MOTION) ring.rotation.z = t * 0.15;
 
-    renderer.render(scene, camera);
+    composer.render();
   }
   animate();
 
@@ -1079,6 +1364,7 @@
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight); // resizes every added pass, including bloomPass
     // Re-fit the Core to the new aspect ratio (e.g. a phone rotated, or a
     // desktop window narrowed past the portrait breakpoint) without
     // disturbing the user's own orbit angle, just the distance.
@@ -1220,7 +1506,23 @@
    *    Falls back to a clearly-labeled DEMO feed only when Core isn't
    *    reachable, so nothing here is ever silently pretending to be real.
    * ------------------------------------------------------------- */
-  const MAX_ACTIVITY_LINES = 7;
+  // Real tool/email/URL content (file paths, email bodies, page titles)
+  // flows through here now that tool.requested/tool.executed show full
+  // arguments and results, not just a truncated summary — none of it was
+  // ever HTML-escaped before insertion via innerHTML below, which was
+  // already a latent XSS gap (any string in an event payload containing
+  // "<" could inject markup) and matters a lot more now that more of that
+  // raw content is actually shown. Escaped once, here, at render time.
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  const MAX_ACTIVITY_LINES = 60;
   const activityLinesEl = document.getElementById("activity-lines");
   const activityStatusEl = document.getElementById("activity-status");
   const jarvisCoreStatusEl = document.getElementById("jarvis-core-status");
@@ -1234,18 +1536,37 @@
     return "";
   }
 
+  // Real tool arguments/results, not just a name and an ok=true/false —
+  // per direct request: "whatever I ask it to do, I want to see, through
+  // Jarvis, how it does it." A generous cap (280 chars, not the previous
+  // 40-60) keeps one huge payload (a long email body, a big file listing)
+  // from swallowing the whole feed, with a clear "…" marker when truncated
+  // rather than silently cutting mid-value.
+  function codeSnippet(value, maxLen = 280) {
+    const json = JSON.stringify(value);
+    if (json === undefined) return "undefined";
+    return json.length > maxLen ? json.slice(0, maxLen) + "…" : json;
+  }
+
   function describeEvent(type, payload) {
     switch (type) {
       case "brain.request": return `brain.request  messages=${payload.messageCount}`;
       case "brain.response": return `brain.response  tool_calls=${payload.toolCallCount}  "${String(payload.text || "").slice(0, 46)}"`;
-      case "tool.requested": return `tool.requested  ${payload.toolCall && payload.toolCall.toolName}(${JSON.stringify(payload.toolCall && payload.toolCall.input || {}).slice(0, 40)})`;
-      case "tool.executed": return `tool.executed  ${payload.toolName}  ok=${payload.result && payload.result.success}`;
+      case "tool.requested": {
+        const call = payload.toolCall || {};
+        return `tool.requested  ${call.toolName}(${codeSnippet(call.input || {})})`;
+      }
+      case "tool.executed": {
+        const result = payload.result || {};
+        const detail = result.success ? codeSnippet(result.data) : `error: ${codeSnippet(result.error)}`;
+        return `tool.executed  ${payload.toolName}  ok=${result.success}  ${detail}`;
+      }
       case "tool.dispatched": return `tool.dispatched  ${payload.toolName} -> device:${String(payload.deviceId).slice(0, 8)}`;
-      case "permission.checked": return `permission.checked  ${payload.toolId}  allowed=${payload.result && payload.result.allowed}`;
+      case "permission.checked": return `permission.checked  ${payload.toolId}  allowed=${payload.result && payload.result.allowed}  (${payload.result && payload.result.reason || ""})`;
       case "device.registered": return `device.registered  ${payload.device && payload.device.name}`;
       case "device.connected": return `device.connected  ${String(payload.deviceId).slice(0, 8)}`;
       case "device.disconnected": return `device.disconnected  ${String(payload.deviceId).slice(0, 8)}  (${payload.reason})`;
-      default: return `${type}  ${JSON.stringify(payload).slice(0, 60)}`;
+      default: return `${type}  ${codeSnippet(payload, 120)}`;
     }
   }
 
@@ -1253,9 +1574,15 @@
     const time = new Date(timestamp || Date.now()).toLocaleTimeString([], { hour12: false });
     activityQueue.push({ time, text: describeEvent(type, payload || {}), kind: kindFor(type) });
     if (activityQueue.length > MAX_ACTIVITY_LINES) activityQueue.shift();
+    // Only auto-scroll to the newest line if the user was already at (or
+    // near) the bottom — otherwise a fast stream of events would keep
+    // yanking the view back down while they're scrolled up reading
+    // earlier activity, the same behavior every real terminal/console uses.
+    const wasNearBottom = activityLinesEl.scrollHeight - activityLinesEl.scrollTop - activityLinesEl.clientHeight < 24;
     activityLinesEl.innerHTML = activityQueue
-      .map((l) => `<div class="line"><span class="t">${l.time}</span>  <span class="${l.kind}">${l.text}</span></div>`)
+      .map((l) => `<div class="line"><span class="t">${l.time}</span>  <span class="${l.kind}">${escapeHtml(l.text)}</span></div>`)
       .join("");
+    if (wasNearBottom) activityLinesEl.scrollTop = activityLinesEl.scrollHeight;
     if (type === "brain.request" || type === "brain.response") {
       brainPulse = 1;
       // How big was this real thought? messageCount for a request, tool
@@ -1360,6 +1687,14 @@
   let audioCtx = null;
   let analyser = null;
   let audioData = null;
+  // A second, fully independent analyser for JARVIS's own voice (TTS
+  // output), separate from the "YOU" one above (the mic) — per direct
+  // request, each of "us" gets its own real meter instead of one shared
+  // one that can't tell the two apart. Idle/flat until connectAudioElement()
+  // below is actually fed real TTS audio, same honesty rule as everywhere
+  // else: no fabricated waveform standing in for it.
+  let analyserJarvis = null;
+  let audioDataJarvis = null;
   const voiceRing = document.getElementById("voice-ring");
 
   /* WhatsApp-voice-message-style bar meter — draws real analyser data
@@ -1410,6 +1745,19 @@
     audioData = new Uint8Array(analyser.frequencyBinCount);
   }
 
+  // The Jarvis analyser shares the same AudioContext (only one is allowed
+  // per page) but is otherwise a fully separate node graph — sampling one
+  // never affects the other, so "you" talking never lights up "Jarvis"'s
+  // meter and vice versa.
+  function ensureJarvisAnalyser() {
+    ensureAudioGraph();
+    if (analyserJarvis) return;
+    analyserJarvis = audioCtx.createAnalyser();
+    analyserJarvis.fftSize = 256;
+    analyserJarvis.smoothingTimeConstant = 0.75;
+    audioDataJarvis = new Uint8Array(analyserJarvis.frequencyBinCount);
+  }
+
   function sampleAudioLevel() {
     if (!analyser) return 0;
     analyser.getByteFrequencyData(audioData);
@@ -1418,70 +1766,116 @@
     return Math.min(1, (sum / audioData.length / 255) * 2.2);
   }
 
-  /* A real per-frequency-bin spectrum, not a single averaged level like
-     #voice-bars above — draws audioData (already sampled every frame by
-     sampleAudioLevel(), reused here rather than a second analyser read)
-     directly as bars, one per frequency bin, so this actually shows how
-     the voice's frequency content is shaped over time, not just its
-     overall loudness. Flat/dim while nothing is connected, same honesty
-     rule as every other real-data element on this page. */
-  const voiceSpectrumCanvas = document.getElementById("voice-spectrum");
-  const vsCtx = voiceSpectrumCanvas.getContext("2d");
-  const voiceStatusEl = document.getElementById("voice-status");
-  const VS_BARS = 24;
-  function resizeVoiceSpectrum() {
-    const rect = voiceSpectrumCanvas.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    voiceSpectrumCanvas.width = Math.max(1, rect.width * dpr);
-    voiceSpectrumCanvas.height = Math.max(1, rect.height * dpr);
+  function sampleJarvisLevel() {
+    if (!analyserJarvis) return 0;
+    analyserJarvis.getByteFrequencyData(audioDataJarvis);
+    let sum = 0;
+    for (let i = 0; i < audioDataJarvis.length; i++) sum += audioDataJarvis[i];
+    return Math.min(1, (sum / audioDataJarvis.length / 255) * 2.2);
   }
-  resizeVoiceSpectrum();
-  window.addEventListener("resize", resizeVoiceSpectrum);
 
-  function drawVoiceSpectrum() {
-    const w = voiceSpectrumCanvas.width, h = voiceSpectrumCanvas.height;
-    vsCtx.clearRect(0, 0, w, h);
-    const barW = w / VS_BARS;
-    // Most speech energy sits in the lower half of the FFT's frequency
-    // bins — sampling only the first ~60% of them (not the full range up
-    // to the Nyquist frequency) keeps every visible bar meaningful
-    // instead of half the display sitting flat at near-zero.
-    const usableBins = analyser ? Math.floor(audioData.length * 0.6) : 0;
-    for (let i = 0; i < VS_BARS; i++) {
-      const level = analyser ? (audioData[Math.floor((i / VS_BARS) * usableBins)] / 255) : 0;
-      const barH = Math.max(h * 0.04, level * h * 0.96);
-      const x = i * barW;
-      const y = h - barH;
-      const grad = vsCtx.createLinearGradient(0, h, 0, 0);
-      grad.addColorStop(0, analyser ? "rgba(111,216,232,0.9)" : "rgba(111,216,232,0.25)");
-      grad.addColorStop(1, analyser ? "rgba(255,177,92,0.9)" : "rgba(255,177,92,0.2)");
-      vsCtx.fillStyle = grad;
-      const bw = barW * 0.62;
-      vsCtx.fillRect(x + barW * 0.19, y, bw, barH);
+  /* A real per-frequency-bin spectrum, not a single averaged level like
+     #voice-bars above — draws already-sampled analyser data directly as
+     bars, one per frequency bin, so this actually shows how a voice's
+     frequency content is shaped over time (pitch/tone), not just its
+     overall loudness. Flat/dim while nothing is connected, same honesty
+     rule as everywhere else. One shared drawing function, parameterized
+     by which analyser/data/color to use, so YOU and JARVIS are pixel-for-
+     pixel the same real technique rather than two hand-duplicated copies.
+     Every viewer that renders differently would be worth double-checking
+     against the other — sharing the code makes that impossible to drift. */
+  const VS_BARS = 24;
+  function makeSpectrumMeter(canvasId, colorStopsActive, colorStopsIdle) {
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext("2d");
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.max(1, rect.width * dpr);
+      canvas.height = Math.max(1, rect.height * dpr);
     }
+    resize();
+    window.addEventListener("resize", resize);
+    return {
+      draw(activeAnalyser, data) {
+        const w = canvas.width, h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        const barW = w / VS_BARS;
+        // Most speech energy sits in the lower half of the FFT's
+        // frequency bins — sampling only the first ~60% keeps every
+        // visible bar meaningful instead of half the display sitting
+        // flat near-zero.
+        const usableBins = activeAnalyser ? Math.floor(data.length * 0.6) : 0;
+        const stops = activeAnalyser ? colorStopsActive : colorStopsIdle;
+        for (let i = 0; i < VS_BARS; i++) {
+          const level = activeAnalyser ? (data[Math.floor((i / VS_BARS) * usableBins)] / 255) : 0;
+          const barH = Math.max(h * 0.04, level * h * 0.96);
+          const x = i * barW;
+          const y = h - barH;
+          const grad = ctx.createLinearGradient(0, h, 0, 0);
+          grad.addColorStop(0, stops[0]);
+          grad.addColorStop(1, stops[1]);
+          ctx.fillStyle = grad;
+          const bw = barW * 0.62;
+          ctx.fillRect(x + barW * 0.19, y, bw, barH);
+        }
+      },
+    };
   }
+  const voiceStatusEl = document.getElementById("voice-status");
+  const voiceStatusJarvisEl = document.getElementById("voice-status-jarvis");
+  const youMeter = makeSpectrumMeter(
+    "voice-spectrum",
+    ["rgba(111,216,232,0.9)", "rgba(255,177,92,0.9)"],
+    ["rgba(111,216,232,0.25)", "rgba(255,177,92,0.2)"]
+  );
+  const jarvisMeter = makeSpectrumMeter(
+    "voice-spectrum-jarvis",
+    ["rgba(255,177,92,0.95)", "rgba(255,209,160,0.9)"],
+    ["rgba(255,177,92,0.22)", "rgba(255,209,160,0.18)"]
+  );
 
   (function audioLoop() {
     requestAnimationFrame(audioLoop);
-    const level = sampleAudioLevel();
-    audioGlow += (level - audioGlow) * 0.25;
+    const youLevel = sampleAudioLevel();
+    const jarvisLevel = sampleJarvisLevel();
+    // The Core's own body reactivity responds to whichever of "us" is
+    // louder right now — real today via the mic (proving the mechanism
+    // works, since Core has no TTS yet), and it'll pick up Jarvis's own
+    // voice for free the moment connectAudioElement() is fed real TTS
+    // output below, with zero further changes needed here.
+    const combined = Math.max(youLevel, jarvisLevel);
+    audioGlow += (combined - audioGlow) * 0.25;
     const glow = audioGlow;
     voiceRing.style.borderColor = `rgba(111,216,232,${(glow * 0.8).toFixed(2)})`;
     voiceRing.style.transform = `scale(${1 + glow * 0.15})`;
     voiceRing.style.boxShadow = glow > 0.05 ? `0 0 ${20 + glow * 60}px rgba(111,216,232,${glow * 0.5})` : "none";
-    drawVoiceBars(analyser ? level : 0);
-    drawVoiceSpectrum();
+    drawVoiceBars(analyser ? youLevel : 0);
+    youMeter.draw(analyser, audioData);
+    jarvisMeter.draw(analyserJarvis, audioDataJarvis);
   })();
 
   window.JarvisHologram = {
-    /** Feed a live <audio> or <video> element (e.g. Jarvis's TTS playback) into the reactive visualizer. */
+    /** Feed a live <audio> or <video> element (Jarvis's TTS playback) into the JARVIS voice meter. */
     connectAudioElement(mediaEl) {
-      ensureAudioGraph();
+      ensureJarvisAnalyser();
       const source = audioCtx.createMediaElementSource(mediaEl);
-      source.connect(analyser);
-      analyser.connect(audioCtx.destination);
+      source.connect(analyserJarvis);
+      analyserJarvis.connect(audioCtx.destination);
+      voiceStatusJarvisEl.textContent = "LIVE";
+      voiceStatusJarvisEl.classList.remove("demo");
+      voiceStatusJarvisEl.classList.add("live");
     },
-    /** Feed a raw MediaStream (e.g. from getUserMedia or a WebRTC/TTS stream) into the reactive visualizer. */
+    /** Feed a raw MediaStream (e.g. from getUserMedia, or Jarvis's own TTS via WebRTC) into the JARVIS voice meter. */
+    connectJarvisMediaStream(stream) {
+      ensureJarvisAnalyser();
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyserJarvis);
+      voiceStatusJarvisEl.textContent = "LIVE";
+      voiceStatusJarvisEl.classList.remove("demo");
+      voiceStatusJarvisEl.classList.add("live");
+    },
+    /** Feed a raw MediaStream (the mic button below uses this) into the YOU voice meter. */
     connectMediaStream(stream) {
       ensureAudioGraph();
       const source = audioCtx.createMediaStreamSource(stream);

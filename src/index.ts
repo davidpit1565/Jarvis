@@ -9,6 +9,11 @@ import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionService } from "@/permissions/PermissionService";
 import { readOnlyFileInfoTool } from "@/tools/filesystem/ReadOnlyFileInfoTool";
 import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationTool";
+import { openUrlTool } from "@/tools/system/OpenUrlTool";
+import { openApplicationTool } from "@/tools/system/OpenApplicationTool";
+import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
+import { clickElementTool } from "@/tools/system/ClickElementTool";
+import { typeTextTool } from "@/tools/system/TypeTextTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { MemoryStore } from "@/memory/MemoryStore";
@@ -44,6 +49,11 @@ function main() {
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
+  toolRegistry.registerTool(openUrlTool);
+  toolRegistry.registerTool(openApplicationTool);
+  toolRegistry.registerTool(composeEmailDraftTool);
+  toolRegistry.registerTool(clickElementTool);
+  toolRegistry.registerTool(typeTextTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
 
@@ -129,6 +139,16 @@ function main() {
     webAuthnService,
     sessionStore,
     audioLevelBroadcaster,
+    permissionService,
+    defaultUserId: DEFAULT_USER_ID,
+    // Approving a device's pairing is the one explicit, deliberate human
+    // decision this system already has to trust a specific device with —
+    // these are the SAFE_ACTION/CONFIRM device tools that would otherwise
+    // be permanently ungrantable (see JarvisWebSocketServerDependencies'
+    // own doc comment on this field for why). CONFIRM tools still ask
+    // per-invocation regardless (confirmViaChat below) — a grant here
+    // only means "may be asked," never "runs without asking."
+    autoGrantToolIdsOnApproval: ["OPEN_URL", "OPEN_APPLICATION", "COMPOSE_EMAIL_DRAFT", "CLICK_ELEMENT", "TYPE_TEXT"],
   });
   wsServer.start(config.port);
 

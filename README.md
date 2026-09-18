@@ -74,6 +74,42 @@ What's new in Phase 2:
   never touches a raw socket.
 - **First device tool**: `GET_ACTIVE_APPLICATION` — read-only, reports the
   frontmost application's name and bundle ID on the target device.
+- **First SAFE_ACTION device tools** — the first tools that actually *do*
+  something on the device rather than just reporting on it:
+  `OPEN_URL` (launches a URL in the default browser; only `http`/`https`
+  is accepted), `OPEN_APPLICATION` (launches a named, already-installed
+  application, matched by exact display name against `/Applications`,
+  `/System/Applications`, and `~/Applications` only), and
+  `COMPOSE_EMAIL_DRAFT` (opens a pre-filled `mailto:` draft in the default
+  mail client — **never sends**; the user reviews and sends it themselves).
+  Each has its own input validation (`src/tools/system/*Validation.ts`) run
+  by the Orchestrator via a new optional `DeviceTool.validateInput` hook
+  *before* the request is ever sent to a device — real defense in depth on
+  top of (never instead of) the Agent's own validation. Deliberately not
+  in scope: actually sending an email or closing/quitting an application —
+  those remain out of scope until their own explicit decision.
+- **First CONFIRM-level device tools — broader computer control, but only
+  on demand**: `CLICK_ELEMENT` (clicks a UI element in the frontmost app,
+  found by matching its accessible label — never raw screen coordinates;
+  fails on zero or multiple matches rather than guessing) and `TYPE_TEXT`
+  (simulates real keystrokes into whatever currently has focus). Direct
+  user decision: broader "do things on the computer for me" is wanted,
+  but strictly on-demand, never on the model's own initiative — which the
+  architecture already guarantees (every tool call originates from a real
+  user message via `Orchestrator.handleUserMessage`; there is no
+  autonomous background loop anywhere in this codebase). What these two
+  tools add on top of that is `PermissionLevel.CONFIRM`: unlike the
+  SAFE_ACTION tools above, either can act on anything the frontmost app
+  currently shows, so a human sees the *exact* element description or
+  text and must approve it fresh before every single invocation (see
+  "Confirmation flow" below) — a standing grant is never enough on its
+  own. Still deliberately out of scope: system-wide (not just frontmost-
+  app) element search, and any tool that reads screen contents (a
+  screenshot/OCR-based "click near this" tool) — narrower, auditable
+  scope than a general computer-use agent. See "Linux vs. macOS
+  validation" below for what's verified vs. still needs a real Mac (both
+  of these specifically also need the Accessibility permission granted
+  to the Agent, which no earlier tool required).
 - **Bilingual (Hebrew + English) conversation**: a fixed system instruction
   (`src/core/brain/systemPrompt.ts`) tells Claude to detect and respond in
   the user's language, including mixed Hebrew/English in one message. Tool
@@ -136,6 +172,20 @@ being unconditionally denied:
   used by both local and device tool execution, so the policy can't drift
   between the two paths.
 
+**A grant is required before any of this even applies** — `PermissionService.check()`
+only allows READ-level tools with no grant at all; every SAFE_ACTION/
+CONFIRM/DANGEROUS device tool needs an explicit, device-scoped grant
+first, and there was previously no way to issue one at all (the
+device's id isn't known until it registers, so it can't be granted at
+Core startup the way `SAVE_MEMORY` is). **Approving a device's pairing**
+(`bun run approve-device` — already the one explicit, deliberate "I
+trust this device" moment in this system) **now also grants it a
+configured list of device tools** (`autoGrantToolIdsOnApproval` passed to
+`JarvisWebSocketServer`, currently `OPEN_URL`/`OPEN_APPLICATION`/
+`COMPOSE_EMAIL_DRAFT`/`CLICK_ELEMENT`/`TYPE_TEXT`) — for SAFE_ACTION tools
+this makes them usable outright; for CONFIRM tools it only means "may be
+asked," never "skips being asked" (see above).
+
 ## Architecture
 
 ```
@@ -150,7 +200,13 @@ src/
 ├── tools/
 │   ├── registry/       ToolRegistry — allowlist of tools Claude may call
 │   ├── filesystem/     READ_ONLY_FILE_INFO — local tool
-│   ├── system/         GET_ACTIVE_APPLICATION — device tool (iMac first)
+│   ├── system/         GET_ACTIVE_APPLICATION (read-only); SAFE_ACTION
+│   │                   device tools OPEN_URL/OPEN_APPLICATION/
+│   │                   COMPOSE_EMAIL_DRAFT — each with its own
+│   │                   *Validation.ts checked by the Orchestrator before
+│   │                   dispatch; CONFIRM device tools CLICK_ELEMENT/
+│   │                   TYPE_TEXT — broader computer control, real
+│   │                   per-invocation human approval required every time
 │   └── memory/         SAVE_MEMORY / SEARCH_MEMORY — local, persistent memory tools
 ├── permissions/         PermissionService — (userId, toolId, deviceId) grants
 ├── memory/              MemoryStore — SQLite-backed explicit key/value store
@@ -632,12 +688,20 @@ contain no language-detection logic, by design.
 
 ## Current limitations
 
-- Only four registry-based tools exist: `READ_ONLY_FILE_INFO` (local),
-  `GET_ACTIVE_APPLICATION` (device — app name/bundle ID only),
-  `SAVE_MEMORY` and `SEARCH_MEMORY` (local, persistent key/value memory).
+- Nine registry-based tools exist: `READ_ONLY_FILE_INFO` (local),
+  `GET_ACTIVE_APPLICATION` (device, read-only), `OPEN_URL`/
+  `OPEN_APPLICATION`/`COMPOSE_EMAIL_DRAFT` (device, SAFE_ACTION),
+  `CLICK_ELEMENT`/`TYPE_TEXT` (device, CONFIRM — real per-invocation human
+  approval required every time, see "Confirmation flow" above), and
+  `SAVE_MEMORY`/`SEARCH_MEMORY` (local, persistent key/value memory). **All
+  six device tools' Agent-side implementations are unverified** — no
+  macOS toolchain in this environment, see "Linux vs. macOS validation".
   Real internet search exists separately, as Anthropic's own server-side
   `web_search` tool (opt-in via `JARVIS_WEB_SEARCH=true`), not through this
-  registry — see "Real internet search" above.
+  registry — see "Real internet search" above. No tool actually sends an
+  email, closes/quits an application, searches beyond the frontmost app,
+  or reads screen contents (no screenshot/OCR-based tool) — deliberately
+  out of scope, see "Phase 2 scope" above.
 - DeviceRegistry, PermissionService, and PairingService are all in-memory
   and reset on restart. (`MemoryStore` is the one exception — it is
   SQLite-backed and persists across restarts.)
@@ -708,6 +772,49 @@ of that gap; the rest is tracked explicitly below.
 - Menu bar UI rendering and permission prompts
 - `launchd` load/restart/persistence behavior
 - Code signing/notarization
+- **The three new SAFE_ACTION device tools** (`OPEN_URL`, `OPEN_APPLICATION`,
+  `COMPOSE_EMAIL_DRAFT` — see "Phase 2 scope" below): the Core-side tool
+  definitions, permission wiring, and input validation
+  (`validateUrl`/`validateAppName`/`validateEmailAddress`) are covered by
+  real, passing tests in this Linux environment (`tests/tools/
+  SystemActionTools.test.ts`, plus an Orchestrator test proving a device
+  tool's `validateInput` blocks dispatch before it ever reaches a device).
+  **The Swift Agent implementations
+  (`OpenUrl.swift`/`OpenApplication.swift`/`ComposeEmailDraft.swift`) are
+  unverified** — written following this repo's own established practice for
+  every Agent tool (see the header comment each carries: "REQUIRES REAL
+  macOS VALIDATION... never compiled or run in this environment") — not a
+  new exception to the rule, the existing rule applied to new code. Real
+  validation needed before relying on them: `swift build` succeeds, each
+  tool actually launches a URL/application/mail-compose window when called
+  end to end from Core through a real Agent, and `OpenApplicationTool`'s
+  name-to-path matching (checked against `/Applications`,
+  `/System/Applications`, `~/Applications` only, by design — see the file's
+  own comment) actually finds real installed apps by their display name.
+- **The two new CONFIRM device tools** (`CLICK_ELEMENT`, `TYPE_TEXT`): same
+  split as above — Core-side definitions/permission-level/`validateInput`
+  covered by real passing tests here (`tests/tools/SystemActionTools.test.ts`,
+  plus `tests/integration/pairingApprovalHttp.test.ts`'s new test proving
+  device approval grants exactly the configured tool list, scoped to that
+  device, and that a CONFIRM grant never sets `requiresConfirmation` to
+  false). **The Swift Agent implementations
+  (`ClickElement.swift`/`TypeText.swift`) are unverified**, same
+  "REQUIRES REAL macOS VALIDATION" practice as every other Agent tool.
+  Two things specifically need real-Mac validation before relying on
+  these, beyond the general rule above:
+  - **The Accessibility permission** (System Settings → Privacy &
+    Security → Accessibility) must actually be granted to this Agent —
+    neither tool can do anything without it, and this environment can't
+    confirm what the actual permission-prompt/denial flow looks like in
+    practice.
+  - `ClickElementTool`'s accessibility-tree search (`AXUIElementCopyAttributeValue`
+    walking `kAXChildrenAttribute`, matching `kAXTitleAttribute`/
+    `kAXDescriptionAttribute`/`kAXValueAttribute`) needs real testing
+    against real apps — different UI frameworks (AppKit, SwiftUI, a web
+    view embedded in a native app) expose their accessibility trees
+    differently, and whether the "exactly one match or fail" rule
+    behaves usefully in practice (too strict? too loose?) is something
+    only real use against real apps can answer.
 
 ## Planned future phases
 

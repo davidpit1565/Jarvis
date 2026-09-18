@@ -207,6 +207,14 @@ export class Orchestrator {
       return;
     }
 
+    if (tool.validateInput) {
+      const validation = tool.validateInput(toolCall.input);
+      if (!validation.valid) {
+        this.completeToolCall(toolCall, { success: false, error: `Invalid input: ${validation.reason}` });
+        return;
+      }
+    }
+
     try {
       const result = await deviceConnectionManager.sendToolRequest(targetDevice.id, tool.name, toolCall.input);
       eventBus.emit("tool.executed", { toolName: tool.name, requestId: toolCall.id, result });
