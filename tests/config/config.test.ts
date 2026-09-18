@@ -34,6 +34,7 @@ const ENV_KEYS = [
   "TELEGRAM_ALLOWED_CHAT_IDS",
   "JARVIS_WEATHER_LATITUDE",
   "JARVIS_WEATHER_LONGITUDE",
+  "JARVIS_COST_ALERT_THRESHOLD_USD",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -362,6 +363,30 @@ describe("loadConfig", () => {
   test("throws when weather latitude is not a valid number", () => {
     process.env.JARVIS_WEATHER_LATITUDE = "not-a-number";
     process.env.JARVIS_WEATHER_LONGITUDE = "34.78";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("reads JARVIS_COST_ALERT_THRESHOLD_USD when set", () => {
+    process.env.JARVIS_COST_ALERT_THRESHOLD_USD = "25";
+    const config = loadConfig();
+    expect(config.costAlertThresholdUsd).toBe(25);
+  });
+
+  test("leaves costAlertThresholdUsd undefined when unset", () => {
+    const config = loadConfig();
+    expect(config.costAlertThresholdUsd).toBeUndefined();
+  });
+
+  test("rejects a non-positive JARVIS_COST_ALERT_THRESHOLD_USD", () => {
+    process.env.JARVIS_COST_ALERT_THRESHOLD_USD = "0";
+    expect(() => loadConfig()).toThrow(ConfigError);
+
+    process.env.JARVIS_COST_ALERT_THRESHOLD_USD = "-5";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("rejects a non-numeric JARVIS_COST_ALERT_THRESHOLD_USD", () => {
+    process.env.JARVIS_COST_ALERT_THRESHOLD_USD = "not-a-number";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 });

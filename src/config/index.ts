@@ -98,6 +98,15 @@ export interface JarvisConfig {
   weatherLatitude?: number;
   weatherLongitude?: number;
   /**
+   * Optional all-time estimated-cost threshold (USD). When set, JARVIS
+   * warns (console + activity log) once cumulative estimated spend
+   * crosses 75%, 90%, and 100% of it — each stage fires once, not on
+   * every call past it. All-time, not daily/monthly, since
+   * TokenUsageStore only tracks a running total; a real budget period
+   * would need time-windowed queries this doesn't have yet.
+   */
+  costAlertThresholdUsd?: number;
+  /**
    * Shared secret required on POST /pairing/approve. Mandatory once the
    * phone gateway is configured, since that makes this same server
    * reachable from the public internet — without it, the pairing code
@@ -301,6 +310,12 @@ export function loadConfig(): JarvisConfig {
     );
   }
 
+  const costAlertThresholdRaw = process.env.JARVIS_COST_ALERT_THRESHOLD_USD?.trim();
+  const costAlertThresholdUsd = costAlertThresholdRaw ? Number(costAlertThresholdRaw) : undefined;
+  if (costAlertThresholdRaw && (Number.isNaN(costAlertThresholdUsd) || costAlertThresholdUsd! <= 0)) {
+    throw new ConfigError("JARVIS_COST_ALERT_THRESHOLD_USD must be a positive number");
+  }
+
   return {
     anthropicApiKey,
     port,
@@ -342,6 +357,7 @@ export function loadConfig(): JarvisConfig {
     telegramAllowedChatIds,
     weatherLatitude,
     weatherLongitude,
+    costAlertThresholdUsd,
   };
 }
 

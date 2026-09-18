@@ -1048,6 +1048,15 @@ pricing for — an unlisted model reports cost as unavailable (`null`)
 rather than guessing, since a wrong number is worse than none for
 something you're explicitly watching to keep near-free.
 
+Setting `JARVIS_COST_ALERT_THRESHOLD_USD` adds staged budget alerts on top
+of this: JARVIS warns (console + the dashboard's activity log) once
+cumulative estimated cost crosses 75%, 90%, and 100% of that value, each
+stage firing exactly once rather than spamming a warning on every call
+past it (`src/audit/CostAlertMonitor.ts`). This is all-time, not a
+monthly reset — `TokenUsageStore` only tracks a running total, so a real
+recurring budget period would need time-windowed queries this doesn't
+have yet.
+
 ## Running the brain through a local model gateway instead of Anthropic's API
 
 `JARVIS_ANTHROPIC_BASE_URL` points `ClaudeBrain` at any Anthropic-compatible

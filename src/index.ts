@@ -19,6 +19,8 @@ import { ReminderStore } from "@/reminders/ReminderStore";
 import { buildContextNote } from "@/core/buildContextNote";
 import { ToolAuditLog } from "@/audit/ToolAuditLog";
 import { TokenUsageStore } from "@/audit/TokenUsageStore";
+import { CostAlertMonitor } from "@/audit/CostAlertMonitor";
+import { estimateCostUsd } from "@/audit/estimateCostUsd";
 import { createCreateReminderTool } from "@/tools/reminders/CreateReminderTool";
 import { createListRemindersTool } from "@/tools/reminders/ListRemindersTool";
 import { createCompleteReminderTool } from "@/tools/reminders/CompleteReminderTool";
@@ -107,6 +109,13 @@ function main() {
   const activityLog = new ActivityLog(config.activityLogDbPath);
   const toolAuditLog = new ToolAuditLog(config.toolAuditLogDbPath);
   const tokenUsageStore = new TokenUsageStore(config.tokenUsageDbPath);
+  const costAlertMonitor = config.costAlertThresholdUsd
+    ? new CostAlertMonitor(config.costAlertThresholdUsd, (stagePercent, costUsd, thresholdUsd) => {
+        const message = `Estimated cost has reached ${Math.round(stagePercent * 100)}% of your $${thresholdUsd} threshold ($${costUsd.toFixed(2)} so far, all-time).`;
+        console.warn(`[jarvis] COST ALERT: ${message}`);
+        activityLog.record(message);
+      })
+    : undefined;
   const webAuthnStore = new WebAuthnStore(config.webauthnDbPath);
   const webAuthnService = new WebAuthnService(webAuthnStore);
   const sessionStore = new SessionStore();
@@ -443,7 +452,13 @@ function main() {
 
   eventBus.on("brain.response", ({ text, toolCallCount, serverToolUses, usage }) => {
     console.log(`[jarvis] brain responded (toolCalls=${toolCallCount}): ${text.slice(0, 120)}`);
-    if (usage) tokenUsageStore.record(usage);
+    if (usage) {
+      tokenUsageStore.record(usage);
+      if (costAlertMonitor) {
+        const costUsd = estimateCostUsd(tokenUsageStore.totals(), DEFAULT_MODEL);
+        if (costUsd !== undefined) costAlertMonitor.check(costUsd);
+      }
+    }
     if (serverToolUses?.includes("web_search")) {
       activityLog.record("Searching the web…", "thinking");
     }
