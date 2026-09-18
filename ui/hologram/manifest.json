@@ -1,0 +1,15 @@
+{
+  "name": "JARVIS Core",
+  "short_name": "JARVIS",
+  "description": "Live holographic view of the JARVIS Core — the AI's real-time activity, thinking, and voice state.",
+  "start_url": "/hologram",
+  "scope": "/hologram",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#03050a",
+  "theme_color": "#03050a",
+  "icons": [
+    { "src": "/hologram/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/hologram/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

@@ -118,6 +118,16 @@ export interface JarvisWebSocketServerDependencies {
 const SESSION_COOKIE = "jarvis_session";
 const HOLOGRAM_ASSET_PATH = join(import.meta.dir, "assets", "hologram.jpg");
 
+// The full standalone hologram visualizer (ui/hologram/ — the "Core" HUD
+// with its own README) used to only be opened as a local file (or from a
+// throwaway `python3 -m http.server`), pointed at Core over ?host=&port=.
+// Serving it directly from Core's own HTTP server at /hologram means a
+// deployed, publicly-reachable Core can hand a phone (or any browser) a
+// single URL that shows the real, live Core — same-origin, no query
+// params needed (see coreOrigin() in ui/hologram/index.html). Three
+// levels up from src/communication/websocket/ is the repo root.
+const HOLOGRAM_UI_DIR = join(import.meta.dir, "..", "..", "..", "ui", "hologram");
+
 function readCookie(req: Request, name: string): string | null {
   const header = req.headers.get("cookie");
   if (!header) return null;
@@ -200,6 +210,20 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/assets/hologram.jpg") {
             return new Response(Bun.file(HOLOGRAM_ASSET_PATH));
+          }
+
+          // The full hologram visualizer, served from Core itself — see
+          // HOLOGRAM_UI_DIR above. Same lock check as "/" (a real
+          // WebAuthn-gated screen makes sense here too once this is
+          // reachable from the open internet, not just localhost).
+          if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/hologram" || url.pathname === "/hologram/")) {
+            const { webAuthnService } = this.deps;
+            const locked = webAuthnService?.hasCredentials() && !this.hasValidSession(req);
+            if (locked) return new Response(LOCK_HTML, { headers: { "Content-Type": "text/html" } });
+            return new Response(Bun.file(join(HOLOGRAM_UI_DIR, "index.html")));
+          }
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname.startsWith("/hologram/")) {
+            return await this.serveHologramAsset(url.pathname.slice("/hologram/".length));
           }
 
           if (!isUpgradeRequest && url.pathname.startsWith("/auth/")) {
@@ -578,6 +602,26 @@ export class JarvisWebSocketServer {
     const { sessionStore } = this.deps;
     if (!sessionStore) return false;
     return sessionStore.isValid(readCookie(req, SESSION_COOKIE));
+  }
+
+  /**
+   * Serves one static file from ui/hologram/ by its path under /hologram/
+   * (three.min.js, postprocessing/*, shaders/*, facetrack/*, the sprite/
+   * texture assets, etc.) — everything the visualizer's own <script src>
+   * tags and fetch()es need once it's loaded from here instead of a local
+   * file:// open. `relPath` is attacker-controlled (the request URL), so
+   * this rejects any `..` segment before joining it onto HOLOGRAM_UI_DIR,
+   * and double-checks the resolved path still lands inside that directory
+   * — defense in depth against a path-traversal request ever reading a
+   * file outside ui/hologram/.
+   */
+  private async serveHologramAsset(relPath: string): Promise<Response> {
+    if (relPath.includes("..")) return new Response("Not found", { status: 404 });
+    const filePath = join(HOLOGRAM_UI_DIR, relPath);
+    if (!filePath.startsWith(HOLOGRAM_UI_DIR)) return new Response("Not found", { status: 404 });
+    const file = Bun.file(filePath);
+    if (!(await file.exists())) return new Response("Not found", { status: 404 });
+    return new Response(file);
   }
 
   /**

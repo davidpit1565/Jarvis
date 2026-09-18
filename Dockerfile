@@ -9,6 +9,12 @@ RUN bun install --frozen-lockfile --production
 
 COPY src ./src
 COPY tsconfig.json ./
+# The standalone hologram visualizer (ui/hologram/) — served directly by
+# Core at /hologram (see HOLOGRAM_UI_DIR in JarvisWebSocketServer.ts) so a
+# deployed Core can hand any browser, including a phone's, one URL that
+# shows the real, live Core. Without this the route 404s in production
+# even though it works from a local checkout.
+COPY ui ./ui
 
 # The interactive terminal chat loop (readline on stdin) is irrelevant in a
 # container with no attached TTY; only the HTTP/WebSocket server matters
