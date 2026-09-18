@@ -411,6 +411,10 @@ export class JarvisWebSocketServer {
             return this.handleMemoryHttp(req);
           }
 
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/audit-log") {
+            return this.handleAuditLogHttp(req, url);
+          }
+
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/assets/hologram.jpg") {
             return new Response(Bun.file(HOLOGRAM_ASSET_PATH));
           }
@@ -933,6 +937,30 @@ export class JarvisWebSocketServer {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
     }
     return Response.json({ memory: memoryStore.search("") });
+  }
+
+  /**
+   * GET /audit-log — read-only admin view of the full structured tool
+   * execution trail (ToolAuditLog), distinct from the summary stats
+   * already exposed via /status. Same admin-token gating rationale as
+   * GET /reminders/etc. Optional `?tool=TOOL_ID` and `?limit=N` query
+   * params, mirroring ToolAuditLog.list()'s own options.
+   */
+  private handleAuditLogHttp(req: Request, url: URL): Response {
+    const { adminToken, toolAuditLog } = this.deps;
+    if (!toolAuditLog) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    const toolName = url.searchParams.get("tool") ?? undefined;
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? Number(limitParam) : undefined;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+      return Response.json({ error: "limit must be a positive integer" }, { status: 400 });
+    }
+    return Response.json({ entries: toolAuditLog.list({ toolName, limit }) });
   }
 
   /**

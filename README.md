@@ -1251,8 +1251,12 @@ interaction resets it), not on every tick past the threshold.
 `GET /reminders`, `GET /memory`, and `GET /wakeup-calls` are read-only
 JSON views of everything stored in `ReminderStore` (including completed
 reminders), `MemoryStore`, and `WakeUpCallStore` — for actually seeing
-what JARVIS is tracking without having to ask it in conversation. Same
-`X-Jarvis-Admin-Token` gating as `POST /pairing/approve`: required
+what JARVIS is tracking without having to ask it in conversation.
+`GET /audit-log` (optional `?tool=TOOL_ID` and `?limit=N`) is the same
+kind of view over `ToolAuditLog`'s full structured tool-execution trail —
+every tool call's exact input, who ran it, and whether it succeeded —
+distinct from the aggregate `toolUsage` stats already in `GET /status`.
+Same `X-Jarvis-Admin-Token` gating as `POST /pairing/approve`: required
 whenever an admin token is configured, optional only for local
 development with none set.
 
