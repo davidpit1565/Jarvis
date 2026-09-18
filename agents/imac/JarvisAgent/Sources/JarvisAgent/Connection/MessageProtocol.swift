@@ -58,6 +58,14 @@ struct DeviceEventPayload: Codable {
 
 struct EmptyPayload: Codable {}
 
+/// A wake-word-triggered voice command transcribed on-device (the text
+/// after "Hey JARVIS") — see WakeWordListener.swift for where this is
+/// produced.
+struct VoiceTranscriptPayload: Codable {
+    let text: String
+    let wakeWord: String?
+}
+
 // MARK: - Core -> Device payloads
 
 struct ToolRequestPayload: Codable {
@@ -68,6 +76,12 @@ struct ToolRequestPayload: Codable {
 struct DeviceCommandPayload: Codable {
     let command: String
     let args: [String: AnyCodable]?
+}
+
+/// The spoken-back reply to a voice.transcript, to be read aloud via
+/// AVSpeechSynthesizer.
+struct VoiceReplyPayload: Codable {
+    let text: String
 }
 
 // MARK: - Helpers for constructing outbound messages

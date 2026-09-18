@@ -816,6 +816,51 @@ automated from here):
   protection), independent of the admin token, since Google's own
   redirect has no way to carry a header.
 
+## "Hey JARVIS" voice (Mac agent)
+
+Lets you talk to JARVIS out loud on the Mac, like Siri/Alexa: say "Hey
+JARVIS" followed by whatever you want, and it answers — spoken back,
+hands-free, no typing.
+
+**How it works:**
+
+- `agents/imac/.../Voice/WakeWordListener.swift` continuously transcribes
+  the microphone using Apple's own on-device Speech framework (no
+  third-party wake-word engine, no cloud dependency, no API key — same
+  "as close to free as possible" reasoning as `GET_WEATHER`'s choice of
+  Open-Meteo). Nothing is sent anywhere until the wake phrase ("Hey
+  JARVIS", "Hi JARVIS", "OK JARVIS", or the Hebrew "היי ג'רוויס") is
+  actually heard in the running transcript.
+- Once heard, everything said after the wake phrase — up to a ~1.5s
+  pause — is sent to Core as a new `voice.transcript` WebSocket message
+  (`src/communication/websocket/protocol.ts`).
+- `DeviceVoiceGateway` (`src/communication/voice/DeviceVoiceGateway.ts`)
+  routes it through `Orchestrator.handleUserMessage` — the exact same
+  path every other channel (terminal, Telegram, phone) uses, with its
+  own persistent conversation per paired device (like a Telegram chat:
+  kept for the life of the process, not one utterance's duration). A
+  `CONFIRM`/`DANGEROUS` tool gets a real spoken "yes or no" prompt over
+  the same channel, mirroring Telegram's `awaitConfirmation` rather than
+  the phone's auto-deny.
+- The reply comes back as `voice.reply`, spoken aloud on-device via
+  `AVSpeechSynthesizer`.
+- A voice command is not a separate trust boundary: it goes through the
+  exact same `PermissionService` checks, tool allowlist, and audit log
+  as every other channel — see the iMac Agent's own README for the full
+  security note.
+
+**Status:** source-complete but **unvalidated against a real
+microphone/Core** — see `agents/imac/JarvisAgent/README.md`'s "What
+requires further real iMac validation" for what's actually confirmed
+working versus still needs a real run. Also requires packaging the Agent
+with an `Info.plist` carrying `NSMicrophoneUsageDescription`/
+`NSSpeechRecognitionUsageDescription` before macOS will even prompt for
+permission — not yet done for the raw `swift build` executable this
+project ships today.
+
+iPhone support (the same wake-word experience on the phone) is a planned
+follow-up, not implemented yet.
+
 ## Telegram integration
 
 Lets you talk to JARVIS through Telegram, from a bot you add to specific

@@ -36,6 +36,13 @@ Hybrid menu bar app + `launchd` user agent, sharing one executable:
   Core sends.
 - `StatusBar/StatusItemController.swift` — the menu bar UI.
 - `Logging/Logger.swift` — `OSLog` wrapper; never logs credentials.
+- `Voice/WakeWordListener.swift` — always-on "Hey JARVIS" wake-word
+  listening via Apple's own on-device Speech framework (no third-party
+  wake-word engine, no cloud dependency) — continuously transcribes the
+  mic, watches for the wake phrase, and hands whatever follows it to Core
+  as a `voice.transcript` message once the user pauses. Speaks Core's
+  `voice.reply` back aloud via `AVSpeechSynthesizer`. See "Microphone and
+  Speech Recognition permissions" below.
 
 ## What has been validated on a real iMac
 
@@ -44,6 +51,18 @@ Hybrid menu bar app + `launchd` user agent, sharing one executable:
   `device.register`, receives its pairing code (printed to the terminal),
   and — after `bun run approve-device <id> <code>` on the Core side —
   receives and saves its credential via `KeychainStore`.
+
+## Microphone and Speech Recognition permissions
+
+`WakeWordListener` requests both `SFSpeechRecognizer.requestAuthorization`
+and `AVCaptureDevice.requestAccess(for: .audio)` at launch. macOS only
+shows the permission prompts (and TCC only remembers the grant) for a
+process that carries `NSMicrophoneUsageDescription` and
+`NSSpeechRecognitionUsageDescription` in an `Info.plist` — this raw
+`swift build` executable doesn't have one yet. Packaging this as a
+proper `.app` bundle (or adding `Info.plist` linker flags to the raw
+executable target) with both keys set is required before wake-word
+listening can request permission at all, let alone work.
 
 ## What requires further real iMac validation
 
@@ -55,10 +74,22 @@ Hybrid menu bar app + `launchd` user agent, sharing one executable:
 - `launchd` load/restart behavior
 - Code signing/notarization
 - Any Accessibility/local-network permission prompts
+- The entire `WakeWordListener` — microphone/Speech permission prompts,
+  the `Info.plist` packaging step above, wake-phrase detection accuracy,
+  silence-threshold tuning, and the actual round trip (mic → Core →
+  spoken reply) have never run against a real microphone or a real Core.
 
 ## Security
 
-The only implemented tool is `GET_ACTIVE_APPLICATION` (app name + bundle
-ID only, no window contents). There is intentionally no shell execution,
-AppleScript execution, sudo, filesystem write/delete, or input automation
-anywhere in this source.
+There is intentionally no shell execution, AppleScript execution, sudo,
+or input automation anywhere in this source — every capability is a
+named, compiled-in tool in `Tools/`, registered in `ToolRegistry.swift`.
+
+The wake-word listener transcribes continuously but only ever sends
+anything to Core once the wake phrase has actually been heard — nothing
+said before or between wake phrases leaves the machine. Whatever gets
+sent as a `voice.transcript` is then just another message into
+`Orchestrator.handleUserMessage` on the Core side (`DeviceVoiceGateway`):
+it goes through the exact same permission-level checks, confirmation
+flow, and tool allowlist as text typed in the terminal or sent over
+Telegram — a voice command is not a new, separate trust boundary.
