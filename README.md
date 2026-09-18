@@ -958,6 +958,13 @@ conversations too, not just the current one.
 - Every capability is an explicitly registered tool with an ID, schema,
   permission level, and (for device tools) a named, compiled-in Agent
   function — never a generic "run this" path.
+- **Core and the Agent's device tool lists can't silently drift apart** —
+  `tests/security/agentToolParity.test.ts` cross-checks every Core tool
+  declared `target: "device"` against the names actually registered in
+  the Agent's own `AgentToolRegistry.buildDefault()`, so a device tool
+  added to one side without the other (Core requesting a name the Agent
+  has no function for, or vice versa) fails CI instead of only showing
+  up as a runtime "Unknown tool" error on a real device.
 - Prompt-injection defense in the system prompt itself
   (`src/core/brain/systemPrompt.ts`): anything that comes back from a
   tool — a web search/fetch result, an email, a calendar event's text, a
