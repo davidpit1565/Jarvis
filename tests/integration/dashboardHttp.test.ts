@@ -427,6 +427,47 @@ describe("Dashboard HTTP routes", () => {
     expect(bytes.byteLength).toBeGreaterThan(0);
   });
 
+  test("GET /hologram (no trailing slash) redirects to /hologram/", async () => {
+    // Serving the same HTML at both URLs broke every relative asset path
+    // (`./three.min.js` etc.) on the no-slash form: the browser resolved
+    // them against `/` instead of `/hologram/`, they 404ed into the
+    // catch-all WebSocket-endpoint text response with the wrong MIME
+    // type, and the browser refused to execute them — silently killing
+    // the page's entire script, including every button's click listener.
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/hologram`, { redirect: "manual" });
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe("/hologram/");
+  });
+
+  test("GET /hologram/ serves the page and its relative assets resolve under /hologram/", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const page = await fetch(`http://localhost:${handle.port}/hologram/`);
+    expect(page.status).toBe(200);
+
+    const script = await fetch(`http://localhost:${handle.port}/hologram/three.min.js`);
+    expect(script.status).toBe(200);
+    expect(script.headers.get("Content-Type")).toContain("javascript");
+  });
+
   test("a WebSocket upgrade request to \"/\" still connects instead of getting the HTML page", async () => {
     const eventBus = new EventBus();
     const server = new JarvisWebSocketServer({
