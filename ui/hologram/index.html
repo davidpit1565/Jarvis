@@ -1338,10 +1338,13 @@
     return new THREE.Mesh(geo, mat);
   }
   const ringsGroup = new THREE.Group();
-  const orbitRing1 = buildEnergyRing(2.05, 2.09, 0x6fd8e8, 1.7, 3.0);
+  // Traveling-pulse speed toned down (was 1.7/-1.3) — same "too fast,
+  // not professional" feedback as the ring group's own rotation above;
+  // the lobe counts (spatial pulse count around the ring) are unchanged.
+  const orbitRing1 = buildEnergyRing(2.05, 2.09, 0x6fd8e8, 0.9, 3.0);
   orbitRing1.rotation.x = Math.PI / 2 + 0.35;
   ringsGroup.add(orbitRing1);
-  const orbitRing2 = buildEnergyRing(2.05, 2.09, 0xffb15c, -1.3, 2.0);
+  const orbitRing2 = buildEnergyRing(2.05, 2.09, 0xffb15c, -0.7, 2.0);
   orbitRing2.rotation.x = Math.PI / 2 - 0.35;
   orbitRing2.rotation.y = 0.6;
   ringsGroup.add(orbitRing2);
@@ -1604,7 +1607,12 @@
       energyMat.uniforms.uAudio.value = audioGlow;
       energyMat.uniforms.uThink.value = brainPulse;
       if (!REDUCED_MOTION) {
-        ringsGroup.rotation.z = t * (0.12 + audioGlow * 0.35);
+        // Base rotation speed toned down (was 0.12/0.35) — direct
+        // feedback that the rings read as "too fast" / "not like a
+        // professional Jarvis" rather than a calm, deliberate presence.
+        // Still speeds up with real voice activity, just from a slower
+        // resting pace.
+        ringsGroup.rotation.z = t * (0.07 + audioGlow * 0.22);
         ringsGroup.rotation.x = Math.sin(t * 0.2) * 0.15;
         // A third wobble axis, out of phase with X/Z — without it the
         // rings' only "extra" motion beyond the Core's own tumble was a
