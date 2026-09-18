@@ -26,6 +26,13 @@ describe("SEND_SMS tool", () => {
     expect(result.success).toBe(false);
   });
 
+  test("rejects a message over the length cap", async () => {
+    const tool = createSendSmsTool(makeSender(), "+15551234567");
+    const result = await tool.execute({ message: "x".repeat(1601) }, context);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("too long");
+  });
+
   test("always sends to the configured owner number, ignoring any other destination", async () => {
     let capturedTo: string | undefined;
     global.fetch = (async (_url: unknown, init?: RequestInit) => {

@@ -320,9 +320,10 @@ function main() {
     permissionService.grant(DEFAULT_USER_ID, "UNDO_LAST_ACTION");
   }
   if (gmailClient) {
-    // SAFE_ACTION per SendEmailTool/ReplyEmailTool's own reasoning: the
-    // effect (exact recipient, subject, body) is fully specified up front,
-    // same as CREATE_CALENDAR_EVENT — not CONFIRM/DANGEROUS.
+    // CONFIRM (see SendEmailTool/ReplyEmailTool's own doc comments): the
+    // grant only makes these tools askable at all — PermissionService
+    // still forces a fresh per-invocation confirmation regardless, same
+    // as CLEAR_CONVERSATION_HISTORY/UNLINK_CALENDAR above.
     permissionService.grant(DEFAULT_USER_ID, "SEND_EMAIL");
     permissionService.grant(DEFAULT_USER_ID, "REPLY_EMAIL");
   }

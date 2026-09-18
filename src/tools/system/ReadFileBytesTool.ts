@@ -1,5 +1,6 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { DeviceTool } from "@/types/tools";
+import { validateDeviceRelativePath } from "./devicePathValidation";
 
 /**
  * Reads ANY file (not just text — see READ_TEXT_FILE for that) on the
@@ -36,4 +37,7 @@ export const readFileBytesTool: DeviceTool = {
   },
   requiredPermission: PermissionLevel.READ,
   target: "device",
+  validateInput(input) {
+    return validateDeviceRelativePath(typeof input.path === "string" ? input.path : "");
+  },
 };

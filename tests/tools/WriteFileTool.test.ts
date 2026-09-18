@@ -32,4 +32,15 @@ describe("WRITE_FILE tool definition", () => {
       input_schema: writeFileTool.inputSchema,
     });
   });
+
+  describe("validateInput (Core-side defense in depth)", () => {
+    test("accepts a path inside an allowlisted folder", () => {
+      expect(writeFileTool.validateInput?.({ path: "Desktop/notes.txt" }).valid).toBe(true);
+    });
+
+    test("rejects a traversal or absolute path before it ever reaches the device", () => {
+      expect(writeFileTool.validateInput?.({ path: "Desktop/../../etc/passwd" }).valid).toBe(false);
+      expect(writeFileTool.validateInput?.({ path: "/etc/passwd" }).valid).toBe(false);
+    });
+  });
 });

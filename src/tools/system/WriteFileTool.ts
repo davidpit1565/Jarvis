@@ -1,5 +1,6 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { DeviceTool } from "@/types/tools";
+import { validateDeviceRelativePath } from "./devicePathValidation";
 
 /**
  * The first WRITE capability this Agent has ever had — every other file
@@ -36,4 +37,7 @@ export const writeFileTool: DeviceTool = {
   },
   requiredPermission: PermissionLevel.CONFIRM,
   target: "device",
+  validateInput(input) {
+    return validateDeviceRelativePath(typeof input.path === "string" ? input.path : "");
+  },
 };

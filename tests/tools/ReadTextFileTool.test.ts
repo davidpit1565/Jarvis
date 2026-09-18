@@ -31,4 +31,15 @@ describe("READ_TEXT_FILE tool definition", () => {
       input_schema: readTextFileTool.inputSchema,
     });
   });
+
+  describe("validateInput (Core-side defense in depth)", () => {
+    test("accepts a path inside an allowlisted folder", () => {
+      expect(readTextFileTool.validateInput?.({ path: "Desktop/notes.txt" }).valid).toBe(true);
+    });
+
+    test("rejects a traversal or absolute path before it ever reaches the device", () => {
+      expect(readTextFileTool.validateInput?.({ path: "Desktop/../../etc/passwd" }).valid).toBe(false);
+      expect(readTextFileTool.validateInput?.({ path: "/etc/passwd" }).valid).toBe(false);
+    });
+  });
 });

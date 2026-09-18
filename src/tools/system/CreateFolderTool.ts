@@ -1,5 +1,6 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { DeviceTool } from "@/types/tools";
+import { validateDeviceRelativePath } from "./devicePathValidation";
 
 /**
  * Creates a new folder on the target device, restricted to the Agent's own
@@ -25,9 +26,6 @@ export const createFolderTool: DeviceTool = {
   requiredPermission: PermissionLevel.SAFE_ACTION,
   target: "device",
   validateInput(input) {
-    if (typeof input.path !== "string" || input.path.trim().length === 0) {
-      return { valid: false, reason: "path must be a non-empty string" };
-    }
-    return { valid: true };
+    return validateDeviceRelativePath(typeof input.path === "string" ? input.path : "");
   },
 };

@@ -1,5 +1,6 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { DeviceTool } from "@/types/tools";
+import { validateDeviceRelativePath } from "./devicePathValidation";
 
 /**
  * Lists the entries of a directory on the target device — e.g. "what's
@@ -34,4 +35,7 @@ export const listDirectoryTool: DeviceTool = {
   },
   requiredPermission: PermissionLevel.READ,
   target: "device",
+  validateInput(input) {
+    return validateDeviceRelativePath(typeof input.path === "string" ? input.path : "");
+  },
 };
