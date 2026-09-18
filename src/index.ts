@@ -187,6 +187,17 @@ function main() {
     sessionStore,
     audioLevelBroadcaster,
     tokenUsageStore,
+    backupDbPaths: [
+      config.memoryDbPath,
+      config.webauthnDbPath,
+      config.remindersDbPath,
+      config.activityLogDbPath,
+      config.conversationHistoryDbPath,
+      config.pairingDbPath,
+      config.deviceRegistryDbPath,
+      config.toolAuditLogDbPath,
+      config.tokenUsageDbPath,
+    ],
   });
   const httpHandle = wsServer.start(config.port);
 

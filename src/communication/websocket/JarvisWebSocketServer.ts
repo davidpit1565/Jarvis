@@ -10,6 +10,7 @@ import type { ActivityLog } from "@/core/activity/ActivityLog";
 import type { TokenUsageStore } from "@/audit/TokenUsageStore";
 import { estimateCostUsd } from "@/audit/estimateCostUsd";
 import { DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
+import { createBackupArchive } from "@/backup/createBackupArchive";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
@@ -87,6 +88,15 @@ export interface JarvisWebSocketServerDependencies {
   audioLevelBroadcaster?: AudioLevelBroadcaster;
   /** Optional: exposes real token usage + estimated cost in GET /status. */
   tokenUsageStore?: TokenUsageStore;
+  /**
+   * Every SQLite database file path this instance is configured to use.
+   * When set alongside `adminToken`, enables GET /backup: an admin-gated
+   * download of all of them as one gzip'd tar, for actual disaster
+   * recovery. Without an admin token configured, /backup always 404s —
+   * this dumps everything including paired-device and WebAuthn
+   * credentials, so it must never be reachable without one.
+   */
+  backupDbPaths?: string[];
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -217,6 +227,10 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
             return this.handleStatusJson();
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/backup") {
+            return this.handleBackupHttp(req, server);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/assets/hologram.jpg") {
@@ -563,6 +577,32 @@ export class JarvisWebSocketServer {
         ? { ...tokenUsage, estimatedCostUsd: estimateCostUsd(tokenUsage, DEFAULT_MODEL) ?? null }
         : undefined,
     });
+  }
+
+  /**
+   * GET /backup — downloads a gzip'd tar of every configured SQLite
+   * database (memory, reminders, pairing/device credentials, transcripts,
+   * etc.) for disaster recovery. Always requires the admin token: unlike
+   * other admin-gated routes, there is no "optional for local dev" case
+   * here — this endpoint's whole purpose is to hand out everything,
+   * credentials included, so an unset admin token means 404, not "open."
+   */
+  private handleBackupHttp(req: Request, server: BunServer): Response {
+    const { adminToken, backupDbPaths } = this.deps;
+
+    if (!adminToken) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "backup"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+
+    if (!constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    return createBackupArchive(backupDbPaths ?? []);
   }
 
   private hasValidSession(req: Request): boolean {

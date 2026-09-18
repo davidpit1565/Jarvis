@@ -776,6 +776,29 @@ pricing for — an unlisted model reports cost as unavailable (`null`)
 rather than guessing, since a wrong number is worse than none for
 something you're explicitly watching to keep near-free.
 
+## Backups
+
+`GET /backup` downloads a single gzip'd tar of every SQLite database
+JARVIS uses — memory, reminders, paired-device credentials, WebAuthn
+credentials, conversation history, activity log, tool audit trail, token
+usage — the only real way to recover from a lost or corrupted data volume,
+since nothing else in this project copies these files anywhere.
+
+Always requires `JARVIS_ADMIN_TOKEN` via the `X-Jarvis-Admin-Token`
+header, with no "open for local dev" exception: unlike other admin-gated
+routes, an unset admin token makes `/backup` 404 rather than serve
+unauthenticated, since this endpoint hands out every credential the
+server holds. Also rate-limited, same as the other admin endpoints.
+
+```
+curl -H "X-Jarvis-Admin-Token: $JARVIS_ADMIN_TOKEN" \
+  https://your-jarvis-host/backup -o jarvis-backup.tar.gz
+```
+
+This is a best-effort file copy, not a hot/transactional backup — fine
+for a single-writer assistant triggered manually, not meant for point-in-
+time recovery under heavy concurrent writes.
+
 ## Reliability
 
 A handful of additions aimed specifically at "survives a real cloud
