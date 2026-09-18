@@ -1180,11 +1180,19 @@
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
 
-      leftLines[2][1] = `${data.tools.length} REGISTERED`;
-      leftLines[2][2] = Math.min(1, data.tools.length / 8);
+      // Core's /status now returns devices/tools as real arrays (shared
+      // with its own dashboard at src/communication/websocket/dashboard.ts,
+      // one real contract instead of two endpoints drifting apart) rather
+      // than pre-aggregated counts — aggregate here instead.
+      const toolCount = data.tools.length;
+      const deviceTotal = data.devices.length;
+      const deviceOnline = data.devices.filter((d) => d.status === "online").length;
 
-      rightLines[0][1] = data.devices.total === 0 ? "NONE REGISTERED" : `${data.devices.online}/${data.devices.total} ONLINE`;
-      rightLines[0][2] = data.devices.total === 0 ? 0 : data.devices.online / data.devices.total;
+      leftLines[2][1] = `${toolCount} REGISTERED`;
+      leftLines[2][2] = Math.min(1, toolCount / 8);
+
+      rightLines[0][1] = deviceTotal === 0 ? "NONE REGISTERED" : `${deviceOnline}/${deviceTotal} ONLINE`;
+      rightLines[0][2] = deviceTotal === 0 ? 0 : deviceOnline / deviceTotal;
       rightLines[2][1] = `${data.observers} CONNECTED`;
       rightLines[2][2] = Math.min(1, data.observers / 3);
 

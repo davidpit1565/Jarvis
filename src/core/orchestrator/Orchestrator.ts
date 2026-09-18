@@ -7,7 +7,9 @@ import type { EventBus } from "@/core/events/EventBus";
 import type { ToolCallRequest } from "@/types/conversation";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
+import type { ConfirmationService } from "@/core/confirmation/ConfirmationService";
 import type { DeviceTool, LocalTool, Tool, ToolResult } from "@/types/tools";
+import type { PermissionCheckResult } from "@/types/permissions";
 import { JARVIS_SYSTEM_PROMPT } from "@/core/brain/systemPrompt";
 
 export interface OrchestratorDependencies {
@@ -19,6 +21,15 @@ export interface OrchestratorDependencies {
   /** Required only if any registered tool has `target: "device"`. */
   deviceRegistry?: DeviceRegistry;
   deviceConnectionManager?: DeviceConnectionManager;
+  /** Required only if any registered tool requires CONFIRM/DANGEROUS. */
+  confirmationService?: ConfirmationService;
+  /**
+   * Extra text appended to the system prompt for this Orchestrator's
+   * conversations only — e.g. telling Claude it's on a phone call so it
+   * knows to keep replies short and speakable. Leave unset for the default
+   * (text-only) channel.
+   */
+  channelContext?: string;
 }
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -27,14 +38,16 @@ const MAX_TOOL_ITERATIONS = 5;
  * The central JARVIS loop: user message -> Claude -> tool decision ->
  * permission check -> tool execution -> result back to Claude -> final
  * response. Claude only ever *requests* tools; this class is the sole
- * place that decides whether a tool actually runs, and whether it runs
- * locally in Core or is dispatched to a device agent.
+ * place that decides whether a tool actually runs, whether it runs
+ * locally in Core or is dispatched to a device agent, and whether it
+ * needs a fresh human confirmation before it may run at all.
  */
 export class Orchestrator {
   constructor(private readonly deps: OrchestratorDependencies) {}
 
   async handleUserMessage(userId: string, content: string): Promise<string> {
-    const { brain, conversation, toolRegistry, eventBus } = this.deps;
+    const { brain, conversation, toolRegistry, eventBus, channelContext } = this.deps;
+    const systemPrompt = channelContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${channelContext}` : JARVIS_SYSTEM_PROMPT;
 
     conversation.addUserMessage(content);
 
@@ -44,12 +57,13 @@ export class Orchestrator {
       const response = await brain.chat({
         messages: conversation.getMessages(),
         tools: toolRegistry.toToolDefinitions(),
-        context: JARVIS_SYSTEM_PROMPT,
+        context: systemPrompt,
       });
 
       eventBus.emit("brain.response", {
         text: response.text,
         toolCallCount: response.toolCalls.length,
+        serverToolUses: response.serverToolUses,
       });
 
       if (response.toolCalls.length === 0) {
@@ -87,6 +101,53 @@ export class Orchestrator {
     await this.runDeviceTool(userId, tool, toolCall);
   }
 
+  /**
+   * Returns true if execution may proceed. Handles both the permission
+   * deny path and, for allowed-but-confirmation-required tools, actually
+   * obtaining that confirmation before returning true.
+   */
+  private async authorize(
+    userId: string,
+    tool: Tool,
+    toolCall: ToolCallRequest,
+    deviceId: string | undefined,
+    permissionResult: PermissionCheckResult
+  ): Promise<boolean> {
+    const { confirmationService } = this.deps;
+
+    if (!permissionResult.allowed) {
+      this.completeToolCall(toolCall, { success: false, error: `Permission denied: ${permissionResult.reason}` });
+      return false;
+    }
+
+    if (!permissionResult.requiresConfirmation) {
+      return true;
+    }
+
+    if (!confirmationService) {
+      this.completeToolCall(toolCall, {
+        success: false,
+        error: "This action requires confirmation, but no confirmation channel is configured",
+      });
+      return false;
+    }
+
+    const approved = await confirmationService.requestConfirmation({
+      toolId: tool.id,
+      toolName: tool.name,
+      userId,
+      deviceId,
+      input: toolCall.input,
+    });
+
+    if (!approved) {
+      this.completeToolCall(toolCall, { success: false, error: "User declined to confirm this action" });
+      return false;
+    }
+
+    return true;
+  }
+
   private async runLocalTool(userId: string, tool: LocalTool, toolCall: ToolCallRequest): Promise<void> {
     const { permissionService, eventBus } = this.deps;
 
@@ -98,8 +159,7 @@ export class Orchestrator {
 
     eventBus.emit("permission.checked", { toolId: tool.id, result: permissionResult });
 
-    if (!permissionResult.allowed) {
-      this.completeToolCall(toolCall, { success: false, error: `Permission denied: ${permissionResult.reason}` });
+    if (!(await this.authorize(userId, tool, toolCall, undefined, permissionResult))) {
       return;
     }
 
@@ -143,8 +203,7 @@ export class Orchestrator {
 
     eventBus.emit("permission.checked", { toolId: tool.id, result: permissionResult });
 
-    if (!permissionResult.allowed) {
-      this.completeToolCall(toolCall, { success: false, error: `Permission denied: ${permissionResult.reason}` });
+    if (!(await this.authorize(userId, tool, toolCall, targetDevice.id, permissionResult))) {
       return;
     }
 

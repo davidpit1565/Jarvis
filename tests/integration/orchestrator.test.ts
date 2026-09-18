@@ -143,6 +143,34 @@ describe("Orchestrator integration", () => {
     expect(parsed.error).toMatch(/Permission denied/);
   });
 
+  test("appends channelContext to the system prompt for a channel-specific Orchestrator", async () => {
+    const eventBus = new EventBus();
+    const toolRegistry = new ToolRegistry();
+    const permissionService = new PermissionService();
+    const conversation = new ConversationManager(eventBus);
+
+    let capturedContext = "";
+    const brain: Brain = {
+      async chat(request: BrainRequest): Promise<BrainResponse> {
+        capturedContext = request.context ?? "";
+        return { text: "On a call.", toolCalls: [], stopReason: "end_turn" };
+      },
+    };
+
+    const orchestrator = new Orchestrator({
+      brain,
+      conversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      channelContext: "This conversation is happening over a live phone call right now.",
+    });
+
+    await orchestrator.handleUserMessage("user-1", "hi");
+
+    expect(capturedContext).toContain("live phone call");
+  });
+
   test("reports an unknown tool name back to Claude instead of throwing", async () => {
     const brain = new ScriptedBrain([
       {

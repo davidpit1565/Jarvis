@@ -9,15 +9,16 @@ import { readOnlyFileInfoTool } from "@/tools/filesystem/ReadOnlyFileInfoTool";
 import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationTool";
 
 interface StatusResponseBody {
-  devices: { total: number; online: number };
-  tools: string[];
+  devices: Array<{ id: string; name: string; status: string }>;
+  tools: Array<{ name: string; target: string }>;
   observers: number;
 }
 
 /**
- * GET /status is what the hologram UI polls for real device/tool counts
- * instead of showing invented dashboard numbers — this proves it reports
- * Core's actual registered state, not a fixture.
+ * GET /status is the one real status feed both the dashboard and the
+ * hologram UI poll — this proves it reports Core's actual registered
+ * state, not a fixture, and that the hologram's own /observer count is
+ * folded into that same shared shape rather than a second endpoint.
  */
 function setupServer() {
   const eventBus = new EventBus();
@@ -54,8 +55,8 @@ describe("GET /status", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as StatusResponseBody;
 
-    expect(body.devices).toEqual({ total: 0, online: 0 });
-    expect(body.tools.sort()).toEqual(["get_active_application", "read_only_file_info"].sort());
+    expect(body.devices).toEqual([]);
+    expect(body.tools.map((t) => t.name).sort()).toEqual(["get_active_application", "read_only_file_info"].sort());
     expect(body.observers).toBe(0);
     // The hologram UI fetches this from a file:// page — without this
     // header the browser blocks reading the response even though the
@@ -81,7 +82,8 @@ describe("GET /status", () => {
     const res = await fetch(`http://localhost:${port}/status`);
     const body = (await res.json()) as StatusResponseBody;
 
-    expect(body.devices).toEqual({ total: 1, online: 1 });
+    expect(body.devices).toHaveLength(1);
+    expect(body.devices[0]?.status).toBe("online");
   });
 
   test("counts a connected /observer socket", async () => {

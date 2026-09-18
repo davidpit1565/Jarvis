@@ -25,6 +25,8 @@ export class PermissionService {
   /**
    * Grants a user standing access to a tool. `deviceId` scopes the grant
    * to a specific device; omit it for tools that run locally in Core.
+   * For CONFIRM/DANGEROUS tools, a grant means "the user has opted in to
+   * being asked" — it does not skip the per-invocation confirmation.
    */
   grant(userId: string, toolId: string, deviceId?: string): void {
     this.grants.add(grantKey(userId, toolId, deviceId));
@@ -38,15 +40,25 @@ export class PermissionService {
     const { subject, toolId, requiredLevel, deviceId } = request;
 
     if (!PERMISSION_LEVEL_ORDER.includes(requiredLevel)) {
-      return { allowed: false, reason: `Unknown permission level: ${requiredLevel}`, requiredLevel };
+      return {
+        allowed: false,
+        reason: `Unknown permission level: ${requiredLevel}`,
+        requiredLevel,
+        requiresConfirmation: false,
+      };
     }
 
-    // READ-level tools are allowed by default in Phase 1/2: they cannot
-    // mutate state, so requiring an explicit grant would add friction
-    // without a security benefit. This still applies per-device implicitly
-    // (a READ tool is READ regardless of target device).
+    // READ-level tools are allowed by default: they cannot mutate state,
+    // so requiring an explicit grant would add friction without a
+    // security benefit. This still applies per-device implicitly (a READ
+    // tool is READ regardless of target device).
     if (requiredLevel === "READ") {
-      return { allowed: true, reason: "READ-level tools are allowed by default", requiredLevel };
+      return {
+        allowed: true,
+        reason: "READ-level tools are allowed by default",
+        requiredLevel,
+        requiresConfirmation: false,
+      };
     }
 
     const hasGrant = this.grants.has(grantKey(subject.userId, toolId, deviceId));
@@ -57,20 +69,22 @@ export class PermissionService {
         allowed: false,
         reason: `User has no grant for ${scope} at level ${requiredLevel}`,
         requiredLevel,
+        requiresConfirmation: false,
       };
     }
 
-    // SAFE_ACTION is grantable outright. CONFIRM/DANGEROUS additionally
-    // require an explicit confirmation step, which Phase 1/2 does not
-    // implement — so they are denied even with a grant until that exists.
+    // CONFIRM/DANGEROUS: a grant permits the tool to be asked about, but
+    // the caller (Orchestrator) must still obtain a fresh confirmation
+    // for every single invocation before it may run.
     if (requiredLevel === "CONFIRM" || requiredLevel === "DANGEROUS") {
       return {
-        allowed: false,
-        reason: `Permission level ${requiredLevel} requires a confirmation flow not yet implemented`,
+        allowed: true,
+        reason: "Grant present; per-invocation confirmation still required",
         requiredLevel,
+        requiresConfirmation: true,
       };
     }
 
-    return { allowed: true, reason: "Explicit grant present", requiredLevel };
+    return { allowed: true, reason: "Explicit grant present", requiredLevel, requiresConfirmation: false };
   }
 }
