@@ -2694,15 +2694,29 @@
       let recognitionActive = false;
 
       function startListening() {
-        if (!voiceModeOn || speaking || awaitingReply || recognitionActive) return;
+        // Deliberately NOT gated on `speaking` — see speak() below: this
+        // is what lets the user interrupt JARVIS mid-sentence instead of
+        // having to wait for it to finish, like a real conversation.
+        if (!voiceModeOn || awaitingReply || recognitionActive) return;
         try {
           recognition.start();
           recognitionActive = true;
-          setStatus("LISTENING…", "live");
+          if (!speaking) setStatus("LISTENING…", "live");
         } catch (e) {
           // start() throws if already started (a race with a just-fired
           // 'end' event) — harmless, the next natural retry covers it.
         }
+      }
+
+      /// Hebrew and English replies both happen (JARVIS answers in
+      /// whichever language it's addressed in) — picking the utterance's
+      /// voice from `navigator.language` spoke Hebrew replies in an
+      /// English voice (unintelligible/wrong accent) whenever the browser
+      /// itself wasn't set to Hebrew. Detect the reply's own script
+      /// instead, same idea as the phone gateway's per-language voice
+      /// selection.
+      function pickSpeechLang(text) {
+        return /[֐-׿]/.test(text) ? "he-IL" : navigator.language || "en-US";
       }
 
       function speak(text) {
@@ -2710,19 +2724,24 @@
         voiceBtn.dataset.speaking = "1";
         setStatus("SPEAKING…", "live");
         const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = recognition.lang;
+        utterance.lang = pickSpeechLang(text);
         utterance.onend = utterance.onerror = () => {
           speaking = false;
           delete voiceBtn.dataset.speaking;
-          if (voiceModeOn) startListening();
+          if (voiceModeOn && !awaitingReply && !recognitionActive) startListening();
         };
         speechSynthesis.speak(utterance);
+        // Keep listening while JARVIS talks (barge-in) — the 'result'
+        // handler below cancels the utterance the moment the user says
+        // anything, rather than making them wait for JARVIS to finish.
+        startListening();
       }
 
       recognition.addEventListener("result", (ev) => {
         const text = ev.results[ev.results.length - 1][0].transcript.trim();
         recognitionActive = false;
         if (!text) return;
+        if (speaking) speechSynthesis.cancel(); // barge-in: stop talking, this is now the user's turn
         awaitingReply = true;
         setStatus("THINKING…", "demo");
         sendText(text);
@@ -2732,7 +2751,8 @@
         // The browser stops listening on its own after a pause even
         // mid-conversation (not just after a result) — restart unless
         // we're mid-reply or voice mode has since been turned off.
-        if (voiceModeOn && !speaking && !awaitingReply) startListening();
+        // Deliberately not blocked on `speaking` (see startListening()).
+        if (voiceModeOn && !awaitingReply) startListening();
       });
       recognition.addEventListener("error", (ev) => {
         recognitionActive = false;
