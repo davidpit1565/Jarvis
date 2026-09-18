@@ -20,7 +20,7 @@ interface StatusResponseBody {
  * state, not a fixture, and that the hologram's own /observer count is
  * folded into that same shared shape rather than a second endpoint.
  */
-function setupServer() {
+function setupServer(adminToken?: string) {
   const eventBus = new EventBus();
   const deviceRegistry = new DeviceRegistry();
   const pairingService = new PairingService();
@@ -34,6 +34,7 @@ function setupServer() {
     pairingService,
     eventBus,
     toolRegistry,
+    adminToken,
   });
   const handle = server.start(0);
   return { handle, port: handle.port, deviceRegistry };
@@ -102,5 +103,31 @@ describe("GET /status", () => {
     expect(body.observers).toBe(1);
 
     ws.close();
+  });
+
+  test("returns 401 with no admin token when one is configured", async () => {
+    const { handle, port } = setupServer("secret-token");
+    activeHandle = handle;
+
+    const res = await fetch(`http://localhost:${port}/status`);
+    expect(res.status).toBe(401);
+  });
+
+  test("accepts the admin token via header", async () => {
+    const { handle, port } = setupServer("secret-token");
+    activeHandle = handle;
+
+    const res = await fetch(`http://localhost:${port}/status`, {
+      headers: { "X-Jarvis-Admin-Token": "secret-token" },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test("accepts the admin token via query param, matching /chat's own convention", async () => {
+    const { handle, port } = setupServer("secret-token");
+    activeHandle = handle;
+
+    const res = await fetch(`http://localhost:${port}/status?token=secret-token`);
+    expect(res.status).toBe(200);
   });
 });

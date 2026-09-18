@@ -1969,6 +1969,17 @@
     return `${proto}://localhost:${q.get("port") || "4770"}`;
   }
 
+  // /status and /observer now require the same JARVIS_ADMIN_TOKEN as
+  // /chat once one is configured server-side (they used to be reachable
+  // with no auth at all — see JarvisWebSocketServer.ts). Shared with the
+  // chat panel below via the same localStorage key: whichever one first
+  // prompts for and saves a token, the others pick it up automatically on
+  // their next poll/reconnect.
+  const ADMIN_TOKEN_KEY = "jarvis_admin_token";
+  function readAdminToken() {
+    try { return localStorage.getItem(ADMIN_TOKEN_KEY) || ""; } catch (e) { return ""; }
+  }
+
   function setPanelStatus(isLive) {
     for (const id of ["status-indicator-left", "status-indicator-right"]) {
       const el = document.getElementById(id);
@@ -1981,7 +1992,15 @@
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 900);
-      const res = await fetch(`${coreOrigin("http")}/status`, { signal: controller.signal });
+      // Query param, not a custom header: a header on a cross-origin
+      // fetch() (the documented local-dev flow of serving this page from
+      // a different port than Core) triggers a CORS preflight the server
+      // doesn't answer, breaking that flow entirely. /status already
+      // accepts the token either way (see JarvisWebSocketServer.ts).
+      const token = readAdminToken();
+      const statusUrl = new URL(`${coreOrigin("http")}/status`);
+      if (token) statusUrl.searchParams.set("token", token);
+      const res = await fetch(statusUrl, { signal: controller.signal });
       clearTimeout(timeout);
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
@@ -2169,7 +2188,9 @@
   function connectObserver() {
     let socket;
     try {
-      socket = new WebSocket(`${coreOrigin("ws")}/observer`);
+      const observerToken = readAdminToken();
+      const observerUrl = coreOrigin("ws") + "/observer" + (observerToken ? "?token=" + encodeURIComponent(observerToken) : "");
+      socket = new WebSocket(observerUrl);
     } catch (e) {
       setActivityStatus(false);
       startDemoFeed();
