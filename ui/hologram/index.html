@@ -213,6 +213,19 @@
   #activity-lines .line .k-perm { color: #d3a8ff; }
   #activity-lines .line .k-device { color: #8bffb0; }
 
+  /* Real <button>s now (see the HTML comment above the markup), which
+     means picking up the browser's default button chrome (system font,
+     its own background/border) has to be explicitly undone — every other
+     property here was already true for the old styled <div>. A real
+     :focus-visible ring is added rather than removed, so tabbing to
+     either control is actually visible, which a bare div could never be
+     in the first place. */
+  #audio-ctl, #face-ctl {
+    font-family: inherit; -webkit-appearance: none; appearance: none;
+  }
+  #audio-ctl:focus-visible, #face-ctl:focus-visible {
+    outline: 2px solid #6fd8e8; outline-offset: 2px;
+  }
   #audio-ctl {
     position: fixed; right: 4%; bottom: 3%; z-index: 6;
     font-size: 9px; letter-spacing: 1.5px; color: #6fd8e8; opacity: 0.55;
@@ -311,8 +324,17 @@
 
   <canvas id="voice-bars"></canvas>
   <video id="face-cam" playsinline muted style="display:none"></video>
-  <div id="audio-ctl">🎙 CONNECT MIC</div>
-  <div id="face-ctl">👁 ENABLE FACE TRACKING</div>
+  <!-- Real <button>s, not styled <div>s (that's what they were before this
+       pass) — real keyboard focus/activation and a real accessible-name
+       announcement for free, from the browser's own button semantics. No
+       separate aria-label: it would freeze the accessible name at
+       whatever's set here, while the visible text already changes live
+       (MIC DENIED / MIC LIVE / FACE TRACKING LIVE, etc. — see the JS
+       below) and is itself a perfectly good accessible name, so a
+       screen reader announces whatever state is actually showing instead
+       of stale text. -->
+  <button id="audio-ctl" type="button">🎙 CONNECT MIC</button>
+  <button id="face-ctl" type="button">👁 ENABLE FACE TRACKING</button>
 
   <div id="plinth-wrap">
     <div id="plinth-glow"></div>

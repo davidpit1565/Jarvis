@@ -342,10 +342,20 @@ integrated one, clears 60fps easily either way.
   capping the plinth text's width so it wraps instead of reaching that far
   right. Both found and fixed by actually rendering the breakpoint, not by
   reading the media query and assuming it worked.
-- Not done: screen-reader semantics (this is a purely visual HUD with no
-  screen-reader-relevant content today) and touch-specific interactions
-  (the mic button works via a plain click/tap, nothing more elaborate is
-  needed yet).
+- The mic and face-tracking controls are real `<button>` elements, not
+  styled `<div>`s pretending to be buttons (which is what they actually
+  were before this pass — reachable by mouse only, invisible to a
+  keyboard). A real `<button>` gets keyboard focus, Enter/Space
+  activation, and a real accessible name for free from the browser, none
+  of which a `<div>` with a click handler provides no matter how it's
+  styled. A `:focus-visible` ring was added (rather than the usual mistake
+  of stripping the default outline for looks) so tabbing to either control
+  is actually visible — verified with a real keyboard-only Playwright
+  pass: `Tab` reaches each button, `Enter`/`Space` activates it, no mouse
+  click involved.
+- Not done: broader screen-reader semantics beyond the two real buttons
+  above (this is still primarily a visual HUD; the telemetry panels and
+  Core itself have no screen-reader-relevant equivalent today).
 
 ## Known limitations
 
