@@ -6,6 +6,7 @@ export interface UpdateWakeUpCallInput extends Record<string, unknown> {
   id: string;
   timeOfDay?: string;
   label?: string | null;
+  enabled?: boolean;
 }
 
 /**
@@ -20,15 +21,17 @@ export function createUpdateWakeUpCallTool(wakeUpCallStore: WakeUpCallStore): Lo
     id: "UPDATE_WAKEUP_CALL",
     name: "update_wakeup_call",
     description:
-      "Edits an existing scheduled wake-up/recurring call's time of day and/or label, given its id (from a " +
-      'prior create_wakeup_call or list_wakeup_calls call). Omit a field to leave it unchanged. Use this for ' +
-      '"actually wake me up at 8 instead" rather than deleting and recreating it.',
+      "Edits an existing scheduled wake-up/recurring call's time of day, label, and/or enabled state, given " +
+      'its id (from a prior create_wakeup_call or list_wakeup_calls call). Omit a field to leave it unchanged. ' +
+      'Use this for "actually wake me up at 8 instead" rather than deleting and recreating it, or to pause/' +
+      'resume it (e.g. "turn off my wake-up calls for now") without losing the schedule.',
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "string", description: "The wake-up call's id." },
         timeOfDay: { type: "string", description: 'New 24-hour "HH:MM". Omit to leave unchanged.' },
         label: { type: "string", description: "New label. Omit to leave unchanged." },
+        enabled: { type: "boolean", description: "Pause (false) or resume (true) this call. Omit to leave unchanged." },
       },
       required: ["id"],
     },
@@ -45,12 +48,22 @@ export function createUpdateWakeUpCallTool(wakeUpCallStore: WakeUpCallStore): Lo
       if (input.label !== undefined && input.label !== null && typeof input.label !== "string") {
         return { success: false, error: "label must be a string or null" };
       }
+      if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
+        return { success: false, error: "enabled must be a boolean" };
+      }
 
-      const updated = wakeUpCallStore.update(input.id, { timeOfDay: input.timeOfDay, label: input.label });
+      const updated = wakeUpCallStore.update(input.id, {
+        timeOfDay: input.timeOfDay,
+        label: input.label,
+        enabled: input.enabled,
+      });
       if (!updated) {
         return { success: false, error: `No wake-up call found with id: ${input.id}` };
       }
-      return { success: true, data: { id: updated.id, timeOfDay: updated.timeOfDay, label: updated.label } };
+      return {
+        success: true,
+        data: { id: updated.id, timeOfDay: updated.timeOfDay, label: updated.label, enabled: updated.enabled },
+      };
     },
   };
 }

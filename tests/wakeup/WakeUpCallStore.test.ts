@@ -101,6 +101,29 @@ describe("WakeUpCallStore", () => {
     store.close();
   });
 
+  test("update can toggle enabled without changing timeOfDay/label", () => {
+    const store = new WakeUpCallStore(":memory:");
+    const record = store.create({ timeOfDay: "07:00", label: "weekday" });
+
+    const disabled = store.update(record.id, { enabled: false });
+    expect(disabled?.enabled).toBe(false);
+    expect(disabled?.timeOfDay).toBe("07:00");
+    expect(disabled?.label).toBe("weekday");
+
+    const reEnabled = store.update(record.id, { enabled: true });
+    expect(reEnabled?.enabled).toBe(true);
+    store.close();
+  });
+
+  test("update persists the enabled change to the backing store", () => {
+    const store = new WakeUpCallStore(":memory:");
+    const record = store.create({ timeOfDay: "07:00" });
+    store.update(record.id, { enabled: false });
+
+    expect(store.list()[0]?.enabled).toBe(false);
+    store.close();
+  });
+
   test("update throws on an invalid timeOfDay", () => {
     const store = new WakeUpCallStore(":memory:");
     const record = store.create({ timeOfDay: "07:00" });

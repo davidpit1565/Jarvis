@@ -590,8 +590,9 @@ another reminder notification.
   call at that time (`src/wakeup/WakeUpCallStore.ts`,
   `JARVIS_WAKEUP_CALL_DB_PATH`). **`LIST_WAKEUP_CALLS`** (`READ`),
   **`UPDATE_WAKEUP_CALL`** (`SAFE_ACTION`, standing-granted — edits the
-  time/label in place, e.g. "actually wake me up at 8 instead," without
-  losing its schedule history), and **`DELETE_WAKEUP_CALL`**
+  time/label/enabled state in place, e.g. "actually wake me up at 8
+  instead" or "turn off my wake-up calls for now" without deleting the
+  schedule, without losing its schedule history), and **`DELETE_WAKEUP_CALL`**
   (`SAFE_ACTION`, standing-granted) round out managing the schedule
   entirely through conversation.
 - A scheduler tick every 30 seconds (`src/index.ts`) checks the schedule

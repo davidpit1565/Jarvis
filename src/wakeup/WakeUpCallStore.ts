@@ -90,7 +90,7 @@ export class WakeUpCallStore {
    * for no reason (so the call could fire again today right after being
    * "changed" for later today).
    */
-  update(id: string, changes: { timeOfDay?: string; label?: string | null }): WakeUpCallRecord | null {
+  update(id: string, changes: { timeOfDay?: string; label?: string | null; enabled?: boolean }): WakeUpCallRecord | null {
     const existing = this.getById(id);
     if (!existing) return null;
 
@@ -100,9 +100,12 @@ export class WakeUpCallStore {
 
     const timeOfDay = changes.timeOfDay ?? existing.timeOfDay;
     const label = changes.label !== undefined ? changes.label : existing.label;
+    const enabled = changes.enabled !== undefined ? changes.enabled : existing.enabled;
 
-    this.db.query(`UPDATE wakeup_calls SET time_of_day = ?, label = ? WHERE id = ?`).run(timeOfDay, label, id);
-    return { ...existing, timeOfDay, label };
+    this.db
+      .query(`UPDATE wakeup_calls SET time_of_day = ?, label = ?, enabled = ? WHERE id = ?`)
+      .run(timeOfDay, label, enabled ? 1 : 0, id);
+    return { ...existing, timeOfDay, label, enabled };
   }
 
   /** Records that this call actually went out today, so the scheduler doesn't fire it again until tomorrow. */
