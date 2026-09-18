@@ -52,6 +52,12 @@ function describeWeatherCode(code: number): string {
   return WEATHER_CODE_DESCRIPTIONS[code] ?? `unknown conditions (code ${code})`;
 }
 
+// Weather doesn't meaningfully change minute to minute, so a short cache
+// avoids hitting Open-Meteo again for every "what's the weather" asked in
+// quick succession within the same conversation — real latency/load
+// savings at zero cost, since there's no per-request charge to avoid.
+const CURRENT_WEATHER_CACHE_TTL_MS = 5 * 60_000;
+
 /**
  * Current weather via Open-Meteo's free forecast API — no API key, no
  * account, no cost, matching this project's "as close to free as possible"
@@ -60,12 +66,18 @@ function describeWeatherCode(code: number): string {
  * user actually is, not a general-purpose geocoding lookup.
  */
 export class OpenMeteoClient {
+  private cachedCurrentWeather: { value: CurrentWeather; fetchedAt: number } | undefined;
+
   constructor(
     private readonly latitude: number,
     private readonly longitude: number
   ) {}
 
   async getCurrentWeather(): Promise<CurrentWeather> {
+    if (this.cachedCurrentWeather && Date.now() - this.cachedCurrentWeather.fetchedAt < CURRENT_WEATHER_CACHE_TTL_MS) {
+      return this.cachedCurrentWeather.value;
+    }
+
     const url = new URL(OPEN_METEO_FORECAST_URL);
     url.searchParams.set("latitude", String(this.latitude));
     url.searchParams.set("longitude", String(this.longitude));
@@ -85,12 +97,14 @@ export class OpenMeteoClient {
     }
 
     const { temperature, windspeed, weathercode, is_day } = data.current_weather;
-    return {
+    const weather: CurrentWeather = {
       temperatureC: temperature,
       windSpeedKph: windspeed,
       description: describeWeatherCode(weathercode),
       isDay: is_day === 1,
     };
+    this.cachedCurrentWeather = { value: weather, fetchedAt: Date.now() };
+    return weather;
   }
 
   /** Daily min/max temperature, conditions, and precipitation chance for the next `days` days (including today). */

@@ -54,6 +54,38 @@ describe("OpenMeteoClient.getCurrentWeather", () => {
     const client = new OpenMeteoClient(0, 0);
     await expect(client.getCurrentWeather()).rejects.toThrow(/current_weather/);
   });
+
+  test("caches the result — a second call within the TTL doesn't hit the network again", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      return new Response(
+        JSON.stringify({ current_weather: { temperature: 21.4, windspeed: 12.3, weathercode: 1, is_day: 1 } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const client = new OpenMeteoClient(32.08, 34.78);
+    const first = await client.getCurrentWeather();
+    const second = await client.getCurrentWeather();
+
+    expect(fetchCalls).toBe(1);
+    expect(second).toEqual(first);
+  });
+
+  test("does not cache a failed request", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      return new Response("boom", { status: 500 });
+    }) as unknown as typeof fetch;
+
+    const client = new OpenMeteoClient(0, 0);
+    await expect(client.getCurrentWeather()).rejects.toThrow();
+    await expect(client.getCurrentWeather()).rejects.toThrow();
+
+    expect(fetchCalls).toBe(2);
+  });
 });
 
 describe("OpenMeteoClient.getDailyForecast", () => {

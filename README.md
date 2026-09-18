@@ -812,7 +812,10 @@ capped at 7), for "will it rain tomorrow"/"what's the weather like this
 week" — both via [Open-Meteo](https://open-meteo.com)'s free forecast
 API. No API key, no account, no cost — matching this project's "as close
 to free as possible" goal. Find your own coordinates at any map site
-(right-click → "What's here").
+(right-click → "What's here"). `GET_WEATHER`'s result is cached for 5
+minutes so several "what's the weather" questions in quick succession
+don't each hit Open-Meteo again — a real latency/load saving even though
+there's no per-request cost to avoid; a failed request is never cached.
 
 ## News
 
