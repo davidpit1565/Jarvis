@@ -771,7 +771,7 @@
       const ny = v.y / HEAD_R; // -1 (chin) .. 1 (crown)
       let x = v.x * HEAD_SX;
       let z = v.z * HEAD_SZ;
-      const y = v.y * HEAD_SY; // shorten overall so it reads as a head, not an egg
+      let y = v.y * HEAD_SY; // shorten overall so it reads as a head, not an egg
       if (ny < -0.05) {
         // Saturate the taper by ny=-0.6 so the lower quarter (jaw+chin)
         // stays at a rounded plateau width instead of narrowing all the
@@ -782,6 +782,23 @@
         const taper = 1 - eased * 0.4;
         x *= taper;
         z *= taper;
+        // Pull the chin up too, not just narrower — width-only tapering
+        // kept the full sphere length down to the pole, giving a long
+        // narrow jaw (an alien trait) instead of the shorter, rounder
+        // human chin this is meant to be.
+        y *= 1 - eased * 0.32;
+      } else if (ny > 0.32) {
+        // Taper the crown too, not just the jaw. Without this the head
+        // stays at full temple-width all the way up to the very top —
+        // a uniformly wide dome, which is a big part of what kept
+        // reading as an alien braincase rather than a human skull (a
+        // real head is widest around the temples/ears and narrows
+        // somewhat above that, it doesn't stay cylindrical to the crown).
+        const tt2 = Math.min(1, (ny - 0.32) / 0.68);
+        const eased2 = tt2 * tt2 * (3 - 2 * tt2);
+        const taper2 = 1 - eased2 * 0.24;
+        x *= taper2;
+        z *= taper2;
       }
       const front = Math.max(0, z) / HEAD_SZ; // 0..1, 1 = directly facing camera
       const xf = x / (HEAD_R * HEAD_SX); // -1..1, width-relative (scale-independent)
