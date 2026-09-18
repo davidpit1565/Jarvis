@@ -130,4 +130,60 @@ describe("Device heartbeat (ping/pong)", () => {
 
     expect(errors).toHaveLength(0);
   });
+
+  test("a pending (not-yet-approved) device is pinged too", async () => {
+    // Regression test: pingAll() on DeviceConnectionManager only reaches
+    // *authenticated* devices, so a socket still waiting on a human to
+    // approve its pairing code got no keepalive at all — Bun's idleTimeout
+    // silently closed it if approval took longer than that, forcing a new
+    // pairing code before the human running approve-device could even use
+    // the one they were just given. Confirmed live: "Socket is not
+    // connected" right as an approval was being typed.
+    const eventBus = new EventBus();
+    const deviceRegistry = new DeviceRegistry();
+    const pairingService = new PairingService();
+    const deviceConnectionManager = new DeviceConnectionManager(eventBus);
+    const server = new JarvisWebSocketServer({
+      deviceRegistry,
+      deviceConnectionManager,
+      pairingService,
+      eventBus,
+      pingIntervalMs: 20,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const deviceId = "pending-heartbeat-device";
+    const ws = new WebSocket(`ws://localhost:${handle.port}`);
+    activeSocket = ws;
+
+    const pingReceived = new Promise<void>((resolve, reject) => {
+      ws.onopen = () => {
+        ws.send(
+          JSON.stringify({
+            requestId: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            deviceId,
+            type: "device.register",
+            payload: {
+              deviceName: "Test device",
+              deviceType: "mac",
+              platform: "macos",
+              agentVersion: "0.1.0",
+              protocolVersion: "1",
+              capabilities: [],
+            },
+          })
+        );
+      };
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data as string);
+        if (message.type === "ping") resolve();
+      };
+      ws.onerror = () => reject(new Error("WebSocket error"));
+      setTimeout(() => reject(new Error("Timed out waiting for ping")), 2000);
+    });
+
+    await pingReceived;
+  });
 });
