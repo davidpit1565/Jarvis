@@ -57,22 +57,41 @@ approximating a human head and use one:
   (`THREE.SimplifyModifier`, after `THREE.BufferGeometryUtils.mergeVertices`)
   — dense enough to match the reference's fully-covered facial grid, while
   still reading as line art rather than a solid-shaded scan.
-- Rendered as `THREE.EdgesGeometry(simplified, 8)` — this keeps only edges
-  between faces whose normals differ by more than ~8°. A higher angle
-  (originally 20-25°) left flat regions like the cheeks and chin sparse or
-  empty, since near-coplanar triangles produce few edges regardless of
-  triangle count; 8° pulls in enough near-flat edges to give even, dense
-  coverage across the whole face, not just the sharp contours. A second,
-  slightly larger and dimmer copy of the same edge geometry
-  (`glowLines`, scale 1.025, opacity 0.18, additive blending) is drawn
-  behind the bright original as a cheap "poor man's bloom" — there's no
-  `EffectComposer`/`UnrealBloomPass` in this vendored setup, so the glow is
-  faked by literally re-drawing the lines slightly bigger and fainter
-  underneath. A small, subtle node dot (`THREE.Points`, size 0.022, opacity
-  0.45) sits at every remaining vertex — kept deliberately faint so the
-  denser 9,000-triangle mesh doesn't turn into a solid point-cloud blob
-  burying the edge lines (an earlier, brighter/larger dot setting did
-  exactly that).
+- Rendered with a **real latitude/longitude grid computed on the mesh's
+  actual surface** (`buildLatLongOnMesh` in `index.html`), not
+  `THREE.EdgesGeometry`. EdgesGeometry follows the mesh's own (irregular,
+  post-decimation) triangulation — direct comparison against the reference
+  showed that once dense enough to cover the whole face, that reads as a
+  chaotic tangle around the eyes/nose/mouth, not the reference's smooth,
+  evenly-spaced wrap. `buildLatLongOnMesh` instead walks every triangle,
+  computes a spherical angle (latitude/longitude around a fixed center
+  near eye-height) per vertex from its real 3D position, and interpolates
+  exactly where each triangle edge crosses a fixed angle step — producing
+  continuous grid lines that follow the real anatomy's curvature. The
+  model's own UV atlas was checked first and isn't usable for this: it's a
+  multi-island unwrap (eyes/nose/mouth/ears/scalp are separate radial
+  charts for texturing), which would draw as fragmented concentric loops
+  per island instead of one continuous grid.
+  - Two ellipsoid **exclusion zones** (around the eye sockets and the
+    mouth) drop any triangle whose centroid falls inside them before the
+    grid is built. This mesh's real open-mouth/eye-socket geometry is
+    concave enough (depth folds back on itself) that the spherical angle
+    stops being monotonic there, and no angle-threshold or edge-length
+    filter fixed the resulting tangle — cutting a hole and relying on the
+    existing custom eye/mouth accents (below) to cover it instead is what
+    actually worked, the same way the reference's own eyes/mouth read as
+    distinct bright features rather than more grid.
+  - A second, slightly larger and dimmer copy of the same line geometry
+    (`glowLines`, scale 1.025, opacity 0.18, additive blending) is drawn
+    behind the bright original as a cheap "poor man's bloom" — there's no
+    `EffectComposer`/`UnrealBloomPass` in this vendored setup, so the glow
+    is faked by literally re-drawing the lines slightly bigger and fainter
+    underneath.
+  - A small, subtle node dot (`THREE.Points`, size 0.022, opacity 0.45)
+    sits at every vertex of the full (non-excluded) mesh — kept
+    deliberately faint so the denser 9,000-triangle mesh doesn't turn into
+    a solid point-cloud blob burying the grid lines (an earlier,
+    brighter/larger dot setting did exactly that).
 - Two small bright spheres for the "pupil" glint, positioned at the real
   eye-socket coordinates (found by raycasting the source mesh at the
   visually-identified eye locations, not guessed), each backed by a small
@@ -342,3 +361,10 @@ clears 60fps either way.
   examples — it isn't a generic/synthetic avatar. It's used purely as
   wireframe/point geometry here (no photo texture applied), same spirit
   as any other third-party mesh used as a technical asset.
+- The lat/long grid's eye/mouth exclusion zones (see "How the face is
+  built") leave a visibly rougher boundary right at their edge — cutting
+  a hole in the grid necessarily leaves the neighboring iso-lines
+  dangling instead of continuing smoothly, most noticeable around the
+  nose/upper-lip area from a 3/4 or side angle. The custom eye/mouth
+  accents cover most of it from the front, which is the primary viewing
+  angle, but this is a real, visible remaining gap, not a solved one.

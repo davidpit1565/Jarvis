@@ -539,6 +539,96 @@
     loPos.needsUpdate = true;
   }
 
+  // Draws a real latitude/longitude grid wrapped onto the *actual* mesh
+  // surface (not a parametric sphere) by walking every triangle and
+  // interpolating where it crosses each iso-value of a computed spherical
+  // angle around `center`. This replaces THREE.EdgesGeometry for the head
+  // wireframe: EdgesGeometry follows the mesh's own (irregular, post-
+  // decimation) triangulation, which reads as a chaotic tangle around the
+  // eyes/nose/mouth once dense enough to cover the whole face — comparison
+  // against the reference showed its grid is a smooth, evenly-spaced
+  // lat/long wrap, not sharp feature contours. The model's own UV atlas
+  // can't be used for this directly (checked first): LeePerrySmith's UVs
+  // are a multi-island unwrap (eyes/nose/mouth/ears/scalp all separate
+  // radial charts), which would draw as fragmented concentric loops per
+  // island instead of one continuous grid across the whole head.
+  // `exclusionZones` (ellipsoids in the same raw mesh space) drop any
+  // triangle whose centroid falls inside them — used to cut the eye
+  // sockets and mouth cavity, where this mesh's real open-mouth/eye-socket
+  // geometry makes the spherical angle non-monotonic (concave depth folds
+  // back on itself) and produces a tangle no angle threshold fixes; the
+  // existing custom eye spheres/glow and mouth line already cover those
+  // spots, same as how the reference's own eyes/mouth read as distinct
+  // bright features rather than more grid.
+  function buildLatLongOnMesh(geometry, latDivisions, lonDivisions, center, exclusionZones) {
+    const pos = geometry.attributes.position;
+    const index = geometry.index;
+    const rawTriCount = index ? index.count / 3 : pos.count / 3;
+    function rawIdx(t, k) { return index ? index.getX(t * 3 + k) : t * 3 + k; }
+    function rawPos(i) { return new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)); }
+    function inExclusion(p) {
+      for (const z of exclusionZones) {
+        const dx = (p.x - z.c[0]) / z.r[0];
+        const dy = (p.y - z.c[1]) / z.r[1];
+        const dz = (p.z - z.c[2]) / z.r[2];
+        if (dx * dx + dy * dy + dz * dz < 1) return true;
+      }
+      return false;
+    }
+    const keptTris = [];
+    for (let t = 0; t < rawTriCount; t++) {
+      const ia = rawIdx(t, 0), ib = rawIdx(t, 1), ic = rawIdx(t, 2);
+      const centroid = rawPos(ia).add(rawPos(ib)).add(rawPos(ic)).multiplyScalar(1 / 3);
+      if (inExclusion(centroid)) continue;
+      keptTris.push(ia, ib, ic);
+    }
+    const triCount = keptTris.length / 3;
+    function getIdx(t, k) { return keptTris[t * 3 + k]; }
+
+    const phiCache = new Map();
+    const thetaCache = new Map();
+    function phiOf(idx) {
+      if (phiCache.has(idx)) return phiCache.get(idx);
+      const x = pos.getX(idx) - center.x, y = pos.getY(idx) - center.y, z = pos.getZ(idx) - center.z;
+      const r = Math.sqrt(x * x + y * y + z * z) || 1e-6;
+      const v = Math.acos(Math.max(-1, Math.min(1, y / r)));
+      phiCache.set(idx, v);
+      return v;
+    }
+    function thetaOf(idx) {
+      if (thetaCache.has(idx)) return thetaCache.get(idx);
+      const x = pos.getX(idx) - center.x, z = pos.getZ(idx) - center.z;
+      const v = Math.atan2(x, z);
+      thetaCache.set(idx, v);
+      return v;
+    }
+
+    const segPositions = [];
+    function addIsoLines(divisions, fn, wrap) {
+      for (let d = 1; d < divisions; d++) {
+        const iso = wrap ? -Math.PI + d * ((2 * Math.PI) / divisions) : (d / divisions) * Math.PI;
+        for (let t = 0; t < triCount; t++) {
+          const idxs = [getIdx(t, 0), getIdx(t, 1), getIdx(t, 2)];
+          const vals = idxs.map(fn);
+          const crossings = [];
+          for (let e = 0; e < 3; e++) {
+            const i1 = idxs[e], i2 = idxs[(e + 1) % 3];
+            const v1 = vals[e], v2 = vals[(e + 1) % 3];
+            if (wrap && Math.abs(v1 - v2) > Math.PI) continue; // skip the seam wrap itself
+            if ((v1 - iso) * (v2 - iso) < 0) {
+              const tt = (iso - v1) / (v2 - v1);
+              crossings.push(rawPos(i1).lerp(rawPos(i2), tt));
+            }
+          }
+          if (crossings.length === 2) segPositions.push(crossings[0], crossings[1]);
+        }
+      }
+    }
+    addIsoLines(latDivisions, phiOf, false);
+    addIsoLines(lonDivisions, thetaOf, true);
+    return new THREE.BufferGeometry().setFromPoints(segPositions);
+  }
+
   function base64ToArrayBuffer(b64) {
     const binary = atob(b64);
     const bytes = new Uint8Array(binary.length);
@@ -571,9 +661,22 @@
       // this scene's existing camera-distance/panel/plinth proportions.
       modelGroup.scale.setScalar(0.384);
 
-      // Brighter, near-white and higher-opacity than the first pass — the
-      // reference reads as intensely glowing, not a thin dim outline.
-      const edgesGeo = new THREE.EdgesGeometry(simplified, 8);
+      // A real lat/long grid computed on the actual mesh surface (see
+      // buildLatLongOnMesh above) instead of THREE.EdgesGeometry — the
+      // reference's wireframe is a smooth, evenly-spaced wrap, and
+      // EdgesGeometry on this mesh's own (irregular) triangulation reads
+      // as a tangle once dense enough to cover the whole face. Center is
+      // near eye-height, slightly behind the face front, so the computed
+      // radius is roughly even front-to-back. Eye sockets and the mouth
+      // cavity are excluded (see comment above) — the custom eye/mouth
+      // accents below cover those spots instead.
+      const latLongCenter = new THREE.Vector3(0, 1.9, 0.2);
+      const latLongExclusions = [
+        { c: [-0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
+        { c: [0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
+        { c: [0, -0.1, 1.8], r: [1.35, 1.2, 1.35] },
+      ];
+      const edgesGeo = buildLatLongOnMesh(simplified, 22, 20, latLongCenter, latLongExclusions);
       const edgesMat = new THREE.LineBasicMaterial({
         color: 0xcdf3ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
       });
