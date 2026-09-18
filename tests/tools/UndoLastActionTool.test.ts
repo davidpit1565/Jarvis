@@ -97,4 +97,30 @@ describe("UNDO_LAST_ACTION tool", () => {
     expect(body.summary).toBe("Dentist");
     expect(body.location).toBe("Clinic");
   });
+
+  test("restores a just-updated calendar event's previous values", async () => {
+    let capturedMethod: string | undefined;
+    let capturedBody: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedMethod = init?.method;
+      capturedBody = init?.body as string;
+      return new Response(JSON.stringify({ id: "ev1", summary: "Dentist", start: {}, end: {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    undoStore.record({
+      type: "calendar_event_updated",
+      eventId: "ev1",
+      previous: { summary: "Dentist", start: "2026-01-20T10:00:00Z", end: "2026-01-20T10:30:00Z", location: "Clinic" },
+    });
+    const tool = createUndoLastActionTool(undoStore, makeClient());
+
+    const result = await tool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    expect(capturedMethod).toBe("PATCH");
+    const body = JSON.parse(capturedBody!);
+    expect(body.summary).toBe("Dentist");
+    expect(body.location).toBe("Clinic");
+  });
 });

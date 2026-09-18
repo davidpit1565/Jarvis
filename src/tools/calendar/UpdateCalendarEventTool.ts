@@ -1,6 +1,7 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import type { UndoStore } from "@/core/undo/UndoStore";
 
 export interface UpdateCalendarEventInput extends Record<string, unknown> {
   eventId: string;
@@ -20,8 +21,16 @@ function isValidIsoDate(value: string): boolean {
  * about an event was delete-then-recreate, which loses its id and drops
  * attendees/description for no reason. SAFE_ACTION and standing-granted,
  * matching CREATE_CALENDAR_EVENT/DELETE_CALENDAR_EVENT.
+ *
+ * When an `undoStore` is provided, fetches the event's current field
+ * values before patching it and records them so "undo that" can restore
+ * them — same fetch-then-act pattern as DELETE_CALENDAR_EVENT's own undo
+ * support.
  */
-export function createUpdateCalendarEventTool(calendarClient: GoogleCalendarClient): LocalTool<UpdateCalendarEventInput> {
+export function createUpdateCalendarEventTool(
+  calendarClient: GoogleCalendarClient,
+  undoStore?: UndoStore
+): LocalTool<UpdateCalendarEventInput> {
   return {
     id: "UPDATE_CALENDAR_EVENT",
     name: "update_calendar_event",
@@ -62,12 +71,28 @@ export function createUpdateCalendarEventTool(calendarClient: GoogleCalendarClie
       }
 
       try {
+        const eventBeforeUpdate = await calendarClient.getEvent(input.eventId).catch(() => null);
+
         const event = await calendarClient.updateEvent(input.eventId, {
           summary: input.summary,
           start: input.start,
           end: input.end,
           location: input.location,
         });
+
+        if (eventBeforeUpdate) {
+          undoStore?.record({
+            type: "calendar_event_updated",
+            eventId: input.eventId,
+            previous: {
+              summary: eventBeforeUpdate.summary,
+              start: eventBeforeUpdate.start,
+              end: eventBeforeUpdate.end,
+              location: eventBeforeUpdate.location,
+            },
+          });
+        }
+
         return { success: true, data: { event } };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };

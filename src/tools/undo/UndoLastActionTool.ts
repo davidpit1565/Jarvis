@@ -40,6 +40,10 @@ export function createUndoLastActionTool(undoStore: UndoStore, calendarClient: G
           });
           return { success: true, data: { undone: action.type, summary: action.summary } };
         }
+        if (action.type === "calendar_event_updated") {
+          await calendarClient.updateEvent(action.eventId, action.previous);
+          return { success: true, data: { undone: action.type, summary: action.previous.summary } };
+        }
         return { success: false, error: `Don't know how to undo action type: ${(action as { type: string }).type}` };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };

@@ -2,6 +2,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { createUpdateCalendarEventTool } from "@/tools/calendar/UpdateCalendarEventTool";
+import { UndoStore } from "@/core/undo/UndoStore";
 import { PermissionLevel } from "@/types/permissions";
 
 const context = { userId: "user-1", requestId: "req-1" };
@@ -61,5 +62,49 @@ describe("UPDATE_CALENDAR_EVENT tool", () => {
     const tool = createUpdateCalendarEventTool(makeClient());
     const result = await tool.execute({ eventId: "ev1", summary: "New" }, context);
     expect(result.success).toBe(false);
+  });
+
+  test("records the event's previous values to the undo store, when given one", async () => {
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        return new Response(
+          JSON.stringify({ id: "ev1", summary: "Dentist", start: { dateTime: "2026-01-20T11:00:00Z" }, end: { dateTime: "2026-01-20T11:30:00Z" } }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({ id: "ev1", summary: "Dentist", location: "Clinic", start: { dateTime: "2026-01-20T10:00:00Z" }, end: { dateTime: "2026-01-20T10:30:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    const tool = createUpdateCalendarEventTool(makeClient(), undoStore);
+    await tool.execute({ eventId: "ev1", start: "2026-01-20T11:00:00Z" }, context);
+
+    expect(undoStore.takeLast()).toEqual({
+      type: "calendar_event_updated",
+      eventId: "ev1",
+      previous: { summary: "Dentist", start: "2026-01-20T10:00:00Z", end: "2026-01-20T10:30:00Z", location: "Clinic" },
+    });
+  });
+
+  test("still updates successfully even if fetching the event's previous values fails", async () => {
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        return new Response(
+          JSON.stringify({ id: "ev1", summary: "Dentist", start: { dateTime: "2026-01-20T11:00:00Z" }, end: { dateTime: "2026-01-20T11:30:00Z" } }),
+          { status: 200 }
+        );
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    const tool = createUpdateCalendarEventTool(makeClient(), undoStore);
+    const result = await tool.execute({ eventId: "ev1", start: "2026-01-20T11:00:00Z" }, context);
+
+    expect(result.success).toBe(true);
+    expect(undoStore.takeLast()).toBeUndefined();
   });
 });
