@@ -257,6 +257,107 @@ weight 0.09 vs. 0.85/0.25 for the other two — a fine ripple, not another
 visible lobe) adds cortex-fold-like surface detail on top of the main
 silhouette without changing its overall shape language.
 
+## Ten more VFX passes — depth, energy flow, and discrete event feedback
+
+A further round on the same "make it read as a living AI core, not a
+globe/planet" direction, all scoped to the Core's own materials/shaders/
+motion in `index.html`:
+
+1. **Depth-fog tint on the outer flow-field particles.** Every particle
+   used to render at one flat, uniform color regardless of where it sat
+   relative to the camera — a real depth cue a point cloud otherwise has
+   no way to give, and part of why the swirling shell could still read
+   as "a flat disc" despite genuinely being 3D. Each particle's fixed
+   direction (already stored for `blobRadius()`) is now dotted every
+   frame against the camera's direction in the Core's own rotated local
+   space (one vector transform per frame, then a dot product per
+   particle — not a full per-particle world transform): particles facing
+   the camera render at full brightness, particles on the far side dim
+   toward ~45%, the same "backface dimming" real-time point-cloud
+   renderers use for cheap depth without per-pixel lighting.
+2. **Traveling energy-pulse orbit rings.** The two crossing rings were a
+   flat `MeshBasicMaterial` — one uniform color and brightness all the
+   way around, which combined with the crossing-ellipse layout is
+   exactly what a set of Saturn/planetary rings looks like. `buildEnergyRing()`
+   gives each ring a small `ShaderMaterial` that computes each fragment's
+   angle around the ring and brightens a few lobes that sweep around it
+   over time, so the rings themselves visibly carry moving energy — an
+   actual arc-reactor/energy-conduit look — instead of just spinning as a
+   rigid painted band.
+3. **Neural/tendril "firing" flash-and-decay.** Every synapse line in the
+   brain, and every tendril thread on the outer shell, used to sit at one
+   constant opacity regardless of whether it was a brand-new connection
+   or an old one about to be replaced. Both now carry a per-line
+   brightness that jumps to full on the frame it's (re)picked and decays
+   back to a dim idle floor — a real action-potential-style flash instead
+   of a permanently-lit wire — using per-vertex color attributes (`vertexColors`)
+   so a single `LineSegments` draw call can still show every line at its
+   own independent brightness.
+4. **Real-event shockwave bursts.** A real `brain.request`/`brain.response`
+   only ever showed up as the existing `brainPulse` brightening/growing
+   the Core in place — legible if you're staring at the center, easy to
+   miss otherwise. `spawnShockwave()` (called from `pushActivityLine()`
+   on every such event, real or labeled-demo) now also fires a billboarded
+   expanding-and-fading ring from a small pool of five, the same
+   "something just happened" language real HUD/sonar/radar interfaces use
+   for a discrete event — layered on top of the continuous growth, not
+   replacing it.
+5. **State-tied halo color.** `coreHalo`, the big soft bloom-halo sprite,
+   was a fixed cyan regardless of what the Core was doing. It now blends
+   toward amber with real thinking activity (the same color mix the
+   energy surface's shader already does) and brightens with either real
+   signal, so the ambient glow itself reads "thinking" at a glance instead
+   of only the small inner mind shell and the text state label doing that
+   job.
+6. **A moving specular "energy glint" on the energy surface.** The
+   fresnel rim lit every silhouette edge equally, which reads as a
+   matte/diffuse surface — a real glassy or metallic energy field catches
+   a highlight that travels across it as it turns. Added a slow-orbiting
+   light direction dotted against the surface normal in the fragment
+   shader for a real specular highlight that sweeps the surface over
+   time, brightened further by real audio/thinking activity.
+7. **Camera micro-shake tied to real activity.** A perfectly static
+   camera is part of what makes a render read as a diagram rather than
+   something being observed live — real sensor/HUD footage always
+   carries a little handheld noise. The camera now gets a small
+   simplex-noise-driven offset scaled by `brainPulse`/`audioGlow`,
+   recomputed from the exact orbit position fresh every frame (rather
+   than accumulated onto the previous frame's position) so it can never
+   drift the camera away from the angle the user actually left it at.
+8. **A real 3D depth-dust layer.** The only depth cue in the scene before
+   this was the 2D "matrix rain" canvas *behind* the WebGL scene — a flat
+   backdrop, nothing actually in 3D space around the Core to parallax
+   against as the camera orbits. `buildDepthDust()` scatters 260 small,
+   dim points through a spherical shell around the whole scene, with its
+   own slow independent rotation distinct from the Core's, so the volume
+   around the Core visibly parallaxes instead of the Core sitting alone
+   on an empty stage.
+9. **A third, independent wobble axis on the orbit rings.** The rings'
+   only "extra" motion beyond inheriting the Core's own tumble was a
+   single wobble axis — combined with the crossing-ellipse layout, still
+   read as a fixed set of planetary rings from most angles. A third,
+   out-of-phase wobble breaks that up further.
+10. **A frequency-modulated "heartbeat" instead of a single clean sine.**
+    The idle breathing scale was one unchanging sine wave — a real
+    biological rhythm is never a perfect single frequency. A second,
+    faster term whose own phase is itself slowly modulated by a much
+    slower sine (frequency modulation, not just a second fixed sine added
+    on top) keeps the combined rhythm from ever landing on an obviously
+    repeating beat within a normal length of observation.
+
+**Verified**: headless Playwright/Chromium against a local static
+server — zero page errors across idle load, a full DEMO-feed
+brain.request/brain.response cycle (confirming the shockwave burst, the
+halo's amber shift, and the ring/tendril firing flashes all actually
+fire), `prefers-reduced-motion` (frozen, no artifacts), and camera-orbit
+drag to the vertical extreme (confirming the added per-frame
+`updateCameraFromOrbit()` call plus shake doesn't fight manual dragging).
+**Real, measured cost**: a real FPS A/B on this sandbox's software
+`swiftshader` renderer (headless, `requestAnimationFrame`-counted over
+3s, same "no real GPU here at all" caveat as the bloom-pass measurement
+above) showed 8.7fps before this round vs. 8.4fps after — a small,
+honestly-measured cost, not a rounding error hidden.
+
 ### Reactivity — three real signals, no fake state
 
 - **Thinking** (`brainPulse`/`brainIntensity` in `index.html`) — real
