@@ -344,8 +344,9 @@ function main() {
   // but kept for the life of the process rather than one call's duration —
   // a chat has no natural "hang up." Scoped on purpose: JARVIS only ever
   // sees messages sent to this specific bot, in chats it's been added to.
-  function createTelegramSession(_chatId: string): TelegramSession {
+  function createTelegramSession(chatId: string): TelegramSession {
     const telegramConversation = new ConversationManager(eventBus);
+    const telegramConfirmationService = new ConfirmationService(createTelegramConfirmationPrompter(chatId));
     const telegramOrchestrator = new Orchestrator({
       brain,
       conversation: telegramConversation,
@@ -354,12 +355,31 @@ function main() {
       eventBus,
       deviceRegistry,
       deviceConnectionManager,
-      confirmationService: phoneConfirmationService,
+      confirmationService: telegramConfirmationService,
       channelContext: "This conversation is happening over Telegram right now.",
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
       lockdownService,
     });
     return { orchestrator: telegramOrchestrator, userId: DEFAULT_USER_ID };
+  }
+
+  /**
+   * Unlike a phone call, a Telegram chat is a reliable bidirectional text
+   * channel — as capable as the terminal's own `confirmViaChat` of asking a
+   * real yes/no question and waiting for a real answer. So Telegram
+   * sessions get a real confirmation prompt instead of the phone's
+   * auto-deny. Safe to reference `telegramGateway` here even though it's
+   * declared below: this closure only runs once a Telegram message
+   * actually arrives, well after `telegramGateway` has been constructed.
+   */
+  function createTelegramConfirmationPrompter(chatId: string) {
+    return async (request: ConfirmationRequest): Promise<boolean> => {
+      const inputSummary = JSON.stringify(request.input);
+      return telegramGateway!.awaitConfirmation(
+        chatId,
+        `JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Approve? (yes/no)`
+      );
+    };
   }
 
   const telegramGateway =

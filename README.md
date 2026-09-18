@@ -236,6 +236,19 @@ being unconditionally denied:
   human with repeated confirmation prompts for the same tool (a real
   problem on a phone call specifically, where each prompt is a live
   interruption, not just a log line).
+- **Telegram sessions get a real confirmation prompt, not the phone's
+  auto-deny.** Unlike a live call, a Telegram chat is a reliable
+  bidirectional text channel — exactly as capable as the terminal's
+  `confirmViaChat` of asking a real yes/no question and waiting for a real
+  answer. `TelegramGateway.awaitConfirmation()` sends the question to that
+  chat and resolves once the next message from it is recognized as
+  yes/no/כן/לא (an unrecognized reply re-prompts instead of being treated
+  as a new conversation turn); `src/index.ts` gives each Telegram chat its
+  own `ConfirmationService` built from this prompter. If the 60-second
+  timeout fires before a reply arrives, that one pending entry for the
+  chat goes stale until overwritten by the next confirmation for the same
+  chat — a bounded, low-consequence edge case, not a leak that grows over
+  time.
 
 ## Architecture
 

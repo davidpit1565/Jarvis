@@ -29,8 +29,12 @@ const ERROR_MESSAGE = "Sorry, something went wrong on my end. Please try again."
  * public HTTPS URL for Telegram's setWebhook to call. Never exercised
  * against a real Telegram account.
  */
+const YES_PATTERN = /^\s*(yes|y|כן|אישור|confirm)\s*$/i;
+const NO_PATTERN = /^\s*(no|n|לא|ביטול|cancel)\s*$/i;
+
 export class TelegramGateway {
   private sessions: Map<string, TelegramSession> = new Map();
+  private pendingConfirmations: Map<string, (answer: boolean) => void> = new Map();
 
   constructor(
     private readonly botToken: string,
@@ -50,6 +54,24 @@ export class TelegramGateway {
   isChatAllowed(chatId: string): boolean {
     if (!this.allowedChatIds || this.allowedChatIds.length === 0) return true;
     return this.allowedChatIds.includes(chatId);
+  }
+
+  /**
+   * Asks a real yes/no question over Telegram and waits for the chat's next
+   * reply to answer it — unlike a phone call, a Telegram chat is a reliable
+   * bidirectional text channel, so it gets the same real confirmation UX as
+   * the terminal instead of being auto-denied. Only one confirmation can be
+   * pending per chat at a time; a new one silently replaces (and orphans)
+   * any prior unanswered entry for that chat, which is fine because
+   * `ConfirmationService`'s own timeout already resolves the caller waiting
+   * on that stale prompt with `false`.
+   */
+  async awaitConfirmation(chatId: string, questionText: string): Promise<boolean> {
+    const resultPromise = new Promise<boolean>((resolve) => {
+      this.pendingConfirmations.set(chatId, resolve);
+    });
+    await this.sendMessage(chatId, questionText);
+    return resultPromise;
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
@@ -85,6 +107,24 @@ export class TelegramGateway {
     const chatIdStr = String(chatId);
     if (!this.isChatAllowed(chatIdStr)) {
       console.error(`[jarvis] rejected Telegram message from disallowed chat: ${chatIdStr}`);
+      return;
+    }
+
+    const pendingResolve = this.pendingConfirmations.get(chatIdStr);
+    if (pendingResolve) {
+      if (YES_PATTERN.test(text)) {
+        this.pendingConfirmations.delete(chatIdStr);
+        pendingResolve(true);
+        await this.sendMessage(chatIdStr, "Confirmed.").catch(() => {});
+        return;
+      }
+      if (NO_PATTERN.test(text)) {
+        this.pendingConfirmations.delete(chatIdStr);
+        pendingResolve(false);
+        await this.sendMessage(chatIdStr, "Cancelled.").catch(() => {});
+        return;
+      }
+      await this.sendMessage(chatIdStr, "Please reply yes or no.").catch(() => {});
       return;
     }
 

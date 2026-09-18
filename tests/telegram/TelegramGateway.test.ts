@@ -102,6 +102,74 @@ describe("TelegramGateway.handleUpdate", () => {
   });
 });
 
+describe("TelegramGateway.awaitConfirmation", () => {
+  test("resolves true when the chat replies yes", async () => {
+    const { calls } = stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    const confirmationPromise = gateway.awaitConfirmation("123", "Approve?");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "yes" } });
+
+    expect(await confirmationPromise).toBe(true);
+    expect(calls.some((c) => c.text === "Approve?")).toBe(true);
+    expect(calls.some((c) => c.text === "Confirmed.")).toBe(true);
+  });
+
+  test("resolves false when the chat replies no", async () => {
+    stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    const confirmationPromise = gateway.awaitConfirmation("123", "Approve?");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "no" } });
+
+    expect(await confirmationPromise).toBe(false);
+  });
+
+  test("accepts Hebrew yes/no replies", async () => {
+    stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    const confirmationPromise = gateway.awaitConfirmation("123", "Approve?");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "כן" } });
+
+    expect(await confirmationPromise).toBe(true);
+  });
+
+  test("re-prompts on an unrecognized reply instead of dispatching to the orchestrator", async () => {
+    const { calls } = stubSendMessage();
+    let orchestratorCalls = 0;
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => {
+        orchestratorCalls++;
+        return "unused";
+      }),
+      userId: "local-user",
+    }));
+
+    const confirmationPromise = gateway.awaitConfirmation("123", "Approve?");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "maybe later" } });
+
+    expect(orchestratorCalls).toBe(0);
+    expect(calls.some((c) => c.text.match(/reply yes or no/i))).toBe(true);
+
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "yes" } });
+    expect(await confirmationPromise).toBe(true);
+  });
+});
+
 describe("TelegramGateway.isChatAllowed", () => {
   test("allows any chat when no allowlist is configured", () => {
     const gateway = new TelegramGateway("bot-token", () => ({
