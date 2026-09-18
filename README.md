@@ -683,6 +683,15 @@ built or run in this environment (no Docker daemon available here). Build
 it yourself once (`docker build -t jarvis-core .`) before relying on it,
 and report back if anything doesn't come up clean.
 
+**Automatic deploys on every push to `main`** — `.github/workflows/fly-deploy.yml`
+runs `flyctl deploy` via GitHub Actions, so merging to `main` ships to
+production with no manual `fly deploy` step and no flyctl install needed on
+any machine. It needs one secret to work: a Fly deploy token, generated
+from the Fly dashboard (Account -> Tokens, scoped to this app) and pasted
+into the GitHub repo's Settings -> Secrets and variables -> Actions as
+`FLY_API_TOKEN`. Without that secret the workflow runs and fails loudly
+(visible in the repo's Actions tab) rather than silently doing nothing.
+
 **What's validated vs. not:** the gateway logic (TwiML generation
 including the `voice` attribute, session lifecycle per `CallSid`,
 signature verification, the caller allowlist, HTTP routing including
