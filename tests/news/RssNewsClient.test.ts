@@ -90,3 +90,33 @@ describe("RssNewsClient.searchHeadlines", () => {
     await expect(client.searchHeadlines("headline")).rejects.toThrow(/404/);
   });
 });
+
+describe("RssNewsClient item caching", () => {
+  test("a second call within the TTL doesn't re-fetch, even for a different method", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      return new Response(SAMPLE_FEED, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    await client.getTopHeadlines();
+    await client.searchHeadlines("second");
+
+    expect(fetchCalls).toBe(1);
+  });
+
+  test("does not cache a failed request", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      return new Response("boom", { status: 500 });
+    }) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    await expect(client.getTopHeadlines()).rejects.toThrow();
+    await expect(client.getTopHeadlines()).rejects.toThrow();
+
+    expect(fetchCalls).toBe(2);
+  });
+});

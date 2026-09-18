@@ -19,6 +19,12 @@ function decodeXmlText(raw: string): string {
     .trim();
 }
 
+// An RSS feed doesn't publish new items every second, so a short cache
+// avoids re-fetching and re-parsing the whole feed for every get_news/
+// search_news call in quick succession — real latency/load savings, same
+// reasoning as OpenMeteoClient's current-weather cache.
+const ITEMS_CACHE_TTL_MS = 5 * 60_000;
+
 /**
  * Free news headlines from any RSS feed the user configures — no API key,
  * no account, matching this project's "as close to free as possible"
@@ -29,9 +35,15 @@ function decodeXmlText(raw: string): string {
  * throwing.
  */
 export class RssNewsClient {
+  private cachedItems: { value: NewsHeadline[]; fetchedAt: number } | undefined;
+
   constructor(private readonly feedUrl: string) {}
 
   private async fetchAllItems(): Promise<NewsHeadline[]> {
+    if (this.cachedItems && Date.now() - this.cachedItems.fetchedAt < ITEMS_CACHE_TTL_MS) {
+      return this.cachedItems.value;
+    }
+
     const response = await fetch(this.feedUrl);
     if (!response.ok) {
       throw new Error(`RSS feed request failed (${response.status}): ${await response.text().catch(() => "")}`);
@@ -51,6 +63,7 @@ export class RssNewsClient {
       if (title && link) headlines.push({ title, link });
     }
 
+    this.cachedItems = { value: headlines, fetchedAt: Date.now() };
     return headlines;
   }
 

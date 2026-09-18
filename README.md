@@ -826,7 +826,10 @@ XML parser dependency — and **`SEARCH_NEWS`** (`READ`) — filters that same
 feed's headlines to ones whose title matches a keyword, for "anything
 about X in the news" instead of scanning the unfiltered top 5. No API
 key, no account, and deliberately scoped to whichever single feed you
-configure, not a general web-wide news aggregator.
+configure, not a general web-wide news aggregator. The fetched feed is
+cached for 5 minutes and shared between both tools, so calling either in
+quick succession doesn't re-fetch and re-parse the whole feed; a failed
+request is never cached.
 
 ## Live audio waveform (see JARVIS's voice on a call)
 
