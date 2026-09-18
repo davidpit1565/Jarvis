@@ -21,6 +21,15 @@ export interface ClaudeBrainOptions {
    */
   webSearchEnabled?: boolean;
   webSearchMaxUses?: number;
+  /**
+   * Enables Anthropic's own server-side web_fetch tool — lets Claude
+   * actually open and read a specific URL's content (a page it found via
+   * web_search, or one the user gave directly), not just see a search
+   * snippet. Same account/billing as web_search, same reasoning for being
+   * an explicit opt-in (JARVIS_WEB_FETCH=true).
+   */
+  webFetchEnabled?: boolean;
+  webFetchMaxUses?: number;
 }
 
 /**
@@ -34,18 +43,31 @@ export class ClaudeBrain implements Brain {
   private readonly maxTokens: number;
   private readonly webSearchEnabled: boolean;
   private readonly webSearchMaxUses: number;
+  private readonly webFetchEnabled: boolean;
+  private readonly webFetchMaxUses: number;
 
   constructor(apiKey: string, options: ClaudeBrainOptions = {}) {
     this.model = options.model ?? DEFAULT_MODEL;
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.webSearchEnabled = options.webSearchEnabled ?? false;
     this.webSearchMaxUses = options.webSearchMaxUses ?? 5;
+    this.webFetchEnabled = options.webFetchEnabled ?? false;
+    this.webFetchMaxUses = options.webFetchMaxUses ?? 5;
     // baseURL is pinned explicitly: the Anthropic SDK otherwise honors an
     // ambient ANTHROPIC_BASE_URL environment variable, which on a
     // developer's machine may point at an unrelated local proxy/router
     // (e.g. a different AI tool) — JARVIS must always talk to the real
     // Anthropic API regardless of what else is configured on the host.
-    this.client = new Anthropic({ apiKey, baseURL: ANTHROPIC_API_BASE_URL });
+    //
+    // maxRetries/timeout are set explicitly rather than left at the SDK's
+    // own defaults (2 retries, 10 minutes) — 4 retries gives a call on a
+    // flaky connection (phone calls in particular can't just be asked to
+    // "try again") more chances to recover from a transient 429/5xx before
+    // giving up, and a 30s cap keeps a single stuck request from silently
+    // blocking a phone call or chat turn far longer than a human would
+    // ever wait. The SDK already backs off between retries and honors the
+    // API's Retry-After header — there is no reason to reimplement that.
+    this.client = new Anthropic({ apiKey, baseURL: ANTHROPIC_API_BASE_URL, maxRetries: 4, timeout: 30_000 });
   }
 
   async chat(request: BrainRequest): Promise<BrainResponse> {
@@ -65,7 +87,13 @@ export class ClaudeBrain implements Brain {
   }
 
   private buildTools(tools: ToolDefinition[]): Anthropic.ToolUnion[] {
-    return buildAnthropicTools(tools, this.webSearchEnabled, this.webSearchMaxUses);
+    return buildAnthropicTools(
+      tools,
+      this.webSearchEnabled,
+      this.webSearchMaxUses,
+      this.webFetchEnabled,
+      this.webFetchMaxUses
+    );
   }
 }
 
@@ -73,7 +101,9 @@ export class ClaudeBrain implements Brain {
 export function buildAnthropicTools(
   tools: ToolDefinition[],
   webSearchEnabled: boolean,
-  webSearchMaxUses: number
+  webSearchMaxUses: number,
+  webFetchEnabled: boolean = false,
+  webFetchMaxUses: number = 5
 ): Anthropic.ToolUnion[] {
   const result: Anthropic.ToolUnion[] = toAnthropicTools(tools);
   if (webSearchEnabled) {
@@ -81,6 +111,11 @@ export function buildAnthropicTools(
     // the newer dynamic-filtering variant which requires a more recent
     // model than JARVIS defaults to.
     result.push({ type: "web_search_20250305", name: "web_search", max_uses: webSearchMaxUses });
+  }
+  if (webFetchEnabled) {
+    // Same reasoning as web_search above: the "20250910" (basic) variant
+    // works with any current model.
+    result.push({ type: "web_fetch_20250910", name: "web_fetch", max_uses: webFetchMaxUses });
   }
   return result;
 }

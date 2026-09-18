@@ -14,6 +14,8 @@ const ENV_KEYS = [
   "JARVIS_ADMIN_TOKEN",
   "JARVIS_WEB_SEARCH",
   "JARVIS_WEB_SEARCH_MAX_USES",
+  "JARVIS_WEB_FETCH",
+  "JARVIS_WEB_FETCH_MAX_USES",
   "JARVIS_AUDIO_WAVEFORM",
 ];
 let saved: Record<string, string | undefined> = {};
@@ -148,6 +150,29 @@ describe("loadConfig", () => {
 
   test("rejects a non-positive JARVIS_WEB_SEARCH_MAX_USES", () => {
     process.env.JARVIS_WEB_SEARCH_MAX_USES = "0";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("web fetch is disabled by default with the default max_uses", () => {
+    const config = loadConfig();
+    expect(config.webFetchEnabled).toBe(false);
+    expect(config.webFetchMaxUses).toBe(5);
+  });
+
+  test("enables web fetch via JARVIS_WEB_FETCH=true", () => {
+    process.env.JARVIS_WEB_FETCH = "true";
+    const config = loadConfig();
+    expect(config.webFetchEnabled).toBe(true);
+  });
+
+  test("reads a custom JARVIS_WEB_FETCH_MAX_USES", () => {
+    process.env.JARVIS_WEB_FETCH_MAX_USES = "10";
+    const config = loadConfig();
+    expect(config.webFetchMaxUses).toBe(10);
+  });
+
+  test("rejects a non-positive JARVIS_WEB_FETCH_MAX_USES", () => {
+    process.env.JARVIS_WEB_FETCH_MAX_USES = "0";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 

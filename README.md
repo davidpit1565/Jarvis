@@ -116,6 +116,20 @@ memory store (`src/memory/MemoryStore.ts`) that survives restarts:
 This is the first real step toward "JARVIS knows things about you between
 conversations" rather than only within a single session.
 
+## Reminders / tasks
+
+A separate SQLite-backed store (`src/reminders/ReminderStore.ts`,
+`JARVIS_REMINDERS_DB_PATH`) for things to *do*, not facts to recall — a
+reminder has a lifecycle (pending, then completed), a memory doesn't:
+
+- **`CREATE_REMINDER`** (`SAFE_ACTION`, standing-granted) — creates a
+  reminder/task, optionally with an ISO 8601 `dueAt` Claude resolves from
+  whatever the user actually said ("remind me at 6pm").
+- **`LIST_REMINDERS`** (`READ`) — pending reminders by default, soonest-due
+  first (undated ones last); pass `includeCompleted` to see everything.
+- **`COMPLETE_REMINDER`** (`SAFE_ACTION`, standing-granted) — marks one
+  done by id.
+
 ## Confirmation flow for CONFIRM / DANGEROUS tools
 
 `CONFIRM` and `DANGEROUS` tools now have a real approval path instead of
@@ -271,6 +285,18 @@ Anthropic's infrastructure and is billed through the same
   shaping logic is unit-tested (`tests/brain/ClaudeBrain.test.ts`), but no
   real API key was available in this environment to confirm an actual
   search executes end to end.
+
+## Real URL reading (web_fetch)
+
+`JARVIS_WEB_FETCH=true` enables Anthropic's own server-side `web_fetch`
+tool, alongside (not instead of) `web_search` above — same account/billing,
+same "no separate vendor" reasoning. The difference: `web_search` finds
+pages and returns snippets; `web_fetch` actually opens and reads a
+specific URL's content, so JARVIS can answer questions about a page you
+give it directly, or read the full page behind a search result rather than
+guessing from the snippet alone. `JARVIS_WEB_FETCH_MAX_USES` caps how many
+fetches Claude may run in one turn (default 5). Same "not yet verified
+against the real Anthropic API" caveat as `web_search` applies here too.
 
 ## Run
 

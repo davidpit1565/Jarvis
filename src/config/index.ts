@@ -4,6 +4,8 @@ export interface JarvisConfig {
   memoryDbPath: string;
   /** Path to the SQLite database storing registered Face ID/Touch ID (WebAuthn) credentials. */
   webauthnDbPath: string;
+  /** Path to the SQLite database storing reminders/tasks. */
+  remindersDbPath: string;
   /** Both must be set together to enable the optional Twilio phone gateway. */
   twilioAuthToken?: string;
   /**
@@ -50,6 +52,14 @@ export interface JarvisConfig {
   /** Caps how many searches Claude may run in a single turn. */
   webSearchMaxUses: number;
   /**
+   * Enables Anthropic's own server-side web_fetch tool — lets Claude
+   * actually read a specific URL's content, not just a search snippet.
+   * Same account/billing as web_search. Off by default, same reasoning.
+   */
+  webFetchEnabled: boolean;
+  /** Caps how many URL fetches Claude may run in a single turn. */
+  webFetchMaxUses: number;
+  /**
    * Enables live phone-call audio waveform visualization on the
    * dashboard, via Twilio Media Streams. Only meaningful when the phone
    * gateway is also configured. Off by default: Twilio bills Media
@@ -78,6 +88,7 @@ export function loadConfig(): JarvisConfig {
   const port = Number(process.env.JARVIS_PORT ?? "4770");
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
   const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
+  const remindersDbPath = process.env.JARVIS_REMINDERS_DB_PATH ?? "./data/jarvis-reminders.sqlite";
 
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new ConfigError(`Invalid JARVIS_PORT: must be an integer between 1 and 65535`);
@@ -106,6 +117,13 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("Invalid JARVIS_WEB_SEARCH_MAX_USES: must be a positive integer");
   }
 
+  const webFetchEnabled = process.env.JARVIS_WEB_FETCH?.trim().toLowerCase() === "true";
+  const webFetchMaxUses = Number(process.env.JARVIS_WEB_FETCH_MAX_USES ?? "5");
+
+  if (!Number.isInteger(webFetchMaxUses) || webFetchMaxUses <= 0) {
+    throw new ConfigError("Invalid JARVIS_WEB_FETCH_MAX_USES: must be a positive integer");
+  }
+
   const audioWaveformEnabled = process.env.JARVIS_AUDIO_WAVEFORM?.trim().toLowerCase() === "true";
 
   if (twilioAuthToken && twilioPublicBaseUrl && !adminToken) {
@@ -121,6 +139,7 @@ export function loadConfig(): JarvisConfig {
     port,
     memoryDbPath,
     webauthnDbPath,
+    remindersDbPath,
     twilioAuthToken,
     twilioPublicBaseUrl,
     twilioAllowedCallers,
@@ -130,6 +149,8 @@ export function loadConfig(): JarvisConfig {
     adminToken,
     webSearchEnabled,
     webSearchMaxUses,
+    webFetchEnabled,
+    webFetchMaxUses,
     audioWaveformEnabled,
   };
 }

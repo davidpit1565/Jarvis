@@ -12,6 +12,10 @@ import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationToo
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { MemoryStore } from "@/memory/MemoryStore";
+import { ReminderStore } from "@/reminders/ReminderStore";
+import { createCreateReminderTool } from "@/tools/reminders/CreateReminderTool";
+import { createListRemindersTool } from "@/tools/reminders/ListRemindersTool";
+import { createCompleteReminderTool } from "@/tools/reminders/CompleteReminderTool";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -37,6 +41,7 @@ function main() {
   const eventBus = new EventBus();
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
+  const reminderStore = new ReminderStore(config.remindersDbPath);
   const activityLog = new ActivityLog();
   const webAuthnStore = new WebAuthnStore(config.webauthnDbPath);
   const webAuthnService = new WebAuthnService(webAuthnStore);
@@ -46,12 +51,17 @@ function main() {
   toolRegistry.registerTool(getActiveApplicationTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
+  toolRegistry.registerTool(createCreateReminderTool(reminderStore));
+  toolRegistry.registerTool(createListRemindersTool(reminderStore));
+  toolRegistry.registerTool(createCompleteReminderTool(reminderStore));
 
   const permissionService = new PermissionService();
   // This is a single-user personal assistant, not a multi-tenant system —
   // memory writes are SAFE_ACTION-level but standing-granted to the one
   // local user rather than asked about every time.
   permissionService.grant(DEFAULT_USER_ID, "SAVE_MEMORY");
+  permissionService.grant(DEFAULT_USER_ID, "CREATE_REMINDER");
+  permissionService.grant(DEFAULT_USER_ID, "COMPLETE_REMINDER");
 
   const deviceRegistry = new DeviceRegistry();
   const pairingService = new PairingService();
@@ -60,6 +70,8 @@ function main() {
   const brain = new ClaudeBrain(config.anthropicApiKey, {
     webSearchEnabled: config.webSearchEnabled,
     webSearchMaxUses: config.webSearchMaxUses,
+    webFetchEnabled: config.webFetchEnabled,
+    webFetchMaxUses: config.webFetchMaxUses,
   });
   const confirmationService = new ConfirmationService(confirmViaChat);
 
@@ -141,6 +153,9 @@ function main() {
     if (serverToolUses?.includes("web_search")) {
       activityLog.record("Searching the web…", "thinking");
     }
+    if (serverToolUses?.includes("web_fetch")) {
+      activityLog.record("Reading a page…", "thinking");
+    }
     if (text.trim()) activityLog.record(text, "speaking");
   });
 
@@ -187,6 +202,7 @@ function main() {
 
   process.on("SIGINT", () => {
     memoryStore.close();
+    reminderStore.close();
     webAuthnStore.close();
     rl.close();
     process.exit(0);
