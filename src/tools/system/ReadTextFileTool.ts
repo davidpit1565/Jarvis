@@ -1,5 +1,6 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { DeviceTool } from "@/types/tools";
+import { validateDeviceRelativePath } from "./devicePathValidation";
 
 /**
  * Reads a text file's contents on the target device — e.g. "read that
@@ -32,4 +33,7 @@ export const readTextFileTool: DeviceTool = {
   },
   requiredPermission: PermissionLevel.READ,
   target: "device",
+  validateInput(input) {
+    return validateDeviceRelativePath(typeof input.path === "string" ? input.path : "");
+  },
 };

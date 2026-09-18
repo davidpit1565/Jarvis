@@ -82,4 +82,28 @@ describe("ConversationManager", () => {
     expect(messages.length).toBeLessThan(60);
     expect(messages.some((m) => m.role === "user" && m.content === "turn 59")).toBe(true);
   });
+
+  test("attaches images to a user turn when given", () => {
+    const conversation = new ConversationManager();
+    conversation.addUserMessage("what's this?", [{ mediaType: "image/png", data: "abc123" }]);
+
+    expect(conversation.getMessages()).toEqual([
+      { role: "user", content: "what's this?", images: [{ mediaType: "image/png", data: "abc123" }] },
+    ]);
+  });
+
+  test("normalizes an empty images array to undefined, same as omitting it", () => {
+    const conversation = new ConversationManager();
+    conversation.addUserMessage("hi", []);
+
+    expect(conversation.getMessages()).toEqual([{ role: "user", content: "hi" }]);
+  });
+
+  test("leaves images undefined for a plain text turn", () => {
+    const conversation = new ConversationManager();
+    conversation.addUserMessage("hi");
+
+    const [message] = conversation.getMessages();
+    expect((message as { images?: unknown }).images).toBeUndefined();
+  });
 });

@@ -4,6 +4,8 @@ import { loadConfig } from "@/config";
 import { EventBus } from "@/core/events/EventBus";
 import { ConversationManager } from "@/core/conversation/ConversationManager";
 import { ClaudeBrain, DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
+import { GroqBrain } from "@/core/brain/GroqBrain";
+import type { Brain } from "@/types/brain";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
@@ -16,6 +18,10 @@ import { quitApplicationTool } from "@/tools/system/QuitApplicationTool";
 import { openUrlTool } from "@/tools/system/OpenUrlTool";
 import { listDirectoryTool } from "@/tools/system/ListDirectoryTool";
 import { readTextFileTool } from "@/tools/system/ReadTextFileTool";
+import { readFileBytesTool } from "@/tools/system/ReadFileBytesTool";
+import { listRecentPhotosTool } from "@/tools/system/ListRecentPhotosTool";
+import { writeFileTool } from "@/tools/system/WriteFileTool";
+import { scheduleMacNotificationTool } from "@/tools/system/ScheduleMacNotificationTool";
 import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
 import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
 import { clickElementTool } from "@/tools/system/ClickElementTool";
@@ -51,6 +57,14 @@ import { createCreateWakeUpCallTool } from "@/tools/wakeup/CreateWakeUpCallTool"
 import { createListWakeUpCallsTool } from "@/tools/wakeup/ListWakeUpCallsTool";
 import { createDeleteWakeUpCallTool } from "@/tools/wakeup/DeleteWakeUpCallTool";
 import { createUpdateWakeUpCallTool } from "@/tools/wakeup/UpdateWakeUpCallTool";
+import { AlarmStore } from "@/alarms/AlarmStore";
+import { getDueAlarms } from "@/alarms/getDueAlarms";
+import { createCreateAlarmTool } from "@/tools/alarms/CreateAlarmTool";
+import { createListAlarmsTool } from "@/tools/alarms/ListAlarmsTool";
+import { createDeleteAlarmTool } from "@/tools/alarms/DeleteAlarmTool";
+import { createUpdateAlarmTool } from "@/tools/alarms/UpdateAlarmTool";
+import { TwilioSmsSender } from "@/communication/phone/TwilioSmsSender";
+import { createSendSmsTool } from "@/tools/phone/SendSmsTool";
 import { TwilioOutboundCaller } from "@/communication/phone/TwilioOutboundCaller";
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
@@ -76,6 +90,8 @@ import { createPauseMusicTool } from "@/tools/spotify/PauseMusicTool";
 import { createSkipTrackTool } from "@/tools/spotify/SkipTrackTool";
 import { createUnlinkSpotifyTool } from "@/tools/spotify/UnlinkSpotifyTool";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
+import { createSendEmailTool } from "@/tools/gmail/SendEmailTool";
+import { createReplyEmailTool } from "@/tools/gmail/ReplyEmailTool";
 import { createGetEmailTool } from "@/tools/gmail/GetEmailTool";
 import { createGetUnreadEmailCountTool } from "@/tools/gmail/GetUnreadEmailCountTool";
 import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
@@ -98,6 +114,9 @@ import { TwilioSmsGateway, type SmsSession } from "@/communication/phone/TwilioS
 import { TelegramGateway, type TelegramSession } from "@/communication/telegram/TelegramGateway";
 import { DeviceVoiceGateway, type DeviceVoiceSession } from "@/communication/voice/DeviceVoiceGateway";
 import { createNotifyUserTool } from "@/tools/telegram/NotifyUserTool";
+import { createShareFileToPhoneTool } from "@/tools/telegram/ShareFileToPhoneTool";
+import { PollinationsImageClient } from "@/images/PollinationsImageClient";
+import { createGenerateImageTool } from "@/tools/images/GenerateImageTool";
 import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ActivityLog } from "@/core/activity/ActivityLog";
 import { WebAuthnStore } from "@/auth/WebAuthnStore";
@@ -201,6 +220,8 @@ function main() {
     toolRegistry.registerTool(createSearchEmailTool(gmailClient));
     toolRegistry.registerTool(createGetEmailTool(gmailClient));
     toolRegistry.registerTool(createGetUnreadEmailCountTool(gmailClient));
+    toolRegistry.registerTool(createSendEmailTool(gmailClient));
+    toolRegistry.registerTool(createReplyEmailTool(gmailClient));
   }
 
   const spotifyEnabled = Boolean(config.spotifyClientId && config.spotifyClientSecret && config.publicBaseUrl);
@@ -250,6 +271,10 @@ function main() {
   toolRegistry.registerTool(openUrlTool);
   toolRegistry.registerTool(listDirectoryTool);
   toolRegistry.registerTool(readTextFileTool);
+  toolRegistry.registerTool(readFileBytesTool);
+  toolRegistry.registerTool(listRecentPhotosTool);
+  toolRegistry.registerTool(writeFileTool);
+  toolRegistry.registerTool(scheduleMacNotificationTool);
   toolRegistry.registerTool(composeEmailDraftTool);
   toolRegistry.registerTool(clickElementTool);
   toolRegistry.registerTool(typeTextTool);
@@ -294,6 +319,14 @@ function main() {
     permissionService.grant(DEFAULT_USER_ID, "UNLINK_CALENDAR");
     permissionService.grant(DEFAULT_USER_ID, "UNDO_LAST_ACTION");
   }
+  if (gmailClient) {
+    // CONFIRM (see SendEmailTool/ReplyEmailTool's own doc comments): the
+    // grant only makes these tools askable at all — PermissionService
+    // still forces a fresh per-invocation confirmation regardless, same
+    // as CLEAR_CONVERSATION_HISTORY/UNLINK_CALENDAR above.
+    permissionService.grant(DEFAULT_USER_ID, "SEND_EMAIL");
+    permissionService.grant(DEFAULT_USER_ID, "REPLY_EMAIL");
+  }
   if (spotifyClient) {
     permissionService.grant(DEFAULT_USER_ID, "PLAY_MUSIC");
     permissionService.grant(DEFAULT_USER_ID, "PAUSE_MUSIC");
@@ -321,7 +354,7 @@ function main() {
   // (via "device.roleGranted") and, since PermissionService's grants are
   // in-memory only, re-derived at startup for any device that already
   // has the role persisted from before a restart.
-  const STANDARD_PRIMARY_DEVICE_TOOLS = ["OPEN_APPLICATION", "QUIT_APPLICATION", "OPEN_URL"];
+  const STANDARD_PRIMARY_DEVICE_TOOLS = ["OPEN_APPLICATION", "QUIT_APPLICATION", "OPEN_URL", "SCHEDULE_MAC_NOTIFICATION"];
   function grantPrimaryDeviceTools(deviceId: string): void {
     for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {
       permissionService.grant(DEFAULT_USER_ID, toolId, deviceId);
@@ -346,14 +379,22 @@ function main() {
   const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const conversation = new ConversationManager(eventBus);
-  const brain = new ClaudeBrain(config.anthropicApiKey, {
-    webSearchEnabled: config.webSearchEnabled,
-    webSearchMaxUses: config.webSearchMaxUses,
-    webFetchEnabled: config.webFetchEnabled,
-    webFetchMaxUses: config.webFetchMaxUses,
-    baseUrl: config.anthropicBaseUrl,
-    fallbackModel: config.fallbackModel,
-  });
+  // "groq" is a genuine $0 alternative (no credit card, real tool-calling
+  // support on the free tier) — see GroqBrain's own doc comment and
+  // README's "Free ($0) brain: Groq" section for the honest quality
+  // tradeoff. loadConfig() already guarantees the matching API key is
+  // set for whichever provider is selected.
+  const brain: Brain =
+    config.brainProvider === "groq"
+      ? new GroqBrain(config.groqApiKey!, { model: config.groqModel })
+      : new ClaudeBrain(config.anthropicApiKey!, {
+          webSearchEnabled: config.webSearchEnabled,
+          webSearchMaxUses: config.webSearchMaxUses,
+          webFetchEnabled: config.webFetchEnabled,
+          webFetchMaxUses: config.webFetchMaxUses,
+          baseUrl: config.anthropicBaseUrl,
+          fallbackModel: config.fallbackModel,
+        });
   const confirmationService = new ConfirmationService(confirmViaChat);
   const phoneConfirmationService = new ConfirmationService(denyPhoneConfirmation);
 
@@ -400,6 +441,7 @@ function main() {
       config.ownerPhoneNumber
   );
   const wakeUpCallStore = new WakeUpCallStore(config.wakeUpCallDbPath);
+  const alarmStore = new AlarmStore(config.alarmDbPath);
 
   // A wake-up call gets its own conversation thread like any other phone
   // call, but with a distinct channelContext: JARVIS placed this call
@@ -440,8 +482,27 @@ function main() {
     ? new URL("/voice/audio-stream", config.twilioPublicBaseUrl!.replace(/^http/, "ws")).toString()
     : undefined;
 
+  // An unset/empty TWILIO_ALLOWED_CALLERS used to only log a warning and
+  // start the gateway anyway — anyone who called the number reached full
+  // JARVIS, including tools like SAVE_MEMORY and SEND_EMAIL (a caller can
+  // self-approve its own CONFIRM prompt in the same call/chat it's
+  // already talking to JARVIS through, so CONFIRM alone doesn't protect
+  // against a malicious caller directly asking for one — only against
+  // content the legitimate owner reads triggering one on their behalf),
+  // with nothing stopping them but a server log line nobody was
+  // watching. Now it refuses to start the gateway at all unless the
+  // caller explicitly opts into that via TWILIO_ALLOW_OPEN_ACCESS.
+  const phoneGatewayAllowlistOk =
+    (config.twilioAllowedCallers && config.twilioAllowedCallers.length > 0) || config.twilioAllowOpenAccess;
+  if (config.twilioAuthToken && config.twilioPublicBaseUrl && !phoneGatewayAllowlistOk) {
+    console.error(
+      "[jarvis] Phone gateway NOT started: TWILIO_AUTH_TOKEN/TWILIO_PUBLIC_BASE_URL are set but " +
+        "TWILIO_ALLOWED_CALLERS is empty. Set TWILIO_ALLOWED_CALLERS to the E.164 numbers that may call in, " +
+        "or set TWILIO_ALLOW_OPEN_ACCESS=true to intentionally accept calls from anyone."
+    );
+  }
   const phoneGateway =
-    config.twilioAuthToken && config.twilioPublicBaseUrl
+    config.twilioAuthToken && config.twilioPublicBaseUrl && phoneGatewayAllowlistOk
       ? new TwilioVoiceGateway(
           createPhoneSession,
           config.twilioVoice,
@@ -524,15 +585,39 @@ function main() {
     };
   }
 
+  // Same reasoning as phoneGatewayAllowlistOk above — an empty
+  // TELEGRAM_ALLOWED_CHAT_IDS used to only warn, not block, leaving the
+  // bot open to any chat that found and messaged it.
+  const telegramGatewayAllowlistOk =
+    (config.telegramAllowedChatIds && config.telegramAllowedChatIds.length > 0) || config.telegramAllowOpenAccess;
+  if (config.telegramBotToken && config.telegramWebhookSecret && !telegramGatewayAllowlistOk) {
+    console.error(
+      "[jarvis] Telegram gateway NOT started: TELEGRAM_BOT_TOKEN/TELEGRAM_WEBHOOK_SECRET are set but " +
+        "TELEGRAM_ALLOWED_CHAT_IDS is empty. Set TELEGRAM_ALLOWED_CHAT_IDS to the chat IDs that may message the " +
+        "bot, or set TELEGRAM_ALLOW_OPEN_ACCESS=true to intentionally accept messages from any chat."
+    );
+  }
   const telegramGateway =
-    config.telegramBotToken && config.telegramWebhookSecret
+    config.telegramBotToken && config.telegramWebhookSecret && telegramGatewayAllowlistOk
       ? new TelegramGateway(config.telegramBotToken, createTelegramSession, config.telegramAllowedChatIds)
       : undefined;
 
   if (telegramGateway && config.telegramOwnerChatId) {
     toolRegistry.registerTool(createNotifyUserTool(telegramGateway, config.telegramOwnerChatId));
     permissionService.grant(DEFAULT_USER_ID, "NOTIFY_USER");
+    toolRegistry.registerTool(createShareFileToPhoneTool(telegramGateway, config.telegramOwnerChatId));
+    permissionService.grant(DEFAULT_USER_ID, "SHARE_FILE_TO_PHONE");
   }
+
+  // Always registered, unlike the Telegram-only tools above — the
+  // generated image's URL is useful on any channel (the tool result
+  // itself always carries it); Telegram delivery on top is a bonus when
+  // a owner chat happens to be configured, not a requirement.
+  const pollinationsImageClient = new PollinationsImageClient();
+  toolRegistry.registerTool(
+    createGenerateImageTool(pollinationsImageClient, telegramGateway, config.telegramOwnerChatId)
+  );
+  permissionService.grant(DEFAULT_USER_ID, "GENERATE_IMAGE");
 
   // A paired device's "Hey JARVIS" wake-word channel gets its own
   // conversation thread, exactly like Telegram — kept for the life of the
@@ -589,6 +674,14 @@ function main() {
     );
     const wakeUpTwimlUrl = new URL("/voice/wakeup-connected", config.twilioPublicBaseUrl!).toString();
 
+    // Same account/credentials as outboundCaller above — reuses the same
+    // "outbound call" config group since SMS needs exactly the same
+    // Twilio fields (account sid, auth token, from number) plus somewhere
+    // to send to (ownerPhoneNumber).
+    const smsSender = new TwilioSmsSender(config.twilioAccountSid!, config.twilioAuthToken!, config.twilioFromNumber!);
+    toolRegistry.registerTool(createSendSmsTool(smsSender, config.ownerPhoneNumber!));
+    permissionService.grant(DEFAULT_USER_ID, "SEND_SMS");
+
     // WakeUpCallStore's lastTriggeredDate check makes each tick idempotent
     // ONCE a call has actually completed — but a call stays due for up to
     // two ticks within the same matching minute (checks run every 30s),
@@ -634,6 +727,47 @@ function main() {
           })
           .finally(() => {
             inFlightWakeUpCallIds.delete(call.id);
+          });
+      }
+    }, 30_000);
+  }
+
+  let alarmInterval: ReturnType<typeof setInterval> | undefined;
+  const alarmsEnabled = Boolean(telegramGateway && config.telegramOwnerChatId);
+  if (alarmsEnabled) {
+    toolRegistry.registerTool(createCreateAlarmTool(alarmStore));
+    toolRegistry.registerTool(createListAlarmsTool(alarmStore));
+    toolRegistry.registerTool(createUpdateAlarmTool(alarmStore));
+    toolRegistry.registerTool(createDeleteAlarmTool(alarmStore));
+    permissionService.grant(DEFAULT_USER_ID, "CREATE_ALARM");
+    permissionService.grant(DEFAULT_USER_ID, "UPDATE_ALARM");
+    permissionService.grant(DEFAULT_USER_ID, "DELETE_ALARM");
+
+    // Same in-flight-tracking reasoning as inFlightWakeUpCallIds above —
+    // a slow Telegram send shouldn't get double-fired by the next tick.
+    const inFlightAlarmIds = new Set<string>();
+
+    alarmInterval = setInterval(() => {
+      const now = new Date();
+      const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
+      const todayDateStr = formatDateKey(now, config.timezone);
+      const due = getDueAlarms(alarmStore.list(), nowTimeOfDay, todayDateStr, inFlightAlarmIds);
+
+      for (const alarm of due) {
+        inFlightAlarmIds.add(alarm.id);
+        telegramGateway!
+          .sendMessage(config.telegramOwnerChatId!, `⏰ Alarm${alarm.label ? ` — ${alarm.label}` : ""}`)
+          .then(() => {
+            alarmStore.markTriggered(alarm.id, todayDateStr);
+            activityLog.record(`Alarm fired${alarm.label ? ` (${alarm.label})` : ""}`);
+          })
+          .catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[jarvis] failed to fire alarm ${alarm.id}:`, message);
+            activityLog.record(`Failed to fire alarm${alarm.label ? ` (${alarm.label})` : ""}: ${message}`);
+          })
+          .finally(() => {
+            inFlightAlarmIds.delete(alarm.id);
           });
       }
     }, 30_000);
@@ -801,6 +935,7 @@ function main() {
       "COMPLETE_MAC_REMINDER",
     ],
   });
+  wsServerRef = wsServer;
   const httpHandle = wsServer.start(config.port);
 
   eventBus.on("brain.request", () => {
@@ -874,11 +1009,15 @@ function main() {
   if (audioLevelBroadcaster) {
     console.log("Audio waveform: enabled (Twilio Media Streams — extra cost ~$0.004/min on the Twilio account)");
   }
+  // Only reachable via the explicit TWILIO_ALLOW_OPEN_ACCESS opt-in now —
+  // an empty allowlist with no opt-in never gets this far (see
+  // phoneGatewayAllowlistOk above), so this is a reminder of a choice
+  // already made, not a warning about an accidental gap.
   if (phoneGateway && (!config.twilioAllowedCallers || config.twilioAllowedCallers.length === 0)) {
     console.warn(
-      "[jarvis] WARNING: phone gateway is enabled with no TWILIO_ALLOWED_CALLERS set — " +
-        "anyone who calls the configured number reaches full JARVIS, including tools like SAVE_MEMORY. " +
-        "Set TWILIO_ALLOWED_CALLERS before giving the number to anyone but yourself."
+      "[jarvis] WARNING: phone gateway is running open (TWILIO_ALLOW_OPEN_ACCESS=true, no " +
+        "TWILIO_ALLOWED_CALLERS) — anyone who calls the configured number reaches full JARVIS, " +
+        "including tools like SAVE_MEMORY and SEND_EMAIL."
     );
   }
   console.log(
@@ -886,11 +1025,13 @@ function main() {
       ? "Telegram gateway: enabled (POST /telegram/webhook)"
       : "Telegram gateway: disabled (set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET to enable)"
   );
+  // Only reachable via the explicit TELEGRAM_ALLOW_OPEN_ACCESS opt-in now
+  // — see the phone gateway comment above.
   if (telegramGateway && (!config.telegramAllowedChatIds || config.telegramAllowedChatIds.length === 0)) {
     console.warn(
-      "[jarvis] WARNING: Telegram gateway is enabled with no TELEGRAM_ALLOWED_CHAT_IDS set — " +
-        "anyone who finds and messages the bot reaches full JARVIS, including tools like SAVE_MEMORY. " +
-        "Set TELEGRAM_ALLOWED_CHAT_IDS before sharing the bot with anyone but yourself."
+      "[jarvis] WARNING: Telegram gateway is running open (TELEGRAM_ALLOW_OPEN_ACCESS=true, no " +
+        "TELEGRAM_ALLOWED_CHAT_IDS) — anyone who finds and messages the bot reaches full JARVIS, " +
+        "including tools like SAVE_MEMORY and SEND_EMAIL."
     );
   }
 
@@ -919,6 +1060,8 @@ function main() {
     webAuthnStore.close();
     wakeUpCallStore.close();
     if (wakeUpInterval) clearInterval(wakeUpInterval);
+    alarmStore.close();
+    if (alarmInterval) clearInterval(alarmInterval);
     if (weeklyDigestInterval) clearInterval(weeklyDigestInterval);
     if (checkinInterval) clearInterval(checkinInterval);
     if (morningBriefingInterval) clearInterval(morningBriefingInterval);
@@ -949,17 +1092,39 @@ function main() {
   };
 }
 
+// Set once wsServer exists, below — confirmViaChat is only ever actually
+// CALLED later, asynchronously, once a real CONFIRM/DANGEROUS tool call
+// happens well after startup finishes, the same forward-reference
+// reasoning already used for telegramGateway! elsewhere in this file.
+let wsServerRef: JarvisWebSocketServer | undefined;
+
 /**
- * Asks the human directly in the terminal whether a CONFIRM/DANGEROUS tool
- * call may proceed. This is today's only confirmation channel; a future
- * channel (push notification, phone call) would just be a different
- * ConfirmationPrompter passed to the same ConfirmationService.
+ * Asks the human for a CONFIRM/DANGEROUS tool call's approval, over
+ * whichever of the terminal/hologram-chat channels is actually live right
+ * now — the terminal and the browser share one Orchestrator/
+ * ConversationManager (see webChatOrchestrator below) precisely so
+ * talking to JARVIS from either feels like the same ongoing conversation,
+ * so the confirmation prompt has to follow that same "one conversation"
+ * model rather than being pinned to the terminal alone. Found and fixed
+ * during a later security review: SEND_EMAIL/REPLY_EMAIL (and the
+ * pre-existing CLICK_ELEMENT/TYPE_TEXT) are CONFIRM-level, but a browser
+ * user calling one of them via the hologram chat used to get this same
+ * prompt silently routed to the SERVER's own terminal stdin — invisible
+ * and unanswerable from the browser, so the request just timed out and
+ * denied itself 60 seconds later with no visible reason. Now: if a
+ * browser is actually connected to /chat, ask there instead (real
+ * yes/no over the socket, see JarvisWebSocketServer.requestWebChatConfirmation);
+ * otherwise fall back to the terminal, unchanged from before.
  */
 async function confirmViaChat(request: ConfirmationRequest): Promise<boolean> {
   const inputSummary = JSON.stringify(request.input);
-  const answer = await rl.question(
-    `\n⚠️  JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Approve? (yes/no): `
-  );
+  const questionText = `JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Approve? (yes/no)`;
+
+  if (wsServerRef?.hasWebChatConnection) {
+    return wsServerRef.requestWebChatConfirmation(questionText);
+  }
+
+  const answer = await rl.question(`\n⚠️  ${questionText}: `);
   return answer.trim().toLowerCase().startsWith("y");
 }
 
