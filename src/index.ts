@@ -52,6 +52,7 @@ import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnect
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/TwilioVoiceGateway";
 import { TelegramGateway, type TelegramSession } from "@/communication/telegram/TelegramGateway";
+import { createNotifyUserTool } from "@/tools/telegram/NotifyUserTool";
 import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ActivityLog } from "@/core/activity/ActivityLog";
 import { WebAuthnStore } from "@/auth/WebAuthnStore";
@@ -349,6 +350,11 @@ function main() {
     config.telegramBotToken && config.telegramWebhookSecret
       ? new TelegramGateway(config.telegramBotToken, createTelegramSession, config.telegramAllowedChatIds)
       : undefined;
+
+  if (telegramGateway && config.telegramOwnerChatId) {
+    toolRegistry.registerTool(createNotifyUserTool(telegramGateway, config.telegramOwnerChatId));
+    permissionService.grant(DEFAULT_USER_ID, "NOTIFY_USER");
+  }
 
   let wakeUpInterval: ReturnType<typeof setInterval> | undefined;
   if (wakeUpCallsEnabled) {

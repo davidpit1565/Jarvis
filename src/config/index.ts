@@ -90,6 +90,13 @@ export interface JarvisConfig {
   /** Numeric Telegram chat IDs allowed to talk to the bot; empty/unset means any chat that finds/adds the bot can. */
   telegramAllowedChatIds?: string[];
   /**
+   * The owner's own Telegram chat ID — required for NOTIFY_USER to have
+   * somewhere to push a proactive message to. Distinct from
+   * telegramAllowedChatIds (which chats may talk *to* JARVIS): this is
+   * specifically where JARVIS talks *first*, unprompted.
+   */
+  telegramOwnerChatId?: string;
+  /**
    * Both required together to enable GET_WEATHER — a real, free (Open-Meteo,
    * no API key) current-weather lookup for one fixed location, since a
    * personal assistant only ever needs to know the weather where its one
@@ -285,6 +292,7 @@ export function loadConfig(): JarvisConfig {
   const telegramAllowedChatIds = process.env.TELEGRAM_ALLOWED_CHAT_IDS?.split(",")
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
+  const telegramOwnerChatId = process.env.TELEGRAM_OWNER_CHAT_ID?.trim() || undefined;
 
   const telegramFieldsSet = [telegramBotToken, telegramWebhookSecret].filter(Boolean).length;
   if (telegramFieldsSet > 0 && telegramFieldsSet < 2) {
@@ -355,6 +363,7 @@ export function loadConfig(): JarvisConfig {
     telegramBotToken,
     telegramWebhookSecret,
     telegramAllowedChatIds,
+    telegramOwnerChatId,
     weatherLatitude,
     weatherLongitude,
     costAlertThresholdUsd,

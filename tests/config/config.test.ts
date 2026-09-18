@@ -32,6 +32,7 @@ const ENV_KEYS = [
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_WEBHOOK_SECRET",
   "TELEGRAM_ALLOWED_CHAT_IDS",
+  "TELEGRAM_OWNER_CHAT_ID",
   "JARVIS_WEATHER_LATITUDE",
   "JARVIS_WEATHER_LONGITUDE",
   "JARVIS_COST_ALERT_THRESHOLD_USD",
@@ -388,5 +389,16 @@ describe("loadConfig", () => {
   test("rejects a non-numeric JARVIS_COST_ALERT_THRESHOLD_USD", () => {
     process.env.JARVIS_COST_ALERT_THRESHOLD_USD = "not-a-number";
     expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("reads TELEGRAM_OWNER_CHAT_ID when set", () => {
+    process.env.TELEGRAM_OWNER_CHAT_ID = "12345";
+    const config = loadConfig();
+    expect(config.telegramOwnerChatId).toBe("12345");
+  });
+
+  test("leaves telegramOwnerChatId undefined when unset", () => {
+    const config = loadConfig();
+    expect(config.telegramOwnerChatId).toBeUndefined();
   });
 });

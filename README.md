@@ -722,6 +722,18 @@ anything outside a chat this specific bot was added to, and (once
 - Only plain text messages are handled — photos, stickers, and other
   message types are silently ignored, since there's nothing meaningful for
   JARVIS to do with them today.
+- **`NOTIFY_USER`** (`SAFE_ACTION`, standing-granted) — lets JARVIS push a
+  text notification to your phone from *any* channel it's currently
+  talking to you on, most usefully the terminal/Mac: "tell me on my phone
+  when the build finishes" actually reaches your phone. Requires
+  `TELEGRAM_OWNER_CHAT_ID` (your own chat ID — distinct from
+  `TELEGRAM_ALLOWED_CHAT_IDS`, which is about who may talk *to* JARVIS,
+  not where JARVIS talks *first*). The reverse direction — asking JARVIS
+  to act on the Mac while talking to it over the phone/Telegram — already
+  worked before this, since every channel shares the same tool registry
+  and device connection (e.g. `OPEN_APPLICATION` dispatched from a
+  Telegram chat reaches the paired Mac exactly the same way it would from
+  the terminal).
 
 **Not yet verified**: never exercised against a real Telegram bot/account
 — this needs the @BotFather + setWebhook setup above, which hasn't been
@@ -1215,7 +1227,7 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
 - Local tools: `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION`/
   `OPEN_APPLICATION` (device — app name/bundle ID only, and launching a
   named app), memory/reminder/conversation-history/calendar/wake-up-call/
-  `SEARCH_EMAIL`/`GET_WEATHER` tools (see their own sections above). Real internet search/URL reading
+  `SEARCH_EMAIL`/`GET_WEATHER`/`NOTIFY_USER` tools (see their own sections above). Real internet search/URL reading
   exist separately, as Anthropic's own server-side `web_search`/`web_fetch`
   tools (opt-in via `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not
   through this registry — see "Real internet search" / "Real URL reading"
