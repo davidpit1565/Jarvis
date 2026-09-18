@@ -273,6 +273,16 @@
   </div>
 
 <script src="./three.min.js"></script>
+<script src="./headmodel/BufferGeometryUtils.js"></script>
+<script src="./headmodel/GLTFLoader.js"></script>
+<script src="./headmodel/SimplifyModifier.js"></script>
+<!-- Base64 of LeePerrySmith.glb (also kept as a plain file alongside it,
+     for reference/regeneration) — GLTFLoader.load(url) uses fetch(),
+     which Chromium blocks under file:// (unlike <script src>, which is
+     exempt), so the model is parsed from this embedded copy instead of
+     fetched, keeping the base page's "just open the file" promise intact
+     without requiring a local server for anything except face tracking. -->
+<script src="./headmodel/LeePerrySmith.b64.js"></script>
 <script>
 (function () {
   "use strict";
@@ -324,186 +334,6 @@
     }
     (function loop() { drawFrame(); requestAnimationFrame(loop); })();
   })();
-
-  /* ---------------------------------------------------------------
-   * 1. Build a luminance mask of a stylized front-facing face using
-   *    plain 2D canvas drawing (no external face model/asset needed).
-   *    Bright pixels become hologram particles.
-   * ------------------------------------------------------------- */
-  function buildFaceMask(size) {
-    const c = document.createElement("canvas");
-    c.width = size;
-    c.height = size;
-    const ctx = c.getContext("2d");
-    // Leave the canvas fully transparent (its default state) — sampling
-    // reads pixel alpha to decide where particles go, so an opaque fill
-    // here would make the whole square "visible" instead of just the face.
-
-    const cx = size / 2;
-    const cy = size / 2;
-
-    ctx.save();
-    ctx.translate(cx, cy);
-
-    // Head silhouette (soft-edged oval, slightly egg-shaped like a face).
-    const headGrad = ctx.createRadialGradient(0, -size * 0.02, size * 0.05, 0, 0, size * 0.42);
-    headGrad.addColorStop(0, "rgba(255,255,255,0.95)");
-    headGrad.addColorStop(0.72, "rgba(255,255,255,0.55)");
-    headGrad.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = headGrad;
-    ctx.beginPath();
-    // Proportioned to roughly match the wireframe head's own
-    // HEAD_SX/HEAD_SY ratio it gets projected onto further down (an
-    // elongated human oval, not a rounder ball) — a mismatch here
-    // previously stuck out past the wireframe head's actual crown/chin as
-    // a stray particle "spike" when viewed from the side.
-    ctx.ellipse(0, 0, size * 0.27, size * 0.36, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.globalCompositeOperation = "destination-out";
-    // Carve almond-shaped eye sockets (angled, not plain ellipses) with a
-    // slight upward outer canthus, like a real eye opening.
-    for (const sx of [-1, 1]) {
-      ctx.save();
-      ctx.translate(sx * size * 0.115, -size * 0.05);
-      ctx.rotate(sx * -0.12);
-      ctx.beginPath();
-      // Smaller still and lightly erased — this is now just a soft
-      // under-brow shadow, not a socket outline. The actual "eye" is the
-      // small bright 3D sphere sitting on the wireframe surface; a dark
-      // almond patch here on top of that read as huge blank alien eyes.
-      ctx.ellipse(0, 0, size * 0.04, size * 0.016, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fill();
-      ctx.restore();
-    }
-    // Carve eyebrow shadow (a thin arched band above each eye).
-    for (const sx of [-1, 1]) {
-      ctx.save();
-      ctx.translate(sx * size * 0.115, -size * 0.105);
-      ctx.rotate(sx * -0.1);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, size * 0.085, size * 0.012, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fill();
-      ctx.restore();
-    }
-    // Nostril shadows either side of the philtrum.
-    for (const sx of [-1, 1]) {
-      ctx.beginPath();
-      ctx.ellipse(sx * size * 0.028, size * 0.135, size * 0.012, size * 0.009, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(0,0,0,0.5)";
-      ctx.fill();
-    }
-    // Carve under the nose / philtrum shadow.
-    ctx.beginPath();
-    ctx.ellipse(0, size * 0.14, size * 0.05, size * 0.03, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fill();
-    // Carve mouth line, and a faint lower-lip shadow just beneath it.
-    ctx.beginPath();
-    ctx.ellipse(0, size * 0.205, size * 0.075, size * 0.016, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,0.9)";
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(0, size * 0.228, size * 0.055, size * 0.014, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,0.3)";
-    ctx.fill();
-    // Carve cheek hollows (subtle, below/outside the eyes) for jaw definition.
-    for (const sx of [-1, 1]) {
-      ctx.beginPath();
-      ctx.ellipse(sx * size * 0.155, size * 0.06, size * 0.05, size * 0.075, sx * 0.25, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(0,0,0,0.22)";
-      ctx.fill();
-    }
-    ctx.globalCompositeOperation = "source-over";
-
-    // Add back soft highlights: brow ridge, nose bridge, upper cheekbones —
-    // broad structure only; the fine circuit-like texture on top of this
-    // comes from the trace overlay below, not from more painted shapes.
-    ctx.fillStyle = "rgba(255,255,255,0.5)";
-    ctx.beginPath();
-    ctx.ellipse(0, -size * 0.01, size * 0.026, size * 0.115, 0, 0, Math.PI * 2);
-    ctx.fill();
-    for (const sx of [-1, 1]) {
-      ctx.beginPath();
-      ctx.ellipse(sx * size * 0.15, size * 0.005, size * 0.05, size * 0.06, sx * 0.2, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(255,255,255,0.3)";
-      ctx.fill();
-    }
-    // Jaw/chin highlight so the lower face doesn't fade to nothing.
-    ctx.beginPath();
-    ctx.ellipse(0, size * 0.255, size * 0.09, size * 0.045, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,255,255,0.32)";
-    ctx.fill();
-
-    // --- Circuit-trace overlay: thin branching lines etched across the
-    // face, masked to the head silhouette already drawn. This is what
-    // reads as "technical/schematic" in the reference stills, rather
-    // than a smooth plain bust — drawn procedurally (a random walk per
-    // trace), never a fixed decal, so it stays subtle and organic.
-    ctx.globalCompositeOperation = "source-atop"; // only draws where the head alpha already is
-    ctx.strokeStyle = "rgba(180,255,255,0.35)";
-    ctx.lineWidth = Math.max(1, size * 0.0018);
-    const rand = (a, b) => a + Math.random() * (b - a);
-    for (let t = 0; t < 22; t++) {
-      let x = rand(-size * 0.24, size * 0.24);
-      let y = rand(-size * 0.32, size * 0.28);
-      const steps = Math.floor(rand(3, 7));
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      for (let s = 0; s < steps; s++) {
-        x += rand(-size * 0.05, size * 0.05);
-        y += rand(-size * 0.045, size * 0.045);
-        ctx.lineTo(x, y);
-      }
-      ctx.globalAlpha = rand(0.15, 0.45);
-      ctx.stroke();
-      // small "node" dot at the trace's end, like a circuit via.
-      ctx.beginPath();
-      ctx.arc(x, y, size * 0.004, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(210,255,255,0.5)";
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-    // Faint horizontal scan bands across the whole face (subtle, like a
-    // slow depth-scan sweep) — a handful of thin translucent stripes.
-    for (let i = 0; i < 14; i++) {
-      const yy = -size * 0.34 + (i / 13) * size * 0.62;
-      ctx.fillStyle = `rgba(200,255,255,${rand(0.02, 0.06).toFixed(3)})`;
-      ctx.fillRect(-size * 0.3, yy, size * 0.6, Math.max(1, size * 0.0015));
-    }
-    ctx.globalCompositeOperation = "source-over";
-
-    ctx.restore();
-    return ctx.getImageData(0, 0, size, size);
-  }
-
-  function sampleParticles(imageData, size, targetCount) {
-    const positions = [];
-    const alphas = [];
-    const data = imageData.data;
-    const stride = 1; // sampling grid step in source pixels — 1 to resolve fine trace detail
-    for (let y = 0; y < size; y += stride) {
-      for (let x = 0; x < size; x += stride) {
-        const idx = (y * size + x) * 4;
-        const a = data[idx + 3] / 255;
-        if (a < 0.08) continue;
-        if (Math.random() > a * 0.9 + 0.1) continue; // denser sampling where brighter
-        positions.push(x, y);
-        alphas.push(a);
-      }
-    }
-    // Downsample/upsample lightly toward targetCount by random pick.
-    if (positions.length / 2 > targetCount) {
-      const keep = new Set();
-      while (keep.size < targetCount) keep.add(Math.floor(Math.random() * (positions.length / 2)));
-      const p2 = [], a2 = [];
-      keep.forEach((i) => { p2.push(positions[i * 2], positions[i * 2 + 1]); a2.push(alphas[i]); });
-      return { positions: p2, alphas: a2 };
-    }
-    return { positions, alphas };
-  }
 
   /* ---------------------------------------------------------------
    * 2. Three.js scene: particle head as THREE.Points, gentle rotation,
@@ -572,443 +402,54 @@
     e.preventDefault();
   }, { passive: false });
 
-  // Shared head proportions — used by both the wireframe head (below) and
-  // the particle mask projection, so the particle "skin" actually wraps
-  // the wireframe's surface instead of floating in front of it as a flat
-  // card (which is what made it look like a 2D mask rather than a head
-  // when viewed from any angle but straight-on).
-  const HEAD_R = 1.62;
-  // Taller than wide, like an actual human head/face — a near-circular
-  // head (an earlier attempt at "less alien") wasn't the fix; the
-  // reference video's head is a clearly elongated oval with a real nose,
-  // cheekbones, and a jaw narrower than the crown.
-  const HEAD_SX = 0.7; // width
-  const HEAD_SY = 0.94; // height
-  const HEAD_SZ = 0.86; // depth — a bit deeper to leave room for the nose
-
-  const MASK_SIZE = 340;
-  const mask = buildFaceMask(MASK_SIZE);
-  // Reduced from 26000: with real facial contour lines now drawn
-  // explicitly (eyes, brows, nose, cheeks — see buildFace() below), a
-  // dense particle shimmer on top was visual noise competing with them
-  // rather than supporting texture.
-  const { positions: rawPos, alphas } = sampleParticles(mask, MASK_SIZE, 15000);
-  const count = alphas.length;
-
-  const geometry = new THREE.BufferGeometry();
-  const positions = new Float32Array(count * 3);
-  const colors = new Float32Array(count * 3);
-  const sizes = new Float32Array(count);
-
-  const cyan = new THREE.Color(0x6fd8e8);
-  const brightCyan = new THREE.Color(0xbdf3ff);
-  const amber = new THREE.Color(0xffb15c);
-
-  // Scaled so the mask's own head-silhouette radius (size*0.27 in
-  // buildFaceMask) lines up with the wireframe head's real half-width —
-  // otherwise the particle "face" renders far larger than the wireframe
-  // it's supposed to sit on.
-  const scale = (HEAD_R * HEAD_SX) / (MASK_SIZE * 0.27);
-  const rx = HEAD_R * HEAD_SX, ry = HEAD_R * HEAD_SY, rz = HEAD_R * HEAD_SZ;
-  for (let i = 0; i < count; i++) {
-    const px = rawPos[i * 2];
-    const py = rawPos[i * 2 + 1];
-    const x = (px - MASK_SIZE / 2) * scale;
-    const y = -(py - MASK_SIZE / 2) * scale;
-    // Project onto the front surface of the same ellipsoid the wireframe
-    // head is built from, instead of a flat plane with random jitter —
-    // this is what lets the particle layer actually follow the head's
-    // curvature (and disappear correctly toward the silhouette edge)
-    // rather than reading as a flat card floating in front of it.
-    const nx = x / rx, nyv = y / ry;
-    const under = 1 - nx * nx - nyv * nyv;
-    if (under <= 0) {
-      // Outside the head ellipsoid's footprint at this height/width —
-      // skip it (leave size at its default 0, so it never renders)
-      // instead of collapsing it onto a flat z=0 plane, which is what
-      // produced a stray particle "spike" poking out past the crown/chin
-      // when viewed from the side.
-      continue;
-    }
-    const zSurf = rz * Math.sqrt(under);
-    const z = zSurf + (Math.random() - 0.5) * 0.08;
-
-    positions[i * 3] = x;
-    positions[i * 3 + 1] = y;
-    positions[i * 3 + 2] = z;
-
-    // Colour: mostly cyan hologram, warm amber rim on the right-facing edge,
-    // brighter core near the vertical midline (echoes the reference stills).
-    const rim = Math.max(0, x / rx);
-    const core = Math.max(0, 1 - Math.abs(x) / (rx * 0.45));
-    const col = cyan.clone().lerp(amber, rim * 0.5).lerp(brightCyan, core * 0.5 * Math.random());
-    const flick = 0.75 + Math.random() * 0.25;
-    colors[i * 3] = col.r * flick;
-    colors[i * 3 + 1] = col.g * flick;
-    colors[i * 3 + 2] = col.b * flick;
-
-    sizes[i] = (0.02 + Math.random() * 0.022) * (0.6 + alphas[i]);
-  }
-
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  geometry.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
-
+  /* ---------------------------------------------------------------
+   * 2b. A real human head — not sculpted geometry. After several rounds
+   *     of procedurally deforming a sphere (taper curves, brow/nose/
+   *     cheek bumps, hand-drawn eye/nose/cheek contour lines) kept
+   *     re-introducing "alien" cues one at a time (a bulbous crown, a
+   *     funnel chin, no real ears, wrong proportions), the actual fix is
+   *     to stop approximating a human head and use one: LeePerrySmith, a
+   *     real facial-capture scan distributed with Three.js's own official
+   *     examples (vendored locally under headmodel/, same offline-first
+   *     approach as three.min.js — no CDN dependency). It's decimated
+   *     down from its native ~17,700 triangles to a clean, sparse
+   *     wireframe (via SimplifyModifier) and rendered as glowing feature
+   *     edges (THREE.EdgesGeometry, which keeps only edges between faces
+   *     whose normals differ by more than ~20° — this is what makes the
+   *     nose bridge, eye socket rims, lips, and jawline read as clean
+   *     contour lines instead of a busy triangulated mesh) plus a bright
+   *     node dot at every remaining vertex.
+   * ------------------------------------------------------------- */
   // Soft round sprite so points read as glowing dots, not hard squares.
   const spriteCanvas = document.createElement("canvas");
   spriteCanvas.width = spriteCanvas.height = 32;
   const sctx = spriteCanvas.getContext("2d");
-  const grad = sctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-  grad.addColorStop(0, "rgba(255,255,255,1)");
-  grad.addColorStop(0.4, "rgba(255,255,255,0.7)");
-  grad.addColorStop(1, "rgba(255,255,255,0)");
-  sctx.fillStyle = grad;
+  const spriteGrad = sctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  spriteGrad.addColorStop(0, "rgba(255,255,255,1)");
+  spriteGrad.addColorStop(0.4, "rgba(255,255,255,0.7)");
+  spriteGrad.addColorStop(1, "rgba(255,255,255,0)");
+  sctx.fillStyle = spriteGrad;
   sctx.fillRect(0, 0, 32, 32);
   const spriteTex = new THREE.CanvasTexture(spriteCanvas);
 
-  const material = new THREE.ShaderMaterial({
-    uniforms: {
-      uTexture: { value: spriteTex },
-      uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) },
-      uTime: { value: 0 },
-      uGlitch: { value: 0 },
-      uAudio: { value: 0 },
-      uReducedMotion: { value: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 1 : 0 },
-    },
-    vertexShader: `
-      attribute float aSize;
-      varying vec3 vColor;
-      uniform float uPixelRatio;
-      uniform float uTime;
-      uniform float uGlitch;
-      uniform float uAudio;
-      uniform float uReducedMotion;
-      void main() {
-        vColor = color;
-        vec3 p = position;
-        // gentle idle drift so the hologram never looks static — skipped
-        // under prefers-reduced-motion (uReducedMotion == 1.0)
-        float motion = 1.0 - uReducedMotion;
-        p.x += sin(uTime * 0.6 + position.y * 3.0) * 0.006 * motion;
-        p.y += cos(uTime * 0.5 + position.x * 3.0) * 0.006 * motion;
-        p.x += uGlitch * (sin(position.y * 40.0 + uTime * 30.0)) * 0.12 * motion;
-        // voice-reactive: outward breathing pulse driven by live audio level,
-        // strongest at the mouth/jaw (lower half of the face) so it reads
-        // as "speaking" rather than a uniform global pulse
-        float lower = clamp(-position.y * 0.6 + 0.5, 0.0, 1.0);
-        float pulse = uAudio * lower * (0.6 + 0.4 * sin(uTime * 24.0 + position.x * 6.0));
-        p += normalize(position + vec3(0.0001)) * pulse * 0.18;
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
-        gl_PointSize = aSize * uPixelRatio * (340.0 / -mv.z) * (1.0 + uAudio * 0.5);
-        gl_Position = projectionMatrix * mv;
-      }
-    `,
-    fragmentShader: `
-      varying vec3 vColor;
-      uniform sampler2D uTexture;
-      void main() {
-        vec4 tex = texture2D(uTexture, gl_PointCoord);
-        if (tex.a < 0.05) discard;
-        gl_FragColor = vec4(vColor, tex.a);
-      }
-    `,
-    vertexColors: true,
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  });
+  const faceGroup = new THREE.Group();
+  scene.add(faceGroup);
 
-  const points = new THREE.Points(geometry, material);
+  // Populated once the model below finishes loading — animate()/
+  // audioLoop() (further down) guard every access with `if (mouth)` /
+  // `if (brain)` so they run safely from frame 1 while this loads.
+  let mouth = null;
+  let brain = null;
 
-  /* ---------------------------------------------------------------
-   * 2b. Wireframe "mesh head" layer. The reference video's head is a
-   *     triangulated grid mesh with a bright dot at every vertex, not a
-   *     particle-noise cloud — the particle layer above alone can't
-   *     reproduce that. This adds the missing structural layer: a
-   *     low-poly sphere squashed into a head/oval shape, tapered to a
-   *     jaw/chin below the midline, with a brow ridge and nose bump
-   *     pushed outward on the front-facing vertices only, rendered as
-   *     glowing line edges plus a bright node dot at every vertex
-   *     (reusing the same soft sprite texture as the particle layer).
-   * ------------------------------------------------------------- */
-  /* Latitude/longitude lines only — no diagonal cell splits. The
-     reference video's grid is a clean rows-and-columns pattern, not a
-     busy triangulated mesh; THREE.WireframeGeometry(sphere) draws every
-     triangle edge (including the diagonal that splits each grid cell),
-     which reads as visual noise by comparison. Sphere geometry vertices
-     are already laid out as (heightSegments+1) rows x (widthSegments+1)
-     columns, row-major, so this just connects same-row and same-column
-     neighbors directly instead of going through the triangle indices. */
-  function buildLatLongWireframe(posAttr, widthSegments, heightSegments) {
-    const cols = widthSegments + 1;
-    const pts = [];
-    const v = new THREE.Vector3();
-    const push = (i) => { v.fromBufferAttribute(posAttr, i); pts.push(v.x, v.y, v.z); };
-    for (let row = 0; row <= heightSegments; row++) {
-      for (let col = 0; col < widthSegments; col++) {
-        push(row * cols + col);
-        push(row * cols + col + 1);
-      }
-    }
-    for (let col = 0; col <= widthSegments; col++) {
-      for (let row = 0; row < heightSegments; row++) {
-        push(row * cols + col);
-        push((row + 1) * cols + col);
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pts), 3));
-    return geo;
-  }
-
-  function buildHeadWireframe() {
-    const WIDTH_SEGS = 28, HEIGHT_SEGS = 20;
-    // thetaLength < PI cuts the sphere off before its south pole — a
-    // real chin ends in a small rounded rim (right where the neck picks
-    // up), not a point. A plain full sphere always converges bottom
-    // vertices to one exact point no matter how the taper below is
-    // tuned, which is what kept reading as a witch-chin funnel instead
-    // of a human jaw.
-    const sphere = new THREE.SphereGeometry(HEAD_R, WIDTH_SEGS, HEIGHT_SEGS, 0, Math.PI * 2, 0, Math.PI * 0.9);
-    const posAttr = sphere.attributes.position;
-    const v = new THREE.Vector3();
-    for (let i = 0; i < posAttr.count; i++) {
-      v.fromBufferAttribute(posAttr, i);
-      const ny = v.y / HEAD_R; // -1 (chin) .. 1 (crown)
-      let x = v.x * HEAD_SX;
-      let z = v.z * HEAD_SZ;
-      let y = v.y * HEAD_SY; // shorten overall so it reads as a head, not an egg
-      if (ny < -0.05) {
-        // Saturate the taper by ny=-0.6 so the lower quarter (jaw+chin)
-        // stays at a rounded plateau width instead of narrowing all the
-        // way to the sphere's pole — otherwise it reads as a pointed
-        // teardrop instead of a jawline.
-        const tt = Math.min(1, (-ny - 0.05) / 0.55);
-        const eased = tt * tt * (3 - 2 * tt);
-        const taper = 1 - eased * 0.4;
-        x *= taper;
-        z *= taper;
-        // Pull the chin up too, not just narrower — width-only tapering
-        // kept the full sphere length down to the pole, giving a long
-        // narrow jaw (an alien trait) instead of the shorter, rounder
-        // human chin this is meant to be.
-        y *= 1 - eased * 0.32;
-      } else if (ny > 0.32) {
-        // Taper the crown too, not just the jaw. Without this the head
-        // stays at full temple-width all the way up to the very top —
-        // a uniformly wide dome, which is a big part of what kept
-        // reading as an alien braincase rather than a human skull (a
-        // real head is widest around the temples/ears and narrows
-        // somewhat above that, it doesn't stay cylindrical to the crown).
-        const tt2 = Math.min(1, (ny - 0.32) / 0.68);
-        const eased2 = tt2 * tt2 * (3 - 2 * tt2);
-        const taper2 = 1 - eased2 * 0.24;
-        x *= taper2;
-        z *= taper2;
-      }
-      const front = Math.max(0, z) / HEAD_SZ; // 0..1, 1 = directly facing camera
-      const xf = x / (HEAD_R * HEAD_SX); // -1..1, width-relative (scale-independent)
-      if (front > 0.5) {
-        // Brow ridge.
-        const browBand = Math.max(0, 1 - Math.abs(ny - 0.12) / 0.12);
-        z += browBand * front * 0.055;
-
-        // Nose: a bridge running from the brow down to the tip, narrow in
-        // x, growing stronger toward the tip, plus a small rounder bulb
-        // right at the tip and a slight nostril-flare widening just above
-        // it — an actual protruding nose instead of one soft general bump.
-        const noseXFall = Math.max(0, 1 - Math.abs(xf) / 0.11);
-        const bridgeBand = Math.max(0, Math.min(1, (0.1 - ny) / 0.3)); // 0 at brow, 1 at tip
-        z += noseXFall * bridgeBand * front * 0.22;
-        const tipBand = Math.max(0, 1 - Math.abs(ny + 0.16) / 0.06);
-        z += tipBand * noseXFall * front * 0.12;
-        const flareXFall = Math.max(0, 1 - Math.abs(Math.abs(xf) - 0.09) / 0.05);
-        const flareYBand = Math.max(0, 1 - Math.abs(ny + 0.18) / 0.05);
-        z += flareXFall * flareYBand * front * 0.06;
-
-        // Cheekbone ridge, with a slight hollow just below/outside it —
-        // the wireframe grid is coarse, but this is enough to break up a
-        // perfectly smooth dome into something with real facial contour.
-        const cheekXFall = Math.max(0, 1 - Math.abs(Math.abs(xf) - 0.62) / 0.16);
-        const cheekYBand = Math.max(0, 1 - Math.abs(ny + 0.08) / 0.14);
-        z += cheekXFall * cheekYBand * front * 0.07;
-        const hollowXFall = Math.max(0, 1 - Math.abs(Math.abs(xf) - 0.66) / 0.14);
-        const hollowYBand = Math.max(0, 1 - Math.abs(ny + 0.3) / 0.13);
-        z -= hollowXFall * hollowYBand * front * 0.05;
-      }
-      posAttr.setXYZ(i, x, y, z);
-    }
-    posAttr.needsUpdate = true;
-
-    const wireGeo = buildLatLongWireframe(posAttr, WIDTH_SEGS, HEIGHT_SEGS);
-    const wireMat = new THREE.LineBasicMaterial({
-      color: 0x8fe8f5, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending,
-    });
-    const wireframe = new THREE.LineSegments(wireGeo, wireMat);
-
-    const nodeGeo = new THREE.BufferGeometry();
-    nodeGeo.setAttribute("position", posAttr.clone());
-    const nodeMat = new THREE.PointsMaterial({
-      size: 0.05, map: spriteTex, transparent: true, depthWrite: false,
-      blending: THREE.AdditiveBlending, color: 0xdfffff,
-    });
-    const nodes = new THREE.Points(nodeGeo, nodeMat);
-
-    const group = new THREE.Group();
-    group.add(wireframe, nodes);
-    return group;
-  }
-  const headWire = buildHeadWireframe();
-
-  /* ---------------------------------------------------------------
-   * 2b-0. A neck — every reference frame shows the head sitting on a
-   *     visible neck/collar, not floating with nothing underneath it.
-   *     A short wireframe cone, same material style as the head.
-   * ------------------------------------------------------------- */
-  function buildNeck() {
-    const topR = HEAD_R * HEAD_SX * 0.42;
-    const bottomR = HEAD_R * HEAD_SX * 0.36;
-    const height = HEAD_R * HEAD_SY * 0.5;
-    const topY = -HEAD_R * HEAD_SY * 0.62;
-    const cone = new THREE.CylinderGeometry(topR, bottomR, height, 16, 3, true);
-    cone.translate(0, topY - height / 2, 0);
-    const wireGeo = new THREE.WireframeGeometry(cone);
-    const wireMat = new THREE.LineBasicMaterial({
-      color: 0x8fe8f5, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending,
-    });
-    return new THREE.LineSegments(wireGeo, wireMat);
-  }
-  headWire.add(buildNeck());
-
-  /* ---------------------------------------------------------------
-   * 2b-i. Face line art. A uniform grid dome with only subtle vertex
-   *     bumps reads as alien/featureless from the front — the reference
-   *     video's face is actually drawn with explicit anatomical contour
-   *     lines (almond eye outlines, brow arcs, a nose outline, cheek/jaw
-   *     lines) with the grid layered on top for texture, not vertex
-   *     sculpting alone carrying the likeness. This reproduces that:
-   *     each feature is a small `THREE.Line`/`THREE.LineLoop` whose
-   *     points are projected onto the same front-surface ellipsoid the
-   *     wireframe head itself is built from (so it sits flush on the
-   *     surface, not floating in front of it), addressed in xf/yf
-   *     fractions of the head's own half-width/half-height so it stays
-   *     correct if HEAD_SX/SY/SZ change again.
-   * ------------------------------------------------------------- */
-  function projectToSurface(xf, yf, lift) {
-    const x = xf * rx, y = yf * ry;
-    const nx = x / rx, nyv = y / ry;
-    const under = Math.max(0, 1 - nx * nx - nyv * nyv);
-    const z = rz * Math.sqrt(under) * (lift || 1.03);
-    return new THREE.Vector3(x, y, z);
-  }
-  function buildFaceLine(pointsFrac, opts) {
-    opts = opts || {};
-    const pts = pointsFrac.map(([xf, yf]) => projectToSurface(xf, yf, opts.lift));
-    const geo = new THREE.BufferGeometry().setFromPoints(pts);
-    const mat = new THREE.LineBasicMaterial({
-      color: opts.color || 0xdfffff, transparent: true,
-      opacity: opts.opacity != null ? opts.opacity : 0.75, blending: THREE.AdditiveBlending,
-    });
-    return opts.loop ? new THREE.LineLoop(geo, mat) : new THREE.Line(geo, mat);
-  }
-
-  function buildFace() {
-    const group = new THREE.Group();
-    const EYE_X = 0.4, EYE_Y = 0.2;
-
-    for (const sx of [-1, 1]) {
-      // Eyebrow: a short arc above the eye.
-      group.add(buildFaceLine([
-        [sx * 0.24, EYE_Y + 0.11], [sx * 0.4, EYE_Y + 0.15], [sx * 0.54, EYE_Y + 0.1],
-      ], { opacity: 0.85, color: 0xffffff }));
-
-      // Almond eye outline — the actual "eye" shape, not just a dot.
-      const eyePts = [];
-      for (let k = 0; k <= 10; k++) {
-        const a = (k / 10) * Math.PI * 2;
-        eyePts.push([sx * (EYE_X + Math.cos(a) * 0.095), EYE_Y + Math.sin(a) * 0.042]);
-      }
-      group.add(buildFaceLine(eyePts, { loop: true, opacity: 1, color: 0xffffff, lift: 1.06 }));
-
-      // Nostril flare, connected to the shared nose bridge/tip below.
-      group.add(buildFaceLine([
-        [0, -0.16], [sx * 0.07, -0.21], [sx * 0.1, -0.14],
-      ], { opacity: 0.9, color: 0xffffff, lift: 1.06 }));
-
-      // Cheek -> jaw contour: the face's outer boundary line, from near
-      // the temple down past the cheekbone to the chin.
-      group.add(buildFaceLine([
-        [sx * 0.78, 0.18], [sx * 0.72, -0.1], [sx * 0.6, -0.42],
-        [sx * 0.4, -0.68], [sx * 0.15, -0.8],
-      ], { opacity: 0.8, color: 0xffffff, lift: 1.05 }));
-    }
-
-    // Nose bridge, straight down the center from brow to tip.
-    group.add(buildFaceLine([[0, 0.26], [0, 0.05], [0, -0.16]], { opacity: 0.9, color: 0xffffff, lift: 1.06 }));
-
-    // Philtrum: the short shadow line between the nose tip and mouth.
-    group.add(buildFaceLine([[0, -0.22], [0, -0.3]], { opacity: 0.5, color: 0xffffff, lift: 1.04 }));
-
-    // Ears — a small closed loop sitting right at the head's silhouette
-    // edge (not on the front-facing surface, so this doesn't use
-    // projectToSurface: ears stick out sideways past that curve, not
-    // flush against it), at roughly eye-to-nose height, matching the
-    // reference video's ear position.
-    for (const sx of [-1, 1]) {
-      const baseX = rx * 0.98;
-      const baseY = -0.08 * ry;
-      const earZ = rz * 0.1;
-      const earPts = [
-        [0.02, 0.1], [0.09, 0.08], [0.13, 0.02], [0.11, -0.06],
-        [0.05, -0.11], [-0.02, -0.1], [-0.04, -0.03], [-0.02, 0.05],
-      ].map(([dx, dy]) => new THREE.Vector3(sx * (baseX + dx * ry), baseY + dy * ry, earZ));
-      const earGeo = new THREE.BufferGeometry().setFromPoints(earPts);
-      const earMat = new THREE.LineBasicMaterial({
-        color: 0xffffff, transparent: true, opacity: 0.65, blending: THREE.AdditiveBlending,
-      });
-      group.add(new THREE.LineLoop(earGeo, earMat));
-    }
-
-    // Bright "pupil" glint inside each eye — small emissive sphere seated
-    // on the same surface, at the eye's own centre.
-    const nx = EYE_X, nyv = EYE_Y;
-    const under = Math.max(0, 1 - nx * nx - nyv * nyv);
-    const ez = rz * Math.sqrt(under) * 1.06;
-    const eyeGeo = new THREE.SphereGeometry(0.032, 12, 12);
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xeafcff });
-    for (const sx of [-1, 1]) {
-      const eye = new THREE.Mesh(eyeGeo, eyeMat);
-      eye.position.set(sx * EYE_X * rx, EYE_Y * ry, ez);
-      group.add(eye);
-    }
-
-    return group;
-  }
-  headWire.add(buildFace());
-
-  /* ---------------------------------------------------------------
-   * 2b-i-b. A visible "brain" inside the translucent skull — the
-   *     wireframe is just line edges, so anything placed inside the
-   *     head volume is naturally visible through it. A warm amber cloud
-   *     of small particles filling most of the cranium, with a handful
-   *     of connecting "synapse" line segments, echoes the reference
-   *     video's internal glow rather than leaving the head an empty
-   *     shell. Its glow brightens on real brain.request/brain.response
-   *     observer events (wired further down, near the activity feed) —
-   *     when Core is actually running and thinking, not a fixed pulse.
-   * ------------------------------------------------------------- */
-  function buildBrain() {
-    // Pulled back and shrunk a little further behind the eye/nose/cheek
-    // plane than a first pass had it — otherwise the brain particles
-    // visually bleed into and bury the face contour lines built above.
-    const bx = rx * 0.65, by = ry * 0.5, bz = rz * 0.5;
-    const centerY = ry * 0.15;
-    const centerZ = -rz * 0.22;
+  /* A visible "brain" inside the translucent skull — the rendering above
+     is just line edges, so anything placed inside the head volume is
+     naturally visible through it. A warm amber cloud of points filling
+     part of the cranium, with connecting "synapse" lines, continuously
+     drifting (never fully static) and brightening on real
+     brain.request/brain.response activity (wired further down, near the
+     activity feed) — see animate() for the per-frame motion/pulse. */
+  function buildBrain(centerX, centerY, centerZ, bx, by, bz) {
     const n = 900;
-    // Base (resting) position per particle, plus a random phase/speed so
-    // each one drifts on its own sine cycle — this is what gives the
-    // "always thinking, never static" look asked for, rather than a
-    // structure that only moves when a real event bumps brainPulse.
     const basePositions = new Float32Array(n * 3);
     const phases = new Float32Array(n);
     for (let i = 0; i < n; i++) {
@@ -1018,7 +459,7 @@
         y = Math.random() * 2 - 1;
         z = Math.random() * 2 - 1;
       } while (x * x + y * y + z * z > 1);
-      basePositions[i * 3] = x * bx;
+      basePositions[i * 3] = x * bx + centerX;
       basePositions[i * 3 + 1] = y * by + centerY;
       basePositions[i * 3 + 2] = z * bz + centerZ;
       phases[i] = Math.random() * Math.PI * 2;
@@ -1027,7 +468,7 @@
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     const mat = new THREE.PointsMaterial({
-      size: 0.065, map: spriteTex, transparent: true, depthWrite: false,
+      size: 0.07, map: spriteTex, transparent: true, depthWrite: false,
       blending: THREE.AdditiveBlending, color: 0xffb15c, opacity: 0.8,
     });
     const points = new THREE.Points(geo, mat);
@@ -1056,26 +497,17 @@
       lineEndpoints, lineGeo, rewire,
     };
   }
-  const brain = buildBrain();
-  headWire.add(brain.group);
 
-  /* ---------------------------------------------------------------
-   * 2b-ii. Mouth line — two thin curved lines (upper/lower lip) whose
-   *     vertical separation is driven every frame by the real audio
-   *     level (the same value that drives the particle pulse below),
-   *     so the mouth visibly opens while speech/mic input is loud and
-   *     closes to a flat line at silence — genuine lip movement tied to
-   *     sound, not a decorative loop.
-   * ------------------------------------------------------------- */
-  function buildMouth() {
+  /* Mouth line — two thin curved lines (upper/lower lip) whose vertical
+     separation is driven every frame by the real audio level (see
+     audioLoop() further down), so the mouth visibly opens while speech/
+     mic input is loud and closes to a flat line at silence — genuine lip
+     movement tied to sound, positioned at the model's real mouth
+     coordinates (found by raycasting the source mesh — see dev notes in
+     the PR), not a projected approximation like the old sphere-based
+     version needed. */
+  function buildMouth(cx, cy, cz, width) {
     const segs = 8;
-    const width = HEAD_R * HEAD_SX * 0.5;
-    const baseY = -HEAD_R * HEAD_SY * 0.44;
-    // Same front-surface projection as the eyes, evaluated at the mouth's
-    // position, so it sits on the wireframe's actual surface instead of a
-    // depth value left over from the old (narrower/taller) proportions.
-    const mny = baseY / (HEAD_R * HEAD_SY);
-    const baseZ = HEAD_R * HEAD_SZ * Math.sqrt(Math.max(0, 1 - mny * mny)) * 1.04;
     function makeLine() {
       const positions = new Float32Array((segs + 1) * 3);
       const geo = new THREE.BufferGeometry();
@@ -1089,37 +521,97 @@
     });
     const group = new THREE.Group();
     group.add(new THREE.Line(upperGeo, mouthMat), new THREE.Line(lowerGeo, mouthMat.clone()));
-    return { group, upperGeo, lowerGeo, baseY, baseZ, width, segs };
+    return { group, upperGeo, lowerGeo, cx, cy, cz, width, segs };
   }
-  const mouth = buildMouth();
-  headWire.add(mouth.group);
-
   function updateMouth(level) {
-    const open = level * 0.16;
+    if (!mouth) return;
+    const open = level * 0.5;
     const upPos = mouth.upperGeo.attributes.position;
     const loPos = mouth.lowerGeo.attributes.position;
     for (let i = 0; i <= mouth.segs; i++) {
       const t = i / mouth.segs;
-      const x = (t - 0.5) * mouth.width;
-      const curve = Math.sin(t * Math.PI) * 0.02;
-      upPos.setXYZ(i, x, mouth.baseY + curve + open, mouth.baseZ);
-      loPos.setXYZ(i, x, mouth.baseY - curve - open, mouth.baseZ);
+      const x = mouth.cx + (t - 0.5) * mouth.width;
+      const curve = Math.sin(t * Math.PI) * 0.06;
+      upPos.setXYZ(i, x, mouth.cy + curve + open, mouth.cz);
+      loPos.setXYZ(i, x, mouth.cy - curve - open, mouth.cz);
     }
     upPos.needsUpdate = true;
     loPos.needsUpdate = true;
   }
-  updateMouth(0);
 
-  const faceGroup = new THREE.Group();
-  faceGroup.add(points, headWire);
-  scene.add(faceGroup);
+  function base64ToArrayBuffer(b64) {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  const gltfLoader = new THREE.GLTFLoader();
+  gltfLoader.parse(
+    base64ToArrayBuffer(window.__LEE_PERRY_SMITH_B64),
+    "",
+    (gltf) => {
+      let sourceMesh = null;
+      gltf.scene.traverse((o) => { if (o.isMesh) sourceMesh = o; });
+
+      const merged = THREE.BufferGeometryUtils.mergeVertices(sourceMesh.geometry);
+      const targetTris = 3000; // sparse enough to read as a clean HUD grid, not a dense scan
+      const currentTris = (merged.index ? merged.index.count : merged.attributes.position.count) / 3;
+      const removeCount = Math.max(
+        0,
+        merged.attributes.position.count - Math.floor(merged.attributes.position.count * (targetTris / currentTris))
+      );
+      const simplified = new THREE.SimplifyModifier().modify(merged, removeCount);
+
+      const modelGroup = new THREE.Group();
+      // The source scan is natively ~8 units across; scale it down to
+      // this scene's existing camera-distance/panel/plinth proportions.
+      modelGroup.scale.setScalar(0.384);
+
+      const edgesGeo = new THREE.EdgesGeometry(simplified, 20);
+      const edgesMat = new THREE.LineBasicMaterial({
+        color: 0x8fe8f5, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending,
+      });
+      modelGroup.add(new THREE.LineSegments(edgesGeo, edgesMat));
+
+      const nodeMat = new THREE.PointsMaterial({
+        size: 0.045, map: spriteTex, transparent: true, depthWrite: false,
+        blending: THREE.AdditiveBlending, color: 0xdfffff, opacity: 0.8,
+      });
+      modelGroup.add(new THREE.Points(simplified, nodeMat));
+
+      // Bright pupil glints — the real eye sockets are already correct
+      // via the mesh's own geometry; this adds the glowing "iris" accent
+      // the reference video has. Positions found by raycasting the
+      // source mesh at the visually-identified eye locations.
+      const eyeGeo = new THREE.SphereGeometry(0.085, 12, 12);
+      const eyeMat = new THREE.MeshBasicMaterial({ color: 0xeafcff });
+      for (const ex of [-0.5, 0.5]) {
+        const eye = new THREE.Mesh(eyeGeo, eyeMat);
+        eye.position.set(ex, 1.78, 1.98);
+        modelGroup.add(eye);
+      }
+
+      mouth = buildMouth(0, -0.11, 2.32, 1.05);
+      modelGroup.add(mouth.group);
+
+      brain = buildBrain(0, 2.4, -0.9, 0.95, 0.75, 0.7);
+      modelGroup.add(brain.group);
+
+      faceGroup.add(modelGroup);
+    },
+    undefined,
+    (err) => {
+      console.error("[jarvis-hologram] failed to load head model:", err);
+    }
+  );
 
   /* Thin wireframe ring beneath the head, like a scan plane. */
   const ringGeo = new THREE.RingGeometry(1.55, 1.58, 64);
   const ringMat = new THREE.MeshBasicMaterial({ color: 0x6fd8e8, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
   const ring = new THREE.Mesh(ringGeo, ringMat);
   ring.rotation.x = Math.PI / 2 - 0.15;
-  ring.position.y = -2.05;
+  ring.position.y = -1.55;
   scene.add(ring);
 
   /* ---------------------------------------------------------------
@@ -1168,29 +660,31 @@
   function animate() {
     requestAnimationFrame(animate);
     const t = clock.getElapsedTime();
-    material.uniforms.uTime.value = t;
 
     if (t > nextGlitchAt) {
       triggerGlitch();
       nextGlitchAt = t + 7 + Math.random() * 8;
     }
     const inGlitch = t < glitchUntil;
-    material.uniforms.uGlitch.value = inGlitch ? 1.0 : Math.max(0, material.uniforms.uGlitch.value - 0.08);
     if (!inGlitch) rgbSplit.style.opacity = String(Math.max(0, parseFloat(rgbSplit.style.opacity || "0") - 0.06));
 
     // Brain glow: a small idle breathing base, brightened by real (or
     // labeled-demo) brain.request/brain.response activity and decaying
     // back down — never a fixed animation pretending to be "thinking".
+    // Guarded on `brain` since the head model (and everything built once
+    // it loads) is async — this runs safely before it's ready.
     brainPulse = Math.max(0, brainPulse - 0.012);
-    const brainGlow = 0.55 + Math.sin(t * 1.3) * 0.1 + brainPulse * 0.45;
-    brain.pointsMat.opacity = Math.min(1, brainGlow);
-    brain.lineMat.opacity = Math.min(0.55, 0.15 + brainPulse * 0.4);
+    if (brain) {
+      const brainGlow = 0.55 + Math.sin(t * 1.3) * 0.1 + brainPulse * 0.45;
+      brain.pointsMat.opacity = Math.min(1, brainGlow);
+      brain.lineMat.opacity = Math.min(0.55, 0.15 + brainPulse * 0.4);
+    }
 
     // Continuous per-particle drift — "always thinking", not a structure
     // that only moves when a real event bumps brainPulse. Amplitude grows
     // a little further while brainPulse is high, so real activity still
     // reads as "moving more," but it's never fully static at rest.
-    if (!REDUCED_MOTION) {
+    if (!REDUCED_MOTION && brain) {
       const jitterAmp = 0.05 + brainPulse * 0.05;
       const bp = brain.posAttr.array;
       for (let i = 0; i < brain.n; i++) {
@@ -1533,11 +1027,12 @@
     return Math.min(1, (sum / audioData.length / 255) * 2.2);
   }
 
+  let audioGlow = 0;
   (function audioLoop() {
     requestAnimationFrame(audioLoop);
     const level = sampleAudioLevel();
-    material.uniforms.uAudio.value += (level - material.uniforms.uAudio.value) * 0.25;
-    const glow = material.uniforms.uAudio.value;
+    audioGlow += (level - audioGlow) * 0.25;
+    const glow = audioGlow;
     voiceRing.style.borderColor = `rgba(111,216,232,${(glow * 0.8).toFixed(2)})`;
     voiceRing.style.transform = `scale(${1 + glow * 0.15})`;
     voiceRing.style.boxShadow = glow > 0.05 ? `0 0 ${20 + glow * 60}px rgba(111,216,232,${glow * 0.5})` : "none";

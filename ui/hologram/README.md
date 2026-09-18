@@ -1,13 +1,13 @@
 # JARVIS hologram visualizer
 
 A standalone holographic "face" HUD, in the style of a sci-fi AI interface:
-a particle-based head rendered in Three.js, side telemetry panels, a glowing
-base plinth labeled JARVIS, and an occasional glitch/warning-banner effect.
+a real human head/neck/shoulders 3D scan rendered as a glowing wireframe in
+Three.js, side telemetry panels, a glowing base plinth labeled JARVIS, and
+an occasional glitch/warning-banner effect.
 
 ## Running it
 
-No build step — it's a self-contained page. For the particle head, wireframe,
-panels, and audio reactivity, just open it directly:
+No build step — it's a self-contained page. Just open it directly:
 
 ```
 open ui/hologram/index.html
@@ -16,14 +16,20 @@ open ui/hologram/index.html
 (or double-click it in Finder). `three.min.js` is vendored locally in this
 folder on purpose, not loaded from a CDN, so the visualizer works offline —
 appropriate for a local personal-assistant UI that shouldn't depend on
-internet access just to render its own face.
+internet access just to render its own face. The head model itself
+(`headmodel/LeePerrySmith.b64.js`) is embedded as base64 and parsed
+in-memory rather than fetched, for the same reason `fetch()` for local
+files is blocked under `file://` (see the face-tracking gotcha below) —
+embedding it keeps the base page's "just open the file" promise intact.
 
-**Face tracking (👁 ENABLE FACE TRACKING) needs a local server, not `file://`.**
-Chromium blocks `fetch()` for local files under the `file://` origin (this
-is what loads the face-tracking model weights) even though `<script src>`
-tags — like the one that loads `three.min.js` — are exempt from that
-restriction. There's no way around this that isn't misleading, so: run any
-static server from this folder and open it over `http://` instead —
+**Face tracking (👁 ENABLE FACE TRACKING) is the one thing that still needs
+a local server, not `file://`.** Chromium blocks `fetch()` for local files
+under the `file://` origin (this is what loads the face-tracking model
+weights) even though `<script src>` tags are exempt from that restriction
+(which is how the head model above avoids the same problem — embedded and
+parsed, not fetched). There's no way around this for face-tracking's
+weight files that isn't misleading, so: run any static server from this
+folder and open it over `http://` instead —
 
 ```
 python3 -m http.server 8080   # from ui/hologram/
@@ -35,61 +41,36 @@ Clicking the button while on `file://` shows an explicit
 
 ## How the face is built
 
-There's no 3D face model/asset, and no external mesh is loaded. Two layers
-are combined:
+**It's a real human head, not sculpted geometry.** After several rounds of
+procedurally deforming a sphere — taper curves for a jaw, bumps for a
+brow/nose/cheeks, hand-drawn contour lines for eyes/nose/cheeks/ears —
+kept re-introducing "alien" cues one at a time (a bulbous crown, a funnel
+chin, wrong proportions, no real ears), the actual fix was to stop
+approximating a human head and use one:
 
-1. **A wireframe grid head** — a procedurally-displaced low-poly sphere,
-   proportioned like an actual human head/face (taller than wide, not a
-   rounder "ball"), built from a sphere whose `thetaLength` is cut short
-   of its south pole (`Math.PI * 0.9`, not the full `Math.PI`) — a full
-   sphere always converges its bottom vertices to one exact point no
-   matter how the taper below is tuned, which read as a pointed
-   witch-chin funnel instead of a human jaw ending in a small rounded
-   rim right where the neck picks up. Tapered to that rounded jaw/chin
-   (narrower **and** shorter than the temple span, not just narrower —
-   width-only tapering left a long alien-like lower face) and to a
-   narrower crown (a head that stays full temple-width all the way to
-   the top reads as an oversized braincase), plus a brow ridge, a real
-   protruding nose (bridge, tip bulb, nostril flare), a cheekbone ridge
-   with a cheek hollow just below it, and a short wireframe neck
-   underneath instead of the head floating with nothing below it.
-   Rendered as glowing `THREE.LineSegments` edges plus a bright dot at
-   every vertex — the base "digital head" layer. The grid itself is
-   latitude/longitude lines only (`buildLatLongWireframe()`), not
-   `THREE.WireframeGeometry`'s full triangle-edge output — the reference
-   video's grid is a clean rows-and-columns pattern, and including the
-   diagonal that splits every triangle read as visual noise by
-   comparison.
-2. **Explicit facial line art on top of that** (`buildFace()` in
-   `index.html`) — after a frame-by-frame rewatch of the reference video
-   at 4fps (not just a couple of stills), its face turned out to be
-   drawn with actual anatomical contour lines — almond eye outlines with
-   a bright pupil glint, eyebrow arcs, a nose bridge/nostril outline, and
-   a cheek-to-jaw boundary line — with the grid mesh layered on top for
-   texture, not vertex sculpting alone carrying the likeness. Each line
-   is a small `THREE.Line`/`THREE.LineLoop` whose points are projected
-   onto the same front-surface ellipsoid the wireframe head is built
-   from (via a shared `projectToSurface()` helper), so every feature
-   sits flush on the head's actual curve at any proportion. This is the
-   single biggest fix for "reads as an alien, not a face" — vertex bumps
-   alone were barely visible head-on and only showed up in profile.
-   Also includes a philtrum line and two ear outlines (small closed loops
-   sitting right at the head's silhouette edge, since ears stick out
-   sideways rather than lying flush against the front-facing curve like
-   the other features).
-3. **A particle shimmer layer wrapped onto that same surface** — `index.html`
-   separately draws a stylized face mask (head silhouette, eye sockets,
-   nose/mouth shading, a procedural circuit-trace overlay) onto an
-   offscreen 2D canvas, then samples that canvas's pixel alpha to place
-   several thousand `THREE.Points` particles (reduced from an original
-   26,000 to 15,000 once the explicit face lines above existed — a denser
-   shimmer was competing with them rather than supporting texture). Each
-   particle is projected onto the front surface of the *same* ellipsoid
-   the wireframe head is built from (not a flat plane with random depth
-   jitter, which is what the first version of this did) — so it actually
-   follows the head's
-   curvature and looks correct from an angle instead of reading as a flat
-   card floating in front of the wireframe.
+- **[LeePerrySmith](https://github.com/mrdoob/three.js/tree/master/examples/models/gltf/LeePerrySmith)**
+  — a real facial-capture scan (head, neck, and shoulders) distributed
+  with Three.js's own official examples, vendored locally under
+  `headmodel/` (both as the original `.glb` and as a base64-embedded
+  `.b64.js` — see "Running it" above for why).
+- Decimated from its native ~17,700 triangles down to ~3,000
+  (`THREE.SimplifyModifier`, after `THREE.BufferGeometryUtils.mergeVertices`)
+  — sparse enough to read as a clean HUD grid instead of a dense scan.
+- Rendered as `THREE.EdgesGeometry(simplified, 20)` — this keeps only
+  edges between faces whose normals differ by more than ~20°, which is
+  what makes the nose bridge, eye-socket rims, lips, and jawline read as
+  clean contour lines instead of a busy triangulated mesh — plus a bright
+  node dot (`THREE.Points`) at every remaining vertex.
+- Two small bright spheres for the "pupil" glint, positioned at the real
+  eye-socket coordinates (found by raycasting the source mesh at the
+  visually-identified eye locations, not guessed).
+
+Real ears, a real nose, a real jaw, a real neck-into-shoulders — all
+inherent to the geometry, from any angle, with no per-feature code needed
+to fake them. This also **removed** a lot of code rather than adding it:
+the old procedural face mask, particle-cloud sampling, sphere taper/bump
+sculpting, and hand-built eye/nose/cheek/ear contour lines are all gone —
+a real mesh made most of that machinery unnecessary.
 
 ## A visible brain, not an empty shell
 
@@ -127,13 +108,13 @@ from the camera's current viewing angle. There's no way to make the head
 at the same time — that's a contradiction, not an engineering gap — so
 this splits them into two honest, separate controls instead of faking one.
 
-Fixed along the way: the particle mask's silhouette used to be
-noticeably taller than the wireframe head's own proportions, so at the
-very top/bottom it stuck out past the head as a stray particle "spike"
-once you could see it from the side (invisible from the fixed front-only
-view before orbit existed). Both the mask's proportions and the
-projection itself (skip a particle outside the head's footprint at that
-height, instead of collapsing it onto a flat plane) were fixed.
+Before the real head mesh (see "How the face is built" above), the old
+procedurally-sculpted sphere had real problems that only showed up once
+this orbit control existed — a stray particle "spike" past the crown/chin
+and a chin that funneled to a mathematical point, both invisible from the
+fixed front-only view this replaced. A real mesh has a real back and
+sides by construction, so there's nothing equivalent to fix now — orbit
+just works, from any angle.
 
 ## Background depth
 
@@ -236,10 +217,10 @@ checking once you run it yourself.
 
 ## Lip movement + a WhatsApp-style voice meter — both real audio, not decoration
 
-- **Mouth line**: the wireframe head now has a distinct upper/lower lip
-  line that visibly opens while audio is loud and closes to flat at
-  silence — driven every frame by the same real analyser level as the
-  particle pulse, not a separate fake animation.
+- **Mouth line**: a distinct upper/lower lip line, positioned at the head
+  model's real mouth coordinates, that visibly opens while audio is loud
+  and closes to flat at silence — driven every frame by the real
+  analyser level, not a separate fake animation.
 - **Voice bars** (`#voice-bars`, above the plinth): a small bar-meter in
   the exact style of a WhatsApp voice-message waveform, scrolling in real
   time from the same `AnalyserNode`. It's a flat near-zero line whenever
@@ -253,17 +234,21 @@ no code changes needed here.
 
 ## Visual fidelity vs. the reference video/images
 
-Frames were pulled from the actual reference video and compared directly
+Frames were pulled from the actual reference video (and a second real
+Jarvis product demo the user sent for comparison) and compared directly
 against screenshots of this page (not "should look similar" — an actual
 side-by-side) to find concrete, fixable gaps rather than guessing. That
-comparison found the earlier build's biggest miss: the reference's head is
-a **wireframe/mesh grid** with glowing vertex dots, not a particle-noise
-cloud — a difference in visual language, not just tuning. That's now
-fixed (see "How the face is built" above), along with background depth
-cues the reference also has and the old build didn't. An earlier pass
-also added two orbiting "data node" rings around the head, echoing one
-of the reference video's other shots — removed again on request, since
-that specific shot isn't the one this page is matching.
+went through several rounds: wireframe/mesh grid vs. a particle-noise
+cloud, alien-looking proportions, a missing brain, a pointed chin, no
+ears, a triangulated-vs-clean grid — each one diagnosed from a specific
+screenshot comparison, not a general "make it closer" guess. The last and
+biggest of those rounds replaced procedural sphere-sculpting entirely with
+a real human head/neck/shoulders scan mesh (see "How the face is built"
+above), which fixed the remaining proportion/anatomy issues structurally
+instead of one taper-curve tweak at a time. An earlier pass also added two
+orbiting "data node" rings around the head, echoing one of the reference
+video's other shots — removed again on request, since that specific shot
+isn't the one this page is matching.
 
 What's still, genuinely, out of reach for a live 60fps interactive page
 without an unreasonable rendering budget: the reference is a one-shot
@@ -294,10 +279,14 @@ was caught and fixed — the endpoint worked correctly over curl while the
 browser silently blocked the page from reading it, until
 `Access-Control-Allow-Origin` was added.
 
-Performance was also measured, not assumed: ~33fps sustained with
-**SwiftShader** (CPU software OpenGL — no GPU at all, the worst realistic
-case) rendering ~26,000 additive-blended particles at 1200x800. Any actual
-GPU, including an integrated one, comfortably clears 60fps here.
+Performance was measured, not assumed, on the earlier particle-based build:
+~33fps sustained with **SwiftShader** (CPU software OpenGL — no GPU at
+all, the worst realistic case) rendering ~26,000 additive-blended
+particles at 1200x800. The current real-mesh build renders roughly
+1,500-3,000 vertices' worth of edges/points total — substantially lighter
+— but hasn't been re-measured with an exact fps number since switching;
+expect it to be at least as fast. Any actual GPU, including an integrated
+one, comfortably clears 60fps either way.
 
 ## Accessibility & responsive layout
 
@@ -331,3 +320,8 @@ GPU, including an integrated one, comfortably clears 60fps here.
   this dev environment (no physical camera available) — only the
   pipeline's plumbing (model load, permissions, fallback behavior) was
   verified against a real (synthetic-pattern) camera stream.
+- The head model (`headmodel/LeePerrySmith.glb`) is a facial-capture scan
+  of one specific real person, distributed with Three.js's own official
+  examples — it isn't a generic/synthetic avatar. It's used purely as
+  wireframe/point geometry here (no photo texture applied), same spirit
+  as any other third-party mesh used as a technical asset.
