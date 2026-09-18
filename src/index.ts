@@ -62,6 +62,8 @@ import { createSearchNewsTool } from "@/tools/news/SearchNewsTool";
 import { isWeeklyDigestDue } from "@/digest/isWeeklyDigestDue";
 import { formatWeeklyDigest } from "@/digest/formatWeeklyDigest";
 import { isCheckinDue } from "@/digest/isCheckinDue";
+import { isMorningBriefingDue } from "@/digest/isMorningBriefingDue";
+import { formatMorningBriefing } from "@/digest/formatMorningBriefing";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -169,8 +171,8 @@ function main() {
   }
 
   const weatherEnabled = config.weatherLatitude !== undefined && config.weatherLongitude !== undefined;
-  if (weatherEnabled) {
-    const weatherClient = new OpenMeteoClient(config.weatherLatitude!, config.weatherLongitude!);
+  const weatherClient = weatherEnabled ? new OpenMeteoClient(config.weatherLatitude!, config.weatherLongitude!) : undefined;
+  if (weatherClient) {
     toolRegistry.registerTool(createGetWeatherTool(weatherClient));
     toolRegistry.registerTool(createGetWeatherForecastTool(weatherClient));
   }
@@ -538,6 +540,35 @@ function main() {
     }, 60_000);
   }
 
+  let morningBriefingInterval: ReturnType<typeof setInterval> | undefined;
+  const morningBriefingEnabled = Boolean(config.morningBriefingTime && telegramGateway && config.telegramOwnerChatId);
+  if (morningBriefingEnabled) {
+    let lastMorningBriefingDateKey: string | null = null;
+    morningBriefingInterval = setInterval(async () => {
+      const now = new Date();
+      const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
+      const todayDateKey = formatDateKey(now, config.timezone);
+
+      if (!isMorningBriefingDue(config.morningBriefingTime!, nowTimeOfDay, todayDateKey, lastMorningBriefingDateKey)) {
+        return;
+      }
+      lastMorningBriefingDateKey = todayDateKey;
+
+      const weather = await weatherClient?.getCurrentWeather().catch(() => undefined);
+      const todaysEvents = calendarClient ? await calendarClient.listUpcomingEvents(10).catch(() => []) : [];
+      const nowIso = now.toISOString();
+      const dueOrOverdueReminders = reminderStore.list().filter((r) => r.dueAt !== null && r.dueAt <= nowIso);
+
+      const message = formatMorningBriefing(weather, todaysEvents, dueOrOverdueReminders);
+      telegramGateway!.sendMessage(config.telegramOwnerChatId!, message).catch((error) => {
+        console.error(
+          "[jarvis] failed to send morning briefing:",
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+    }, 30_000);
+  }
+
   const wsServer = new JarvisWebSocketServer({
     deviceRegistry,
     deviceConnectionManager,
@@ -693,6 +724,7 @@ function main() {
     if (wakeUpInterval) clearInterval(wakeUpInterval);
     if (weeklyDigestInterval) clearInterval(weeklyDigestInterval);
     if (checkinInterval) clearInterval(checkinInterval);
+    if (morningBriefingInterval) clearInterval(morningBriefingInterval);
     calendarTokenStore.close();
     rl.close();
     process.exit(0);

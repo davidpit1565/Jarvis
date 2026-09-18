@@ -121,6 +121,13 @@ export interface JarvisConfig {
    */
   checkinAfterHours?: number;
   /**
+   * "HH:MM" local time (in `timezone`) JARVIS sends a daily morning
+   * briefing — weather + today's calendar + due/overdue reminders — via
+   * NOTIFY_USER's own Telegram delivery (also needs telegramGateway +
+   * telegramOwnerChatId configured). Unset disables the feature entirely.
+   */
+  morningBriefingTime?: string;
+  /**
    * Optional all-time estimated-cost threshold (USD). When set, JARVIS
    * warns (console + activity log) once cumulative estimated spend
    * crosses 75%, 90%, and 100% of it — each stage fires once, not on
@@ -372,6 +379,11 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("JARVIS_CHECKIN_AFTER_HOURS must be a positive number");
   }
 
+  const morningBriefingTime = process.env.JARVIS_MORNING_BRIEFING_TIME?.trim() || undefined;
+  if (morningBriefingTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(morningBriefingTime)) {
+    throw new ConfigError("JARVIS_MORNING_BRIEFING_TIME must be in HH:MM 24-hour format");
+  }
+
   const costAlertThresholdRaw = process.env.JARVIS_COST_ALERT_THRESHOLD_USD?.trim();
   const costAlertThresholdUsd = costAlertThresholdRaw ? Number(costAlertThresholdRaw) : undefined;
   if (costAlertThresholdRaw && (Number.isNaN(costAlertThresholdUsd) || costAlertThresholdUsd! <= 0)) {
@@ -425,6 +437,7 @@ export function loadConfig(): JarvisConfig {
     weeklyDigestDayOfWeek,
     weeklyDigestTime,
     checkinAfterHours,
+    morningBriefingTime,
     costAlertThresholdUsd,
   };
 }

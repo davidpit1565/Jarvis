@@ -40,6 +40,7 @@ const ENV_KEYS = [
   "JARVIS_WEEKLY_DIGEST_DAY",
   "JARVIS_WEEKLY_DIGEST_TIME",
   "JARVIS_CHECKIN_AFTER_HOURS",
+  "JARVIS_MORNING_BRIEFING_TIME",
   "JARVIS_COST_ALERT_THRESHOLD_USD",
 ];
 let saved: Record<string, string | undefined> = {};
@@ -438,6 +439,22 @@ describe("loadConfig", () => {
 
   test("rejects a non-positive JARVIS_CHECKIN_AFTER_HOURS", () => {
     process.env.JARVIS_CHECKIN_AFTER_HOURS = "0";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("reads JARVIS_MORNING_BRIEFING_TIME when set", () => {
+    process.env.JARVIS_MORNING_BRIEFING_TIME = "07:00";
+    const config = loadConfig();
+    expect(config.morningBriefingTime).toBe("07:00");
+  });
+
+  test("leaves morningBriefingTime undefined when unset", () => {
+    const config = loadConfig();
+    expect(config.morningBriefingTime).toBeUndefined();
+  });
+
+  test("rejects an invalid JARVIS_MORNING_BRIEFING_TIME", () => {
+    process.env.JARVIS_MORNING_BRIEFING_TIME = "7am";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 

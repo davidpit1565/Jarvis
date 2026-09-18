@@ -1271,6 +1271,16 @@ interaction on any channel (terminal, phone, Telegram), JARVIS sends a
 "haven't heard from you" message — fires at most once per gap (a new
 interaction resets it), not on every tick past the threshold.
 
+Setting `JARVIS_MORNING_BRIEFING_TIME` (24-hour `HH:MM`, plus the same
+Telegram/`NOTIFY_USER` setup) sends a daily morning briefing at that
+local time — current weather (if `GET_WEATHER` is configured), today's
+calendar (if linked), and due/overdue reminders — so the user gets it
+unprompted each morning rather than only ever being answerable if asked.
+Each section is simply omitted when it isn't configured or has nothing
+to report, never shown empty; a calendar/weather lookup failure is
+swallowed the same way `todayCalendarNote` already does, never breaking
+the send.
+
 ## Inspecting what JARVIS remembers
 
 `GET /reminders`, `GET /memory`, and `GET /wakeup-calls` are read-only
