@@ -46,4 +46,13 @@ describe("SEARCH_CONVERSATION_HISTORY tool", () => {
 
     expect((result.data as { results: unknown[] }).results).toHaveLength(2);
   });
+
+  test("caps an unreasonably large limit at 100", async () => {
+    for (let i = 0; i < 150; i++) store.record("user", `apple ${i}`);
+    const tool = createSearchConversationHistoryTool(store);
+
+    const result = await tool.execute({ query: "apple", limit: 100000 }, context);
+
+    expect((result.data as { results: unknown[] }).results).toHaveLength(100);
+  });
 });

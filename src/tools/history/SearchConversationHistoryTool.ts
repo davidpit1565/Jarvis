@@ -7,6 +7,10 @@ export interface SearchConversationHistoryInput extends Record<string, unknown> 
   limit?: number;
 }
 
+// A caller passing an unreasonably large limit shouldn't be able to pull
+// the entire stored transcript history in one request.
+const MAX_LIMIT = 100;
+
 /**
  * Lets Claude answer "what did we talk about" / "did I already tell you
  * about X" by actually searching past conversations, instead of only
@@ -28,7 +32,7 @@ export function createSearchConversationHistoryTool(
       type: "object",
       properties: {
         query: { type: "string", description: "Text to search for." },
-        limit: { type: "number", description: "Max results to return. Defaults to 10." },
+        limit: { type: "number", description: "Max results to return. Defaults to 10, capped at 100." },
       },
       required: ["query"],
     },
@@ -39,7 +43,8 @@ export function createSearchConversationHistoryTool(
       if (typeof input.query !== "string" || input.query.trim() === "") {
         return { success: false, error: "query must be a non-empty string" };
       }
-      const limit = typeof input.limit === "number" && input.limit > 0 ? Math.floor(input.limit) : 10;
+      const limit =
+        typeof input.limit === "number" && input.limit > 0 ? Math.min(Math.floor(input.limit), MAX_LIMIT) : 10;
 
       const results = historyStore.search(input.query, limit);
       return { success: true, data: { results } };

@@ -183,7 +183,9 @@ lets Claude answer "what did we talk about" / "did I already tell you..."
 with an actual case-insensitive substring search over that transcript,
 instead of only seeing the current thread. Distinct from `SEARCH_MEMORY`
 (explicit facts Claude chose to save) and reminders (tasks) — this is the
-raw record of what was actually said.
+raw record of what was actually said. Its `limit` is capped at 100 even
+if a caller asks for more, so one request can't pull the entire stored
+transcript history.
 
 **`CLEAR_CONVERSATION_HISTORY`** (`DANGEROUS`) lets the user actually erase
 that transcript — a real "forget everything we've talked about," not just
