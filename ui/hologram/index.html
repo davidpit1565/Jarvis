@@ -110,7 +110,14 @@
   @keyframes blink { 50% { opacity: 0; } }
 
   #hud-title {
-    position: fixed; top: 4%; left: 50%; transform: translateX(-50%);
+    /* viewport-fit=cover + a black-translucent status bar (see the meta
+       tags above) means the page draws fully behind the iPhone
+       notch/Dynamic Island/status bar once installed as a home-screen
+       app — a bare `top: 4%` landed right under it, invisible and
+       untappable, with no visual sign anything was even there.
+       env(safe-area-inset-top) is 0 on any browser that doesn't need it
+       (desktop, Android), so this is a no-op everywhere else. */
+    position: fixed; top: calc(4% + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
     z-index: 4; color: #a8f2ff; font-size: 11px; letter-spacing: 6px;
     opacity: 0.75; text-shadow: 0 0 8px rgba(111,216,232,0.6);
     user-select: none;
@@ -276,7 +283,11 @@
   #face-ctl.loading { color: #ffcf7f; border-color: rgba(255,207,127,0.5); opacity: 0.9; }
 
   #chat-toggle {
-    position: fixed; right: 4%; top: 3%; z-index: 6;
+    /* Same iPhone-notch/status-bar clearance as #hud-title above — this
+       button was the one directly reported invisible on an iPhone home-
+       screen install (it renders under the status bar with no env()
+       offset), so this is the fix for that report specifically. */
+    position: fixed; right: 4%; top: calc(3% + env(safe-area-inset-top)); z-index: 6;
     font-size: 9px; letter-spacing: 1.5px; color: #ffb15c; opacity: 0.65;
     background: rgba(10,18,20,0.4); border: 1px solid rgba(255,177,92,0.35);
     padding: 6px 10px; border-radius: 3px; cursor: pointer; user-select: none;
@@ -370,7 +381,7 @@
     #chat-voice-toggle[aria-pressed="true"], #chat-voice-toggle[data-speaking="1"] { animation: none; }
   }
   @media (max-width: 600px) {
-    #chat-toggle { font-size: 8px; padding: 5px 8px; top: 1.5%; right: 3%; }
+    #chat-toggle { font-size: 8px; padding: 5px 8px; top: calc(1.5% + env(safe-area-inset-top)); right: 3%; }
   }
 
   /* WhatsApp-voice-message-style bars: a small canvas beside the plinth
