@@ -122,6 +122,14 @@
   #jarvis-sub {
     margin-top: 6px; color: #6fa9b8; font-size: 9px; letter-spacing: 4px; opacity: 0.7;
   }
+  #jarvis-core-status.live { color: #8bffb0; }
+  #jarvis-core-status.demo { color: #ffcf7f; }
+  #jarvis-state {
+    margin-top: 5px; font-size: 8.5px; letter-spacing: 3px; opacity: 0.85;
+    color: #6fd8e8; transition: color 0.4s ease;
+  }
+  #jarvis-state.thinking { color: #ffb15c; }
+  #jarvis-state.voice { color: #a8f2ff; }
 
   /* Respect the OS-level reduced-motion preference: keep every visual
      element (nothing here is functional-only) but stop continuous motion
@@ -289,7 +297,8 @@
   <div id="plinth-wrap">
     <div id="plinth-glow"></div>
     <div id="jarvis-label">JARVIS</div>
-    <div id="jarvis-sub">PERSONAL AI &nbsp;·&nbsp; CORE ONLINE</div>
+    <div id="jarvis-sub">PERSONAL AI &nbsp;·&nbsp; <span id="jarvis-core-status" class="demo">CORE OFFLINE</span></div>
+    <div id="jarvis-state">IDLE</div>
   </div>
 
 <script src="./three.min.js"></script>
@@ -817,6 +826,8 @@
   // time animate() runs, since that first call happens synchronously
   // before any `let` declared later in the script has executed.
   let audioGlow = 0;
+  const jarvisStateEl = document.getElementById("jarvis-state");
+  let lastJarvisStateLabel = "";
   const rgbSplit = document.getElementById("rgb-split");
   const banner = document.getElementById("glitch-banner");
   const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -895,6 +906,23 @@
         outerShell.rotation.y = t * (0.08 + audioGlow * 0.4);
         ringsGroup.rotation.z = t * (0.12 + audioGlow * 0.35);
         ringsGroup.rotation.x = Math.sin(t * 0.2) * 0.15;
+      }
+    }
+
+    // Real-signal state label under the JARVIS wordmark — the same two
+    // real signals already driving the Core's shape (brainPulse for
+    // thinking, audioGlow for voice), just surfaced as text too. No
+    // "LISTENING" state: that's the industry-standard 4th state (idle/
+    // listening/thinking/speaking) but Core has no real speech-detection
+    // signal to back it with, so it's deliberately left out rather than
+    // faked — same rule as everywhere else on this page. Only writes to
+    // the DOM when the label actually changes, not every frame.
+    {
+      const label = brainPulse > 0.08 ? "THINKING" : audioGlow > 0.08 ? "VOICE ACTIVE" : "IDLE";
+      if (label !== lastJarvisStateLabel) {
+        jarvisStateEl.textContent = label;
+        jarvisStateEl.className = label === "THINKING" ? "thinking" : label === "VOICE ACTIVE" ? "voice" : "";
+        lastJarvisStateLabel = label;
       }
     }
 
@@ -1077,6 +1105,7 @@
   const MAX_ACTIVITY_LINES = 7;
   const activityLinesEl = document.getElementById("activity-lines");
   const activityStatusEl = document.getElementById("activity-status");
+  const jarvisCoreStatusEl = document.getElementById("jarvis-core-status");
   const activityQueue = [];
 
   function kindFor(type) {
@@ -1125,6 +1154,12 @@
   function setActivityStatus(isLive) {
     activityStatusEl.textContent = isLive ? "LIVE · CONNECTED TO CORE" : "DEMO · CORE OFFLINE";
     activityStatusEl.className = "status " + (isLive ? "live" : "demo");
+    // The headline under the JARVIS wordmark used to hardcode "CORE
+    // ONLINE" unconditionally, even with no real connection at all — the
+    // single most prominent piece of fabricated state on the whole page.
+    // It now mirrors the same real isLive check the activity panel uses.
+    jarvisCoreStatusEl.textContent = isLive ? "CORE ONLINE" : "CORE OFFLINE";
+    jarvisCoreStatusEl.className = isLive ? "live" : "demo";
   }
 
   // Demo feed: only ever runs while there's no real Core connection, and

@@ -174,6 +174,24 @@ with `?host=...&port=...` in the URL.
 honestly falls back to a clearly-labeled `DEMO` feed of representative
 events, so it's never ambiguous whether what's on screen is real.
 
+The same real connection check now also drives the headline text under the
+`JARVIS` wordmark itself. It used to read a hardcoded, unconditional
+"CORE ONLINE" regardless of whether anything was actually connected — the
+single most prominent piece of fabricated state on the page, sitting right
+under the title. It now reads `CORE ONLINE` / `CORE OFFLINE` from the exact
+same `isLive` flag the CORE ACTIVITY panel uses, colored the same
+green/amber as every other LIVE/DEMO badge.
+
+Directly beneath it, a small **state label** (`IDLE` / `THINKING` /
+`VOICE ACTIVE`) surfaces the same two real signals that already drive the
+Core's shape — `brainPulse` (real, or labeled-demo, brain activity) and
+`audioGlow` (real mic/voice level) — as text, so at a glance you can tell
+*why* the Core is moving the way it is. Deliberately no `LISTENING` state:
+that's the standard fourth state in the idle/listening/thinking/speaking
+pattern most voice-AI UIs converge on, but Core has no real speech-detection
+signal to back it with, so — same rule as everywhere else on this page —
+it's left out rather than faked.
+
 ## Real dashboard numbers, not decoration — TOOL REGISTRY / DEVICES / OBSERVERS
 
 The two side panels also poll a second real endpoint, **`GET /status`**
