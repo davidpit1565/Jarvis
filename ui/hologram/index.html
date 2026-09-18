@@ -345,8 +345,15 @@
   renderer.setSize(window.innerWidth, window.innerHeight);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
-  camera.position.set(0, 0, 7.2);
+  // Narrower FOV (was 45°) at a proportionally greater distance (same
+  // framing) than a wide-angle lens — direct side-by-side comparison
+  // against the reference showed a wide FOV this close exaggerates the
+  // face's real width/roundness (a well-known wide-angle-lens distortion,
+  // the same reason portrait photographers avoid shooting close with a
+  // wide lens), which read as "fake/bloated" rather than the reference's
+  // flatter, more flattering telephoto-like compression.
+  const camera = new THREE.PerspectiveCamera(28, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.position.set(0, 0, 12);
 
   /* ---------------------------------------------------------------
    * 2a. Manual orbit — drag to inspect the head from any angle (side,
@@ -360,7 +367,7 @@
    * ------------------------------------------------------------- */
   let camAzimuth = 0;
   let camElevation = 0;
-  let camDistance = 7.2;
+  let camDistance = 12;
   let orbitDragging = false;
   let lastPointerX = 0;
   let lastPointerY = 0;
@@ -397,7 +404,7 @@
     renderer.domElement.style.cursor = "grab";
   });
   renderer.domElement.addEventListener("wheel", (e) => {
-    camDistance = Math.max(3, Math.min(14, camDistance + e.deltaY * 0.005));
+    camDistance = Math.max(5, Math.min(22, camDistance + e.deltaY * 0.005));
     updateCameraFromOrbit();
     e.preventDefault();
   }, { passive: false });
@@ -589,6 +596,33 @@
     loPos.needsUpdate = true;
   }
 
+  // A deliberate, clean set of vertical accent lines over the mouth/chin
+  // region excluded from the real-mesh lat/long grid (see the exclusion
+  // zones above) — comparison against the reference showed that area
+  // needs to read as "still part of the gridded face," matching the
+  // reference's own continuous fine vertical lines there, not a blank
+  // gap. Flat (constant z per line, not curved to the real surface) —
+  // a deliberate simplification: a small, mostly front-facing patch, and
+  // "flat but clean" reads far better here than "curved but tangled,"
+  // which is what using the real mesh geometry there actually produced.
+  function buildMouthGridPatch(cx, cy, cz, width, height, cols) {
+    const group = new THREE.Group();
+    const mat = new THREE.LineBasicMaterial({
+      color: 0xcdf3ff, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending,
+    });
+    for (let i = 0; i <= cols; i++) {
+      const x = cx + (i / cols - 0.5) * width;
+      const bow = Math.cos(((i / cols) - 0.5) * Math.PI) * 0.12; // slight outward curve, cheeks vs. center
+      const positions = new Float32Array([
+        x, cy + height / 2, cz - 0.12, x, cy - height / 2, cz - 0.12 + bow,
+      ]);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      group.add(new THREE.Line(geo, mat));
+    }
+    return group;
+  }
+
   // Draws a real latitude/longitude grid wrapped onto the *actual* mesh
   // surface (not a parametric sphere) by walking every triangle and
   // interpolating where it crosses each iso-value of a computed spherical
@@ -610,7 +644,21 @@
   // existing custom eye spheres/glow and mouth line already cover those
   // spots, same as how the reference's own eyes/mouth read as distinct
   // bright features rather than more grid.
-  function buildLatLongOnMesh(geometry, latDivisions, lonDivisions, center, exclusionZones) {
+  // Drops any triangle with a vertex inside one of `exclusionZones`
+  // (ellipsoids in raw mesh space: {c:[x,y,z], r:[rx,ry,rz]}) — used to
+  // cut the eye sockets and mouth cavity out of BOTH the solid fill mesh
+  // and the lat/long grid built on top of it (see both call sites below).
+  // Checking every vertex, not just the triangle centroid, matters: a
+  // long triangle spanning from deep inside the cavity to well outside it
+  // can average to a centroid just outside the zone while still being
+  // exactly the kind of triangle that causes the worst visual mess —
+  // this was the actual cause of a "tangle" that survived several rounds
+  // of shrinking/growing the exclusion radius, before this was found:
+  // the *solid fill mesh* was never excluding these zones at all (only
+  // the grid lines were), so overlapping translucent mouth-interior
+  // surfaces (teeth walls, inner cheek) were showing straight through —
+  // not a wireframe problem, a solid-geometry one.
+  function excludeTriangles(geometry, exclusionZones) {
     const pos = geometry.attributes.position;
     const index = geometry.index;
     const rawTriCount = index ? index.count / 3 : pos.count / 3;
@@ -628,12 +676,21 @@
     const keptTris = [];
     for (let t = 0; t < rawTriCount; t++) {
       const ia = rawIdx(t, 0), ib = rawIdx(t, 1), ic = rawIdx(t, 2);
-      const centroid = rawPos(ia).add(rawPos(ib)).add(rawPos(ic)).multiplyScalar(1 / 3);
-      if (inExclusion(centroid)) continue;
+      if (inExclusion(rawPos(ia)) || inExclusion(rawPos(ib)) || inExclusion(rawPos(ic))) continue;
       keptTris.push(ia, ib, ic);
     }
-    const triCount = keptTris.length / 3;
-    function getIdx(t, k) { return keptTris[t * 3 + k]; }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute("position", pos);
+    out.setIndex(keptTris);
+    return out;
+  }
+
+  function buildLatLongOnMesh(geometry, latDivisions, lonDivisions, center) {
+    const pos = geometry.attributes.position;
+    const index = geometry.index;
+    const triCount = index ? index.count / 3 : pos.count / 3;
+    function rawPos(i) { return new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)); }
+    function getIdx(t, k) { return index ? index.getX(t * 3 + k) : t * 3 + k; }
 
     const phiCache = new Map();
     const thetaCache = new Map();
@@ -754,7 +811,39 @@
       const modelGroup = new THREE.Group();
       // The source scan is natively ~8 units across; scale it down to
       // this scene's existing camera-distance/panel/plinth proportions.
-      modelGroup.scale.setScalar(0.384);
+      // Non-uniform on purpose (narrower in x, taller in y) — direct
+      // side-by-side comparison against the reference showed this real
+      // scan reads as noticeably wider/rounder than the reference's more
+      // slender oval face even after the camera-lens fix above; LeePerrySmith
+      // is a real adult male face and isn't going to become a slender
+      // idealized oval through camera framing alone, so this pulls the
+      // whole head in horizontally and stretches it vertically slightly
+      // instead — cheap, and it also pulls the ears in rather than
+      // needing separate treatment for them.
+      modelGroup.scale.set(0.384 * 0.86, 0.384 * 1.12, 0.384 * 0.97);
+
+      // Eye-socket and mouth-cavity ellipsoids (raw mesh space) — excluded
+      // from BOTH the solid fill mesh and the grid built on it (see
+      // excludeTriangles above for why both layers need this, not just
+      // the grid: the fill mesh's overlapping translucent mouth-interior
+      // surfaces, not wireframe tangle, were the real cause of a "broken"
+      // look that survived several rounds of only re-tuning the grid's
+      // exclusion radius). The custom eye spheres/glow and mouth
+      // line+grid-patch below cover those spots instead, same as how the
+      // reference's own eyes/mouth read as distinct bright features
+      // rather than more grid.
+      const faceExclusions = [
+        { c: [-0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
+        { c: [0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
+        { c: [0, -0.1, 1.8], r: [1.35, 1.2, 1.35] },
+        // The nostrils are their own small concave cavity (real breathing
+        // holes on this scan, same underlying issue as the mouth/eyes) —
+        // sitting in the gap between the eye and mouth exclusion zones
+        // above, this caused a dense tangle that persisted through every
+        // mouth-zone resize, since it was never actually the mouth.
+        { c: [0, 1.2, 2.0], r: [0.4, 0.42, 0.5] },
+      ];
+      const faceTris = excludeTriangles(trimmedTris, faceExclusions);
 
       // A soft, glowing translucent fill of the whole head/neck volume —
       // comparison against the reference showed its head reads as a solid
@@ -766,7 +855,7 @@
         color: 0x2f7a94, transparent: true, opacity: 0.24,
         side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
       });
-      modelGroup.add(new THREE.Mesh(trimmedTris, fillMat));
+      modelGroup.add(new THREE.Mesh(faceTris, fillMat));
 
       // A large, soft, blurred radial sprite behind the whole head fakes
       // the outward bloom halo the reference has (real bloom needs
@@ -786,30 +875,20 @@
       halo.position.set(0, 1.2, -1.6);
       modelGroup.add(halo);
 
-      // A real lat/long grid computed on the actual mesh surface (see
-      // buildLatLongOnMesh above) instead of THREE.EdgesGeometry — the
-      // reference's wireframe is a smooth, evenly-spaced wrap, and
-      // EdgesGeometry on this mesh's own (irregular) triangulation reads
-      // as a tangle once dense enough to cover the whole face. Center is
-      // near eye-height, slightly behind the face front, so the computed
-      // radius is roughly even front-to-back. Eye sockets and the mouth
-      // cavity are excluded (see comment above) — the custom eye/mouth
-      // accents below cover those spots instead.
-      // The mouth zone below was previously r=[1.35,1.2,1.35] — big enough
-      // to blank out most of the central face (nose, cheeks, chin, not
-      // just the mouth cavity itself), which read as a big empty hole in
-      // the middle of the face rather than a small masked feature. Shrunk
-      // to hug just the mouth/chin cavity that actually causes the
-      // spherical-angle tangle (see buildLatLongOnMesh comment above) —
-      // accepting a bit of rough grid right at the lips rather than a
-      // large blank patch.
+      // A real lat/long grid computed on the actual (already
+      // eye/mouth-excluded, via faceTris above) mesh surface instead of
+      // THREE.EdgesGeometry — the reference's wireframe is a smooth,
+      // evenly-spaced wrap, and EdgesGeometry on this mesh's own
+      // (irregular) triangulation reads as a tangle once dense enough to
+      // cover the whole face. Center is near eye-height, slightly behind
+      // the face front, so the computed radius is roughly even
+      // front-to-back.
       const latLongCenter = new THREE.Vector3(0, 1.9, 0.2);
-      const latLongExclusions = [
-        { c: [-0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
-        { c: [0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
-        { c: [0, -0.15, 2.0], r: [0.62, 0.5, 0.6] },
-      ];
-      const edgesGeo = buildLatLongOnMesh(trimmedTris, 22, 20, latLongCenter, latLongExclusions);
+      // Finer than the first pass (22x20) — side-by-side comparison
+      // against the reference showed our grid cells read as chunky,
+      // blocky checkerboard squares on the forehead, vs. the reference's
+      // much finer texture.
+      const edgesGeo = buildLatLongOnMesh(faceTris, 30, 28, latLongCenter);
       const edgesMat = new THREE.LineBasicMaterial({
         color: 0xe8fbff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
       });
@@ -880,6 +959,7 @@
 
       mouth = buildMouth(0, -0.11, 2.32, 1.05);
       modelGroup.add(mouth.group);
+      modelGroup.add(buildMouthGridPatch(0, -0.15, 2.3, 1.7, 1.1, 7));
 
       // Sized to actually fill most of the cranial cavity (crown near
       // y=3.97, brow near y=1.8) rather than a small patch only visible

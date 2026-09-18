@@ -98,15 +98,28 @@ approximating a human head and use one:
   multi-island unwrap (eyes/nose/mouth/ears/scalp are separate radial
   charts for texturing), which would draw as fragmented concentric loops
   per island instead of one continuous grid.
-  - Two ellipsoid **exclusion zones** (around the eye sockets and the
-    mouth) drop any triangle whose centroid falls inside them before the
-    grid is built. This mesh's real open-mouth/eye-socket geometry is
-    concave enough (depth folds back on itself) that the spherical angle
-    stops being monotonic there, and no angle-threshold or edge-length
-    filter fixed the resulting tangle — cutting a hole and relying on the
-    existing custom eye/mouth accents (below) to cover it instead is what
-    actually worked, the same way the reference's own eyes/mouth read as
-    distinct bright features rather than more grid.
+  - Three ellipsoid **exclusion zones** (the two eye sockets, the mouth,
+    plus a nostril zone added later — the nostrils are their own small
+    concave cavity, easy to miss since it sits in the gap between the eye
+    and mouth zones) drop any triangle with a vertex inside them
+    (`excludeTriangles` in `index.html`) before either the solid fill mesh
+    or the grid is built on top of it. This mesh's real open-mouth/
+    eye-socket/nostril geometry is concave enough (depth folds back on
+    itself) that the spherical angle stops being monotonic there, and no
+    angle-threshold or edge-length filter fixed the resulting tangle.
+    **A real bug along the way**: for several rounds only the grid lines
+    excluded these zones, not the solid fill mesh — so the actual visible
+    mess at the mouth was overlapping translucent mouth-*interior*
+    surfaces (teeth walls, inner cheek) showing straight through the
+    fill, not a wireframe tangle at all, and no amount of re-tuning the
+    grid's exclusion radius could have fixed a problem that lived in a
+    different layer entirely. A deliberate, flat **procedural "mouth grid
+    patch"** (`buildMouthGridPatch`, a handful of straight vertical accent
+    lines) now fills the excluded mouth/chin area so it reads as a clean
+    design choice — matching the reference's own continuous fine vertical
+    lines there — rather than a hole; it's flat (not curved to the real
+    surface), which is visible as a thin sliver from a steep side angle,
+    a known trade-off for a small, mostly front-facing patch.
   - Two further, progressively larger and dimmer copies of the same line
     geometry (`glowLines`/`glowLines2`, scale 1.03/1.07, opacity
     0.28/0.12, additive blending) are drawn behind the bright original as
@@ -132,6 +145,31 @@ approximating a human head and use one:
   earlier, smaller/dimmer attempt — the reference's eyes are the single
   brightest, most eye-catching feature on the whole face, and that first
   pass read as too subtle to be a focal point.
+
+## Proportions: lens choice and a non-uniform scale, not just the mesh
+
+Two further, non-geometry fixes closed a "this still reads as fake/
+bloated compared to the reference" gap that direct side-by-side
+comparison traced to *how the head is framed*, not just what it's made
+of:
+
+- **A narrower camera FOV (45°→28°) at a proportionally greater
+  distance** (same on-screen framing, not a zoomed-in change) — a wide
+  FOV this close to a face exaggerates its real width/roundness, the
+  same well-known reason portrait photographers avoid shooting close
+  with a wide-angle lens. The reference reads as flatter/more
+  telephoto-compressed; this page's camera was doing the opposite.
+- **A non-uniform scale on the head model itself** (narrower in x,
+  taller in y: `0.86x, 1.12y, 0.97z` relative to the base 0.384 scale) —
+  LeePerrySmith is a real adult male face and was never going to become
+  a slender idealized oval through camera framing alone, so the model is
+  squashed/stretched slightly to match the reference's proportions more
+  directly. This also pulls the ears in rather than needing separate
+  treatment for them. Trade-off: a perfect sphere (the eye pupils) reads
+  as a very slightly squashed ellipsoid under this same non-uniform
+  scale, since they're children of the same scaled group — not visually
+  significant at the sizes/distances involved, but a real, known
+  side-effect rather than a free fix.
 
 Real ears, a real nose, a real jaw, a real neck-into-shoulders — all
 inherent to the geometry, from any angle, with no per-feature code needed
@@ -434,10 +472,17 @@ clears 60fps either way.
   examples — it isn't a generic/synthetic avatar. It's used purely as
   wireframe/point geometry here (no photo texture applied), same spirit
   as any other third-party mesh used as a technical asset.
-- The lat/long grid's eye/mouth exclusion zones (see "How the face is
-  built") leave a visibly rougher boundary right at their edge — cutting
-  a hole in the grid necessarily leaves the neighboring iso-lines
+- The lat/long grid's eye/mouth/nostril exclusion zones (see "How the
+  face is built") leave a visibly rougher boundary right at their edge —
+  cutting a hole in the grid necessarily leaves the neighboring iso-lines
   dangling instead of continuing smoothly, most noticeable around the
   nose/upper-lip area from a 3/4 or side angle. The custom eye/mouth
   accents cover most of it from the front, which is the primary viewing
   angle, but this is a real, visible remaining gap, not a solved one.
+- The procedural mouth grid patch (see "How the face is built") is flat,
+  not curved to the real face surface — from a steep side angle it's
+  visible as a thin sliver rather than following the jaw's curve.
+- The non-uniform model scale (see "Proportions" above) squashes the eye
+  pupil spheres very slightly into ellipsoids, since they're children of
+  the same non-uniformly scaled group — not visually significant at the
+  sizes/distances involved, but a real, known side-effect.
