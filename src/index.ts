@@ -11,6 +11,7 @@ import { readOnlyFileInfoTool } from "@/tools/filesystem/ReadOnlyFileInfoTool";
 import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
+import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
 import { MemoryStore } from "@/memory/MemoryStore";
 import { ReminderStore } from "@/reminders/ReminderStore";
 import { createCreateReminderTool } from "@/tools/reminders/CreateReminderTool";
@@ -79,6 +80,7 @@ function main() {
   toolRegistry.registerTool(getActiveApplicationTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
+  toolRegistry.registerTool(createDeleteMemoryTool(memoryStore));
   toolRegistry.registerTool(createCreateReminderTool(reminderStore));
   toolRegistry.registerTool(createListRemindersTool(reminderStore));
   toolRegistry.registerTool(createCompleteReminderTool(reminderStore));
@@ -89,6 +91,7 @@ function main() {
   // memory writes are SAFE_ACTION-level but standing-granted to the one
   // local user rather than asked about every time.
   permissionService.grant(DEFAULT_USER_ID, "SAVE_MEMORY");
+  permissionService.grant(DEFAULT_USER_ID, "DELETE_MEMORY");
   permissionService.grant(DEFAULT_USER_ID, "CREATE_REMINDER");
   permissionService.grant(DEFAULT_USER_ID, "COMPLETE_REMINDER");
 

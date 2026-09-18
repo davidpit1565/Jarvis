@@ -108,10 +108,14 @@ memory store (`src/memory/MemoryStore.ts`) that survives restarts:
 - **`SAVE_MEMORY`** (`src/tools/memory/SaveMemoryTool.ts`) — `SAFE_ACTION`
   level, standing-granted to the local user at startup (single-user
   assistant, not multi-tenant). Saves a `{key, value}` fact Claude decides
-  is worth remembering.
+  is worth remembering. Upserts by key — saving the same key again
+  replaces the old value rather than adding a conflicting second row.
 - **`SEARCH_MEMORY`** (`src/tools/memory/SearchMemoryTool.ts`) — `READ`
   level. Lets Claude recall previously saved facts by a text fragment
   before answering.
+- **`DELETE_MEMORY`** (`src/tools/memory/DeleteMemoryTool.ts`) —
+  `SAFE_ACTION`, standing-granted. Actually forgets a fact by key, for when
+  it's no longer true and there's nothing to replace it with.
 
 This is the first real step toward "JARVIS knows things about you between
 conversations" rather than only within a single session.

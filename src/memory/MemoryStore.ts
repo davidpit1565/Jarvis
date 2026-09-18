@@ -28,14 +28,28 @@ export class MemoryStore {
     this.db.run(`CREATE INDEX IF NOT EXISTS idx_memory_records_key ON memory_records(key)`);
   }
 
+  /**
+   * Upserts by key: saving the same key again replaces the previous fact
+   * rather than adding a second row. Without this, correcting a fact
+   * ("actually my timezone is X, not Y") would leave both the old and new
+   * value in the store — SEARCH_MEMORY would then hand Claude two
+   * conflicting facts for the same key with no way to tell which is
+   * current, exactly backwards from what a "memory" is supposed to do.
+   */
   save(input: SaveMemoryInput): MemoryRecord {
-    const record: MemoryRecord = {
-      id: randomUUID(),
-      key: input.key,
-      value: input.value,
-      createdAt: new Date().toISOString(),
-    };
+    const existing = this.db.query(`SELECT id FROM memory_records WHERE key = ?`).get(input.key) as {
+      id: string;
+    } | null;
+    const createdAt = new Date().toISOString();
 
+    if (existing) {
+      this.db
+        .query(`UPDATE memory_records SET value = ?, created_at = ? WHERE id = ?`)
+        .run(input.value, createdAt, existing.id);
+      return { id: existing.id, key: input.key, value: input.value, createdAt };
+    }
+
+    const record: MemoryRecord = { id: randomUUID(), key: input.key, value: input.value, createdAt };
     this.db
       .query(`INSERT INTO memory_records (id, key, value, created_at) VALUES (?, ?, ?, ?)`)
       .run(record.id, record.key, record.value, record.createdAt);
@@ -61,6 +75,12 @@ export class MemoryStore {
 
   delete(id: string): boolean {
     const result = this.db.query(`DELETE FROM memory_records WHERE id = ?`).run(id);
+    return result.changes > 0;
+  }
+
+  /** Deletes by exact key — the natural handle Claude/the user actually has, unlike the opaque internal id. */
+  deleteByKey(key: string): boolean {
+    const result = this.db.query(`DELETE FROM memory_records WHERE key = ?`).run(key);
     return result.changes > 0;
   }
 
