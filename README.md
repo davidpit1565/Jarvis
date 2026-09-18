@@ -1262,9 +1262,13 @@ internally consistent.
 - No credential-removal UI yet (only a fresh `JARVIS_WEBAUTHN_DB_PATH` or
   manual SQL clears one).
 - Sessions are in-memory only — restarting Core requires unlocking again.
-- This protects the dashboard specifically; it does not gate `/status`,
-  the WebSocket device protocol, or the phone gateway, which have their
-  own separate security models (see "Security controls").
+- This protects the dashboard; `GET /status` and `ws(s)://.../observer`
+  now require the same admin token whenever one is configured (or a
+  valid WebAuthn session), closing what used to be a real gap — a
+  deploy with an admin token set but no WebAuthn credential registered
+  yet left both wide open. The WebSocket device protocol and the phone
+  gateway still have their own separate security models (see "Security
+  controls").
 
 ## Test
 
@@ -1399,7 +1403,15 @@ conversations too, not just the current one.
   itself — found and fixed during this session's own review: the page was
   locked, but the JSON feed it polls (devices, activity, token/tool usage,
   record counts) was still served to anyone, unauthenticated, making the
-  lock purely cosmetic.
+  lock purely cosmetic. It also now accepts `JARVIS_ADMIN_TOKEN` (header
+  or query param) as an alternative to a WebAuthn session, and requires
+  one of the two whenever either is configured — a later audit found a
+  deploy with an admin token set but no WebAuthn credential registered
+  yet left `/status` fully open, and the same fix applies to the
+  `/observer` WebSocket (used by the hologram UI's live activity feed),
+  which previously had no authentication at all. `ws(s)://.../chat` is
+  now rate-limited the same way every other admin-token route is, so the
+  token can't be brute forced via unlimited WebSocket upgrade attempts.
 - Every HTTP response carries `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer`
   (`withSecurityHeaders` in `JarvisWebSocketServer.ts`) — stops the
