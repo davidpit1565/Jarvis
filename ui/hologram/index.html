@@ -731,8 +731,39 @@
    *     glowing line edges plus a bright node dot at every vertex
    *     (reusing the same soft sprite texture as the particle layer).
    * ------------------------------------------------------------- */
+  /* Latitude/longitude lines only — no diagonal cell splits. The
+     reference video's grid is a clean rows-and-columns pattern, not a
+     busy triangulated mesh; THREE.WireframeGeometry(sphere) draws every
+     triangle edge (including the diagonal that splits each grid cell),
+     which reads as visual noise by comparison. Sphere geometry vertices
+     are already laid out as (heightSegments+1) rows x (widthSegments+1)
+     columns, row-major, so this just connects same-row and same-column
+     neighbors directly instead of going through the triangle indices. */
+  function buildLatLongWireframe(posAttr, widthSegments, heightSegments) {
+    const cols = widthSegments + 1;
+    const pts = [];
+    const v = new THREE.Vector3();
+    const push = (i) => { v.fromBufferAttribute(posAttr, i); pts.push(v.x, v.y, v.z); };
+    for (let row = 0; row <= heightSegments; row++) {
+      for (let col = 0; col < widthSegments; col++) {
+        push(row * cols + col);
+        push(row * cols + col + 1);
+      }
+    }
+    for (let col = 0; col <= widthSegments; col++) {
+      for (let row = 0; row < heightSegments; row++) {
+        push(row * cols + col);
+        push((row + 1) * cols + col);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pts), 3));
+    return geo;
+  }
+
   function buildHeadWireframe() {
-    const sphere = new THREE.SphereGeometry(HEAD_R, 28, 20);
+    const WIDTH_SEGS = 28, HEIGHT_SEGS = 20;
+    const sphere = new THREE.SphereGeometry(HEAD_R, WIDTH_SEGS, HEIGHT_SEGS);
     const posAttr = sphere.attributes.position;
     const v = new THREE.Vector3();
     for (let i = 0; i < posAttr.count; i++) {
@@ -786,9 +817,9 @@
     }
     posAttr.needsUpdate = true;
 
-    const wireGeo = new THREE.WireframeGeometry(sphere);
+    const wireGeo = buildLatLongWireframe(posAttr, WIDTH_SEGS, HEIGHT_SEGS);
     const wireMat = new THREE.LineBasicMaterial({
-      color: 0x8fe8f5, transparent: true, opacity: 0.26, blending: THREE.AdditiveBlending,
+      color: 0x8fe8f5, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending,
     });
     const wireframe = new THREE.LineSegments(wireGeo, wireMat);
 
@@ -891,6 +922,29 @@
 
     // Nose bridge, straight down the center from brow to tip.
     group.add(buildFaceLine([[0, 0.26], [0, 0.05], [0, -0.16]], { opacity: 0.9, color: 0xffffff, lift: 1.06 }));
+
+    // Philtrum: the short shadow line between the nose tip and mouth.
+    group.add(buildFaceLine([[0, -0.22], [0, -0.3]], { opacity: 0.5, color: 0xffffff, lift: 1.04 }));
+
+    // Ears — a small closed loop sitting right at the head's silhouette
+    // edge (not on the front-facing surface, so this doesn't use
+    // projectToSurface: ears stick out sideways past that curve, not
+    // flush against it), at roughly eye-to-nose height, matching the
+    // reference video's ear position.
+    for (const sx of [-1, 1]) {
+      const baseX = rx * 0.98;
+      const baseY = -0.08 * ry;
+      const earZ = rz * 0.1;
+      const earPts = [
+        [0.02, 0.1], [0.09, 0.08], [0.13, 0.02], [0.11, -0.06],
+        [0.05, -0.11], [-0.02, -0.1], [-0.04, -0.03], [-0.02, 0.05],
+      ].map(([dx, dy]) => new THREE.Vector3(sx * (baseX + dx * ry), baseY + dy * ry, earZ));
+      const earGeo = new THREE.BufferGeometry().setFromPoints(earPts);
+      const earMat = new THREE.LineBasicMaterial({
+        color: 0xffffff, transparent: true, opacity: 0.65, blending: THREE.AdditiveBlending,
+      });
+      group.add(new THREE.LineLoop(earGeo, earMat));
+    }
 
     // Bright "pupil" glint inside each eye — small emissive sphere seated
     // on the same surface, at the eye's own centre.

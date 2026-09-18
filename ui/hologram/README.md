@@ -45,7 +45,12 @@ are combined:
    with a cheek hollow just below it, and a short wireframe neck
    underneath instead of the head floating with nothing below it.
    Rendered as glowing `THREE.LineSegments` edges plus a bright dot at
-   every vertex — the base "digital head" layer.
+   every vertex — the base "digital head" layer. The grid itself is
+   latitude/longitude lines only (`buildLatLongWireframe()`), not
+   `THREE.WireframeGeometry`'s full triangle-edge output — the reference
+   video's grid is a clean rows-and-columns pattern, and including the
+   diagonal that splits every triangle read as visual noise by
+   comparison.
 2. **Explicit facial line art on top of that** (`buildFace()` in
    `index.html`) — after a frame-by-frame rewatch of the reference video
    at 4fps (not just a couple of stills), its face turned out to be
@@ -59,6 +64,10 @@ are combined:
    sits flush on the head's actual curve at any proportion. This is the
    single biggest fix for "reads as an alien, not a face" — vertex bumps
    alone were barely visible head-on and only showed up in profile.
+   Also includes a philtrum line and two ear outlines (small closed loops
+   sitting right at the head's silhouette edge, since ears stick out
+   sideways rather than lying flush against the front-facing curve like
+   the other features).
 3. **A particle shimmer layer wrapped onto that same surface** — `index.html`
    separately draws a stylized face mask (head silhouette, eye sockets,
    nose/mouth shading, a procedural circuit-trace overlay) onto an
