@@ -1,0 +1,1605 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #030507; overflow: hidden;
+    font-family: "SF Mono", "JetBrains Mono", "Courier New", monospace;
+  }
+  #stage {
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse at 50% 38%, rgba(24,52,66,0.55) 0%, rgba(3,5,7,0.0) 55%),
+      radial-gradient(ellipse at 50% 100%, rgba(0,0,0,0.9) 0%, #030507 70%),
+      #030507;
+  }
+  canvas#gl { position: absolute; inset: 0; display: block; z-index: 1; }
+  canvas#matrix-bg { position: absolute; inset: 0; display: block; z-index: 0; opacity: 0.5; }
+
+  /* Server-room depth cues behind the head: blurred vertical light strips
+     standing in for distant rack columns, plus a couple of stray blinking
+     LED dots — cheap (pure CSS, no geometry) but breaks up the previously
+     flat gradient background so the scene reads as a room, not a void. */
+  .rack-strip {
+    position: fixed; top: 0; bottom: 0; width: 3px; z-index: 0;
+    background: linear-gradient(180deg, transparent, rgba(90,170,190,0.35) 35%, rgba(90,170,190,0.35) 65%, transparent);
+    filter: blur(2px); opacity: 0.5;
+  }
+  .rack-strip.dim { opacity: 0.28; filter: blur(3px); }
+  .rack-led {
+    position: fixed; width: 4px; height: 4px; border-radius: 50%; z-index: 0;
+    background: #7fe0c8; box-shadow: 0 0 6px 1px #7fe0c8; opacity: 0.7;
+    animation: led-blink 2.4s ease-in-out infinite;
+  }
+  .rack-led.amber { background: #ffb15c; box-shadow: 0 0 6px 1px #ffb15c; animation-duration: 3.6s; }
+  @keyframes led-blink { 0%,100% { opacity: 0.85; } 50% { opacity: 0.15; } }
+  @media (prefers-reduced-motion: reduce) {
+    .rack-led { animation: none; opacity: 0.5; }
+  }
+
+  /* subtle CRT scanlines + vignette, purely decorative */
+  #scanlines {
+    position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    background: repeating-linear-gradient(
+      to bottom, rgba(255,255,255,0.028) 0px, rgba(255,255,255,0.028) 1px,
+      transparent 1px, transparent 3px
+    );
+    mix-blend-mode: overlay;
+  }
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    box-shadow: inset 0 0 18vw 4vw rgba(0,0,0,0.85);
+  }
+
+  .panel {
+    position: fixed; top: 12%; width: min(23vw, 300px);
+    color: #6fd8e8; font-size: 11px; line-height: 1.55;
+    letter-spacing: 0.3px; z-index: 4; user-select: none;
+    text-shadow: 0 0 6px rgba(111,216,232,0.55);
+    /* A flat, solid backing plate (no backdrop-filter — see the "no
+       backdrop-filter stacking" lesson from the Bet-El project; this page
+       only has a handful of panels but a plain rgba fill is just as
+       legible and free, no blur cost). Keeps panel text readable at the
+       Core's outer ring, which sits close enough to the side panels at
+       some viewport widths to pass behind their heading text otherwise. */
+    background: rgba(3,12,16,0.5); padding: 10px 12px; border-radius: 3px;
+    box-sizing: border-box;
+  }
+  .panel.left { left: 4%; text-align: left; }
+  .panel.right { right: 4%; text-align: right; }
+  .panel .heading {
+    color: #a8f2ff; font-size: 10px; letter-spacing: 3px;
+    opacity: 0.85; margin-bottom: 10px; border-bottom: 1px solid rgba(111,216,232,0.25);
+    padding-bottom: 6px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  }
+  .panel .heading .status { font-size: 8.5px; letter-spacing: 1px; opacity: 0.9; white-space: nowrap; }
+  .panel .heading .status.live { color: #8bffb0; }
+  .panel .heading .status.demo { color: #ffcf7f; }
+  .panel .row { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.9; }
+  .panel .row .val { color: #ffd9a0; }
+  .panel .bar {
+    display: inline-block; width: 70px; height: 4px; margin-inline: 6px;
+    background: rgba(111,216,232,0.15); vertical-align: middle; position: relative;
+  }
+  .panel.right .bar { width: 60px; }
+  .panel .bar > span {
+    position: absolute; inset: 0; background: #6fd8e8; transform-origin: left;
+    box-shadow: 0 0 6px #6fd8e8;
+  }
+  .panel.right .bar > span { transform-origin: right; right: 0; left: auto; }
+
+  #cursor { display: inline-block; width: 6px; height: 11px; background: #6fd8e8; margin-left: 2px; animation: blink 1s steps(1) infinite; vertical-align: -1px; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  #hud-title {
+    position: fixed; top: 4%; left: 50%; transform: translateX(-50%);
+    z-index: 4; color: #a8f2ff; font-size: 11px; letter-spacing: 6px;
+    opacity: 0.75; text-shadow: 0 0 8px rgba(111,216,232,0.6);
+    user-select: none;
+  }
+
+  #plinth-wrap {
+    position: fixed; left: 50%; bottom: 7%; transform: translateX(-50%);
+    z-index: 4; text-align: center; user-select: none;
+  }
+  #plinth-glow {
+    width: min(46vw, 560px); height: 6px; margin: 0 auto 14px;
+    background: linear-gradient(90deg, transparent, #6fd8e8, #a8f2ff, #6fd8e8, transparent);
+    box-shadow: 0 0 24px 4px rgba(111,216,232,0.55);
+    border-radius: 3px;
+    animation: pulse 2.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+  #jarvis-label {
+    color: #cdf4ff; font-size: 22px; letter-spacing: 14px; font-weight: 600;
+    text-shadow: 0 0 14px rgba(111,216,232,0.8), 0 0 40px rgba(111,216,232,0.35);
+  }
+  #jarvis-sub {
+    margin-top: 6px; color: #6fa9b8; font-size: 9px; letter-spacing: 4px; opacity: 0.7;
+  }
+  #jarvis-core-status.live { color: #8bffb0; }
+  #jarvis-core-status.demo { color: #ffcf7f; }
+  #jarvis-state {
+    margin-top: 5px; font-size: 8.5px; letter-spacing: 3px; opacity: 0.85;
+    color: #6fd8e8; transition: color 0.4s ease;
+  }
+  #jarvis-state.thinking { color: #ffb15c; }
+  #jarvis-state.voice { color: #a8f2ff; }
+
+  /* Respect the OS-level reduced-motion preference: keep every visual
+     element (nothing here is functional-only) but stop continuous motion
+     — the CSS pulse/blink animations, and (via JS below, since idle
+     drift/rotation/glitch bursts are driven from the render loop, not
+     CSS) the equivalent JS-driven motion. */
+  @media (prefers-reduced-motion: reduce) {
+    #plinth-glow, #cursor { animation: none; }
+  }
+
+  /* Narrow/phone layout: the desktop side panels + wide activity heading
+     don't fit — shrink panels, drop the bar meters (the number alone
+     still reads fine at this size), and stack the activity header. */
+  @media (max-width: 600px) {
+    #hud-title { font-size: 9px; letter-spacing: 3px; width: 90%; }
+    /* Capped in px, not just vw: the Core itself shrinks to fit narrow
+       portrait widths (see responsiveCamDistance() in the script), so the
+       panels need a matching, tighter absolute cap rather than a fraction
+       of width alone — 42vw was tuned before that fix existed and is too
+       wide for what the shrunk Core now leaves clear on either side. */
+    .panel { width: min(42vw, 108px); font-size: 8.5px; padding: 6px 8px; }
+    .panel .bar { display: none; }
+    .panel .row { white-space: normal; }
+    .panel .row .val { margin-left: 5px; }
+    #activity { bottom: 17%; font-size: 9px; }
+    #activity .heading { flex-direction: column; align-items: flex-start; gap: 2px; }
+    #jarvis-label { font-size: 16px; letter-spacing: 8px; }
+    /* Real overlap found by screenshot: these two buttons kept their
+       desktop bottom-% position, which lands squarely on top of the
+       PERSONAL AI / CORE OFFLINE / state text at phone heights, since the
+       plinth block's own bottom-% doesn't shrink to match. Pushed to the
+       very bottom-right corner instead, small enough to clear it. */
+    #audio-ctl { font-size: 8px; padding: 5px 8px; bottom: 0.5%; }
+    #face-ctl {
+      font-size: 8px; padding: 5px 8px; bottom: 3.9%;
+      max-width: 26vw; white-space: normal; line-height: 1.35;
+    }
+    /* Narrower than its natural width so the centered line wraps instead
+       of reaching all the way out to where the face/mic buttons sit in
+       the bottom-right corner — screenshot showed "CORE OFFLINE" running
+       directly into "ENABLE FACE TRACKING" otherwise. */
+    #jarvis-sub { font-size: 8px; letter-spacing: 2px; max-width: 46vw; margin: 6px auto 0; }
+    #jarvis-state { font-size: 7.5px; margin-top: 3px; }
+  }
+
+  #glitch-banner {
+    position: fixed; left: 50%; top: 46%; transform: translate(-50%, -50%);
+    z-index: 6; background: rgba(10, 4, 4, 0.55); border: 1px solid rgba(255,120,90,0.55);
+    color: #ffb2a0; padding: 14px 22px; font-size: 12px; letter-spacing: 2px;
+    text-align: center; opacity: 0; pointer-events: none;
+    text-shadow: 0 0 8px rgba(255,90,60,0.7);
+  }
+  #glitch-banner .l1 { font-size: 10px; opacity: 0.85; }
+  #glitch-banner .l2 { font-size: 15px; font-weight: 700; margin: 4px 0; }
+  #glitch-banner .l3 { font-size: 9px; opacity: 0.7; }
+
+  #rgb-split { position: fixed; inset: 0; z-index: 3; pointer-events: none; opacity: 0; mix-blend-mode: screen; }
+
+  #activity {
+    position: fixed; left: 4%; right: 4%; bottom: 20%;
+    max-height: 15vh; overflow: hidden; z-index: 4;
+    font-size: 10.5px; line-height: 1.6; color: #7fe0c8;
+    background: linear-gradient(180deg, rgba(6,14,16,0.0), rgba(6,14,16,0.35));
+    border-top: 1px solid rgba(127,224,200,0.18);
+    padding-top: 6px; user-select: none;
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 30%, black 85%, transparent);
+    mask-image: linear-gradient(to bottom, transparent, black 30%, black 85%, transparent);
+  }
+  #activity .heading {
+    color: #a8f2ff; font-size: 10px; letter-spacing: 3px; opacity: 0.8;
+    display: flex; justify-content: space-between;
+  }
+  #activity .heading .status { font-size: 9px; letter-spacing: 1px; }
+  #activity .heading .status.live { color: #8bffb0; }
+  #activity .heading .status.demo { color: #ffcf7f; }
+  #activity-lines { margin-top: 4px; }
+  #activity-lines .line { opacity: 0.9; white-space: pre; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 0 5px rgba(127,224,200,0.4); }
+  #activity-lines .line .t { opacity: 0.55; }
+  #activity-lines .line .k-tool { color: #ffd9a0; }
+  #activity-lines .line .k-brain { color: #9fd8ff; }
+  #activity-lines .line .k-perm { color: #d3a8ff; }
+  #activity-lines .line .k-device { color: #8bffb0; }
+
+  /* Real <button>s now (see the HTML comment above the markup), which
+     means picking up the browser's default button chrome (system font,
+     its own background/border) has to be explicitly undone — every other
+     property here was already true for the old styled <div>. A real
+     :focus-visible ring is added rather than removed, so tabbing to
+     either control is actually visible, which a bare div could never be
+     in the first place. */
+  #audio-ctl, #face-ctl {
+    font-family: inherit; -webkit-appearance: none; appearance: none;
+  }
+  #audio-ctl:focus-visible, #face-ctl:focus-visible {
+    outline: 2px solid #6fd8e8; outline-offset: 2px;
+  }
+  #audio-ctl {
+    position: fixed; right: 4%; bottom: 3%; z-index: 6;
+    font-size: 9px; letter-spacing: 1.5px; color: #6fd8e8; opacity: 0.55;
+    background: rgba(10,18,20,0.4); border: 1px solid rgba(111,216,232,0.3);
+    padding: 6px 10px; border-radius: 3px; cursor: pointer; user-select: none;
+    transition: opacity 0.2s ease;
+  }
+  #audio-ctl:hover { opacity: 1; }
+  #audio-ctl.active { color: #8bffb0; border-color: rgba(139,255,176,0.5); opacity: 0.9; }
+
+  #face-ctl {
+    position: fixed; right: 4%; bottom: 6.6%; z-index: 6;
+    font-size: 9px; letter-spacing: 1.5px; color: #6fd8e8; opacity: 0.55;
+    background: rgba(10,18,20,0.4); border: 1px solid rgba(111,216,232,0.3);
+    padding: 6px 10px; border-radius: 3px; cursor: pointer; user-select: none;
+    transition: opacity 0.2s ease;
+  }
+  #face-ctl:hover { opacity: 1; }
+  #face-ctl.active { color: #8bffb0; border-color: rgba(139,255,176,0.5); opacity: 0.9; }
+  #face-ctl.loading { color: #ffcf7f; border-color: rgba(255,207,127,0.5); opacity: 0.9; }
+
+  /* WhatsApp-voice-message-style bars: a small canvas beside the plinth
+     that only ever draws real analyser data (mic today, TTS once Core
+     has it) — flat/idle when nothing is connected, never fake motion. */
+  #voice-bars {
+    position: fixed; left: 50%; bottom: 13.5%; transform: translateX(-50%);
+    z-index: 4; width: 220px; height: 34px; pointer-events: none;
+    opacity: 0.85;
+  }
+
+
+  #voice-ring {
+    position: fixed; left: 50%; top: 50%; z-index: 2; pointer-events: none;
+    width: 340px; height: 340px; margin: -170px 0 0 -170px;
+    border-radius: 50%; border: 1px solid rgba(111,216,232,0.0);
+    transition: border-color 0.15s ease;
+  }
+
+  /* A real per-frequency-bin spectrum (not a single averaged level like
+     #voice-bars above) — "let me see how it's actually speaking," per
+     direct request, styled as its own side panel matching SYSTEM STATUS/
+     CORE STATUS rather than a decoration near the plinth. */
+  .panel.voice { top: 46%; }
+  #voice-spectrum { width: 100%; height: 64px; display: block; opacity: 0.9; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="matrix-bg"></canvas>
+    <div class="rack-strip" style="left:6%"></div>
+    <div class="rack-strip dim" style="left:12%"></div>
+    <div class="rack-strip dim" style="right:14%"></div>
+    <div class="rack-strip" style="right:7%"></div>
+    <div class="rack-led" style="left:8%; top:22%"></div>
+    <div class="rack-led amber" style="left:13%; top:61%"></div>
+    <div class="rack-led" style="right:9%; top:34%"></div>
+    <div class="rack-led amber" style="right:15%; top:70%"></div>
+    <canvas id="gl"></canvas>
+  </div>
+  <div id="scanlines"></div>
+  <div id="vignette"></div>
+  <div id="rgb-split"></div>
+
+  <div id="hud-title">J . A . R . V . I . S &nbsp; — &nbsp; CORE INTERFACE</div>
+
+  <div class="panel left" id="panel-left">
+    <div class="heading">SYSTEM STATUS <span class="status demo" id="status-indicator-left">NO DATA</span></div>
+    <div class="rows" id="panel-left-rows"></div>
+  </div>
+
+  <div class="panel right" id="panel-right">
+    <div class="heading">CORE STATUS <span class="status demo" id="status-indicator-right">NO DATA</span></div>
+    <div class="rows" id="panel-right-rows"></div>
+  </div>
+
+  <div class="panel right voice" id="panel-voice">
+    <div class="heading">VOICE <span class="status demo" id="voice-status">IDLE</span></div>
+    <canvas id="voice-spectrum"></canvas>
+  </div>
+
+  <div id="glitch-banner">
+    <div class="l1">ENERGY RESERVES CRITICAL</div>
+    <div class="l2">HUNGER PROTOCOL INITIATED</div>
+    <div class="l3">SYSTEM DEMAND: BIO-FUEL</div>
+  </div>
+
+  <div id="voice-ring"></div>
+
+  <div id="activity">
+    <div class="heading">
+      <span>CORE ACTIVITY — behind the scenes</span>
+      <span class="status demo" id="activity-status">DEMO · CORE OFFLINE</span>
+    </div>
+    <div id="activity-lines"></div>
+  </div>
+
+  <canvas id="voice-bars"></canvas>
+  <video id="face-cam" playsinline muted style="display:none"></video>
+  <!-- Real <button>s, not styled <div>s (that's what they were before this
+       pass) — real keyboard focus/activation and a real accessible-name
+       announcement for free, from the browser's own button semantics. No
+       separate aria-label: it would freeze the accessible name at
+       whatever's set here, while the visible text already changes live
+       (MIC DENIED / MIC LIVE / FACE TRACKING LIVE, etc. — see the JS
+       below) and is itself a perfectly good accessible name, so a
+       screen reader announces whatever state is actually showing instead
+       of stale text. -->
+  <button id="audio-ctl" type="button">🎙 CONNECT MIC</button>
+  <button id="face-ctl" type="button">👁 ENABLE FACE TRACKING</button>
+
+  <div id="plinth-wrap">
+    <div id="plinth-glow"></div>
+    <div id="jarvis-label">JARVIS</div>
+    <div id="jarvis-sub">PERSONAL AI &nbsp;·&nbsp; <span id="jarvis-core-status" class="demo">CORE OFFLINE</span></div>
+    <div id="jarvis-state">IDLE</div>
+  </div>
+
+<script src="./three.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  const REDUCED_MOTION_MQ = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------------------------------------------------------------
+   * 0. Matrix-style falling code column background — cheap 2D canvas
+   *    effect (no WebGL cost) that gives the scene depth behind the
+   *    head, echoing the reference video's data-stream backdrop. Frozen
+   *    on a single static frame under prefers-reduced-motion instead of
+   *    animating forever.
+   * ------------------------------------------------------------- */
+  (function matrixRain() {
+    const mc = document.getElementById("matrix-bg");
+    const mctx = mc.getContext("2d");
+    const CHARS = "01アイウエオカキクケコJARVISΣΩΔ";
+    let cols, drops;
+
+    function resize() {
+      mc.width = window.innerWidth;
+      mc.height = window.innerHeight;
+      cols = Math.floor(mc.width / 16);
+      drops = new Array(cols).fill(0).map(() => Math.random() * -40);
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    function drawFrame() {
+      mctx.fillStyle = "rgba(3,5,7,0.16)";
+      mctx.fillRect(0, 0, mc.width, mc.height);
+      mctx.font = "13px monospace";
+      for (let i = 0; i < cols; i++) {
+        const char = CHARS[Math.floor(Math.random() * CHARS.length)];
+        const x = i * 16;
+        const y = drops[i] * 16;
+        mctx.fillStyle = Math.random() < 0.05 ? "rgba(200,255,240,0.8)" : "rgba(90,180,170,0.45)";
+        mctx.fillText(char, x, y);
+        if (y > mc.height && Math.random() > 0.975) drops[i] = 0;
+        drops[i]++;
+      }
+    }
+
+    if (REDUCED_MOTION_MQ) {
+      // Render a handful of frames to a settled state, then stop — depth
+      // cue stays visible without a perpetual animation loop.
+      for (let i = 0; i < 40; i++) drawFrame();
+      return;
+    }
+    (function loop() { drawFrame(); requestAnimationFrame(loop); })();
+  })();
+
+  /* ---------------------------------------------------------------
+   * 2. Three.js scene: particle head as THREE.Points, gentle rotation,
+   *    occasional glitch pass, colour ramp cyan -> amber by depth/side.
+   * ------------------------------------------------------------- */
+  const canvas = document.getElementById("gl");
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  const scene = new THREE.Scene();
+  // Narrower FOV (was 45°) at a proportionally greater distance (same
+  // framing) than a wide-angle lens — direct side-by-side comparison
+  // against the reference showed a wide FOV this close exaggerates the
+  // face's real width/roundness (a well-known wide-angle-lens distortion,
+  // the same reason portrait photographers avoid shooting close with a
+  // wide lens), which read as "fake/bloated" rather than the reference's
+  // flatter, more flattering telephoto-like compression.
+  const camera = new THREE.PerspectiveCamera(28, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.position.set(0, 0, 12);
+
+  /* ---------------------------------------------------------------
+   * 2a. Manual orbit — drag to inspect the head from any angle (side,
+   *     back, above). This moves the CAMERA around a fixed head; it's
+   *     deliberately independent of webcam face-tracking (further down),
+   *     which instead rotates the HEAD to face the tracked user. The two
+   *     are separate controls that can both be in play at once — dragging
+   *     the camera to the side while face-tracking is active still lets
+   *     the head turn to face wherever your real face is, which is a
+   *     different thing from the camera's current viewing angle.
+   * ------------------------------------------------------------- */
+  // The fixed vertical FOV ties the Core's on-screen size to viewport
+  // HEIGHT alone — fine on desktop/landscape, where height is already the
+  // narrower dimension. On a narrow portrait phone, width becomes the
+  // narrower dimension instead, but the Core doesn't know that and keeps
+  // sizing itself off height — so it swallows the entire width, leaving
+  // the flanking side panels no room at all (verified: they rendered
+  // directly overlapping the sphere at 390x844, "VOICE" unreadable mid-
+  // mesh). Pulling the camera back further, proportional to how much
+  // narrower width is than height, fixes that without touching desktop
+  // framing at all (the factor is 1 whenever width >= height). The 1.9x
+  // headroom past the literal ratio was tuned against a real 390-wide
+  // screenshot, not guessed, to give panels actual clearance rather than
+  // just touching the sphere's edge.
+  function responsiveCamDistance() {
+    const w = window.innerWidth, h = window.innerHeight;
+    return w >= h ? 12 : 12 * (h / w) * 1.9;
+  }
+  let camAzimuth = 0;
+  let camElevation = 0;
+  let camDistance = responsiveCamDistance();
+  let orbitDragging = false;
+  let lastPointerX = 0;
+  let lastPointerY = 0;
+
+  function updateCameraFromOrbit() {
+    const elev = Math.max(-1.2, Math.min(1.2, camElevation));
+    camera.position.set(
+      camDistance * Math.sin(camAzimuth) * Math.cos(elev),
+      camDistance * Math.sin(elev),
+      camDistance * Math.cos(camAzimuth) * Math.cos(elev)
+    );
+    camera.lookAt(0, 0, 0);
+  }
+  updateCameraFromOrbit();
+
+  renderer.domElement.style.cursor = "grab";
+  renderer.domElement.style.touchAction = "none";
+  renderer.domElement.addEventListener("pointerdown", (e) => {
+    orbitDragging = true;
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+    renderer.domElement.style.cursor = "grabbing";
+  });
+  window.addEventListener("pointermove", (e) => {
+    if (!orbitDragging) return;
+    camAzimuth += (e.clientX - lastPointerX) * 0.006;
+    camElevation += (e.clientY - lastPointerY) * 0.006;
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+    updateCameraFromOrbit();
+  });
+  window.addEventListener("pointerup", () => {
+    orbitDragging = false;
+    renderer.domElement.style.cursor = "grab";
+  });
+  renderer.domElement.addEventListener("wheel", (e) => {
+    camDistance = Math.max(5, Math.min(22, camDistance + e.deltaY * 0.005));
+    updateCameraFromOrbit();
+    e.preventDefault();
+  }, { passive: false });
+
+  /* ---------------------------------------------------------------
+   * 2b. THE CORE — see the full explanation further down (section "2c"),
+   *     right before it's actually built. In short: this used to be a
+   *     real human 3D face scan (LeePerrySmith, from Three.js's own
+   *     examples); after many rounds trying to close the gap between a
+   *     real scan's anatomical specifics and a synthetic cinematic
+   *     reference render, it was replaced entirely with an abstract,
+   *     activity-reactive energy core — the actual norm for real
+   *     shipped voice-AI interfaces, not a compromise.
+   * ------------------------------------------------------------- */
+  // Soft round sprite so points read as glowing dots, not hard squares.
+  const spriteCanvas = document.createElement("canvas");
+  spriteCanvas.width = spriteCanvas.height = 32;
+  const sctx = spriteCanvas.getContext("2d");
+  const spriteGrad = sctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  spriteGrad.addColorStop(0, "rgba(255,255,255,1)");
+  spriteGrad.addColorStop(0.4, "rgba(255,255,255,0.7)");
+  spriteGrad.addColorStop(1, "rgba(255,255,255,0)");
+  sctx.fillStyle = spriteGrad;
+  sctx.fillRect(0, 0, 32, 32);
+  const spriteTex = new THREE.CanvasTexture(spriteCanvas);
+
+  // A separate, much more gradual falloff for the large ambient head-glow
+  // halo below — spriteTex's 3-stop gradient is tuned for small crisp
+  // accent dots and shows a visible hard edge once blown up to sprite
+  // scale ~7 for a whole-head bloom wash; this one tapers over several
+  // more steps so the glow fades into the dark background rather than
+  // reading as a lit circle with a boundary.
+  const haloCanvas = document.createElement("canvas");
+  haloCanvas.width = haloCanvas.height = 128;
+  const hctx = haloCanvas.getContext("2d");
+  const haloGrad = hctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  haloGrad.addColorStop(0, "rgba(255,255,255,1)");
+  haloGrad.addColorStop(0.25, "rgba(255,255,255,0.55)");
+  haloGrad.addColorStop(0.5, "rgba(255,255,255,0.22)");
+  haloGrad.addColorStop(0.75, "rgba(255,255,255,0.06)");
+  haloGrad.addColorStop(1, "rgba(255,255,255,0)");
+  hctx.fillStyle = haloGrad;
+  hctx.fillRect(0, 0, 128, 128);
+  const haloTex = new THREE.CanvasTexture(haloCanvas);
+
+  const faceGroup = new THREE.Group();
+  scene.add(faceGroup);
+
+  // Makes a PointsMaterial's dots individually grow/shrink over time via a
+  // per-vertex random phase (a "aPhase" attribute on its geometry) instead
+  // of one fixed size for every point — the "always alive" scan-particle
+  // look (per direct user request, comparing to Iron Man/real-Jarvis-style
+  // HUDs), not a uniform pulse where the whole field swells in lockstep.
+  // Patches the one `gl_PointSize = size;` line in Three.js's own built-in
+  // points vertex shader (present verbatim across versions, including
+  // r128) via `onBeforeCompile` instead of writing a full custom
+  // ShaderMaterial from scratch — this keeps Three's existing perspective
+  // size-attenuation math for free instead of re-deriving it.
+  function addSizePulse(material, speed, amount) {
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = { value: 0 };
+      shader.vertexShader = "attribute float aPhase;\nuniform float uTime;\n" + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace(
+        "gl_PointSize = size;",
+        `gl_PointSize = size * (${(1 - amount).toFixed(2)} + ${amount.toFixed(2)} * sin(uTime * ${speed.toFixed(2)} + aPhase));`
+      );
+      material.userData.shader = shader;
+    };
+    material.needsUpdate = true;
+  }
+
+  /* A visible "brain" inside the translucent skull — the rendering above
+     is just line edges, so anything placed inside the head volume is
+     naturally visible through it. A warm amber cloud of points filling
+     part of the cranium, with connecting "synapse" lines, continuously
+     drifting (never fully static) and brightening on real
+     brain.request/brain.response activity (wired further down, near the
+     activity feed) — see animate() for the per-frame motion/pulse. */
+  function buildBrain(centerX, centerY, centerZ, bx, by, bz) {
+    // Denser than the original 900 — proportional to the enlarged
+    // cranial-fill volume this is now called with, so it still reads as
+    // a solid cloud rather than getting sparser as it got bigger.
+    const n = 1800;
+    const basePositions = new Float32Array(n * 3);
+    const phases = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let x, y, z;
+      do {
+        x = Math.random() * 2 - 1;
+        y = Math.random() * 2 - 1;
+        z = Math.random() * 2 - 1;
+      } while (x * x + y * y + z * z > 1);
+      basePositions[i * 3] = x * bx + centerX;
+      basePositions[i * 3 + 1] = y * by + centerY;
+      basePositions[i * 3 + 2] = z * bz + centerZ;
+      phases[i] = Math.random() * Math.PI * 2;
+    }
+    const positions = basePositions.slice();
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute("aPhase", new THREE.BufferAttribute(phases, 1));
+    const mat = new THREE.PointsMaterial({
+      size: 0.07, map: spriteTex, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, color: 0xffb15c, opacity: 0.8,
+    });
+    // Same per-particle "always alive" size pulse as the face dots (see
+    // addSizePulse above) — a real brain is never visually static.
+    addSizePulse(mat, 1.1, 0.3);
+    const points = new THREE.Points(geo, mat);
+
+    const lineCount = 80;
+    const lineEndpoints = new Array(lineCount);
+    const linePositions = new Float32Array(lineCount * 2 * 3);
+    function rewire(i) {
+      const ia = Math.floor(Math.random() * n);
+      const ib = Math.floor(Math.random() * n);
+      lineEndpoints[i] = [ia, ib];
+    }
+    for (let i = 0; i < lineCount; i++) rewire(i);
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
+    const lineMat = new THREE.LineBasicMaterial({
+      color: 0xffb15c, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending,
+    });
+    const lines = new THREE.LineSegments(lineGeo, lineMat);
+
+    const group = new THREE.Group();
+    group.add(points, lines);
+    return {
+      group, pointsMat: points.material, lineMat,
+      n, basePositions, phases, posAttr: geo.attributes.position,
+      lineEndpoints, lineGeo, rewire,
+    };
+  }
+
+  /* ---------------------------------------------------------------
+   * 2c. THE CORE — an abstract, real-activity-reactive energy core.
+   *
+   *     This replaces an earlier real-human-3D-face-scan avatar
+   *     (LeePerrySmith, from Three.js's own examples) entirely. That
+   *     approach went through many rounds - density/brightness, a real
+   *     computed lat/long grid, cropped shoulders, a measured
+   *     crown-vs-face proportion fix - and kept closing individual gaps
+   *     without closing the overall one: direct user feedback was "this
+   *     looks like a fake of the original," because a real face scan
+   *     carries real anatomical specifics (one person's exact
+   *     asymmetry, separately-sculpted eyeball spheres, a literal open
+   *     mouth with teeth) that a synthetic cinematic reference render
+   *     simply doesn't have to reconcile. No amount of grid tuning
+   *     closes a gap that's actually about what kind of object the two
+   *     renders are.
+   *
+   *     Researched what real, shipped voice-AI interfaces actually look
+   *     like before rebuilding (see the PR description for sources):
+   *     ChatGPT's Advanced Voice Mode, documented voice-orb design
+   *     systems (idle/listening/thinking/speaking as the standard state
+   *     model), and open-source Iron-Man-style "Arc Reactor" builds that
+   *     hook the Web Audio API up to TTS output to pulse a procedural
+   *     core. None of them use a real human face - an abstract core is
+   *     the actual norm for this kind of interface, not a compromise.
+   *
+   *     Three real signals drive it, all already wired elsewhere on this
+   *     page rather than invented for this: brainPulse/brainIntensity
+   *     (real brain.request/brain.response activity from the observer
+   *     feed - "thinking"), audioGlow (the real Web Audio analyser
+   *     level, fed by the mic today and ready for real Core TTS output
+   *     later - "speaking"/voice-reactive), and face-tracking (real
+   *     face-api.js detection, unchanged - orients the whole core toward
+   *     you). There's no honest signal yet for a "listening" state
+   *     (that needs real speech detection in Core, which doesn't exist)
+   *     - deliberately not faked; see README.
+   * ------------------------------------------------------------- */
+
+  // Outer shell — the "body": brightens, grows, and spins faster with
+  // real voice activity (audioGlow, in animate()/audioLoop() below).
+  const outerGeo = new THREE.SphereGeometry(1.7, 26, 20);
+  const outerWire = new THREE.WireframeGeometry(outerGeo);
+  const outerMat = new THREE.LineBasicMaterial({
+    color: 0xe8fbff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+  });
+  const outerShell = new THREE.LineSegments(outerWire, outerMat);
+  faceGroup.add(outerShell);
+  // A second, larger + dimmer copy of the same shell for a cheap "poor
+  // man's bloom" — no EffectComposer/UnrealBloomPass in this vendored
+  // r128 setup, so the glow is faked by re-drawing the shell bigger and
+  // fainter underneath, same technique used throughout this page.
+  const outerGlowMat = new THREE.LineBasicMaterial({
+    color: 0xafeeff, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending,
+  });
+  const outerGlow = new THREE.LineSegments(outerWire, outerGlowMat);
+  faceGroup.add(outerGlow);
+
+  // Individually pulsing dots on the outer shell (see addSizePulse
+  // above) — every dot grows/shrinks on its own random phase instead of
+  // a fixed size, the "always alive" look.
+  const outerDotsMat = new THREE.PointsMaterial({
+    size: 0.045, map: spriteTex, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, color: 0x6fd8e8, opacity: 0.7,
+  });
+  const outerPhases = new Float32Array(outerGeo.attributes.position.count);
+  for (let i = 0; i < outerPhases.length; i++) outerPhases[i] = Math.random() * Math.PI * 2;
+  outerGeo.setAttribute("aPhase", new THREE.BufferAttribute(outerPhases, 1));
+  addSizePulse(outerDotsMat, 1.6, 0.45);
+  const faceDotsMat = outerDotsMat;
+  faceGroup.add(new THREE.Points(outerGeo, outerDotsMat));
+
+  // The "energy surface" — a real fresnel-rim-lit, simplex-noise-displaced
+  // shader surface (not another wireframe) sitting just inside the outer
+  // shell, the same technique real production audio visualizers/voice
+  // orbs actually use (noise pushes vertices out along their normal,
+  // scaled by real activity; a fresnel term — 1 minus the view/normal
+  // dot product — brightens the silhouette/edges like a force field,
+  // dim and transparent face-on). classic Ashima/Gustavson simplex noise
+  // (the standard, widely-used GLSL implementation), not a from-scratch
+  // approximation. Additive + transparent, so it reads as a soft glowing
+  // field behind the crisp wireframe grid, not a solid occluding shell.
+  const energyGeo = new THREE.IcosahedronGeometry(1.55, 4);
+  const energyMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uTime: { value: 0 },
+      uAudio: { value: 0 },
+      uThink: { value: 0 },
+      uColorOuter: { value: new THREE.Color(0x6fd8e8) },
+      uColorInner: { value: new THREE.Color(0xffb15c) },
+    },
+    vertexShader: `
+      uniform float uTime;
+      uniform float uAudio;
+      uniform float uThink;
+      varying vec3 vNormalW;
+      varying vec3 vViewDir;
+      varying float vNoise;
+
+      vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+      vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+      vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+      vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+      float snoise(vec3 v) {
+        const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+        const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+        vec3 i  = floor(v + dot(v, C.yyy));
+        vec3 x0 = v - i + dot(i, C.xxx);
+        vec3 g = step(x0.yzx, x0.xyz);
+        vec3 l = 1.0 - g;
+        vec3 i1 = min(g.xyz, l.zxy);
+        vec3 i2 = max(g.xyz, l.zxy);
+        vec3 x1 = x0 - i1 + C.xxx;
+        vec3 x2 = x0 - i2 + C.yyy;
+        vec3 x3 = x0 - D.yyy;
+        i = mod289(i);
+        vec4 p = permute(permute(permute(
+                   i.z + vec4(0.0, i1.z, i2.z, 1.0))
+                 + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+                 + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+        float n_ = 0.142857142857;
+        vec3 ns = n_ * D.wyz - D.xzx;
+        vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+        vec4 x_ = floor(j * ns.z);
+        vec4 y_ = floor(j - 7.0 * x_);
+        vec4 x = x_ * ns.x + ns.yyyy;
+        vec4 y = y_ * ns.x + ns.yyyy;
+        vec4 h = 1.0 - abs(x) - abs(y);
+        vec4 b0 = vec4(x.xy, y.xy);
+        vec4 b1 = vec4(x.zw, y.zw);
+        vec4 s0 = floor(b0) * 2.0 + 1.0;
+        vec4 s1 = floor(b1) * 2.0 + 1.0;
+        vec4 sh = -step(h, vec4(0.0));
+        vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+        vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+        vec3 p0 = vec3(a0.xy, h.x);
+        vec3 p1 = vec3(a0.zw, h.y);
+        vec3 p2 = vec3(a1.xy, h.z);
+        vec3 p3 = vec3(a1.zw, h.w);
+        vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+        p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+        vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+        m = m * m;
+        return 42.0 * dot(m * m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+      }
+
+      void main() {
+        vec3 n = normalize(normal);
+        float noise = snoise(position * 1.15 + vec3(0.0, 0.0, uTime * 0.18));
+        vNoise = noise;
+        float amp = 0.045 + uAudio * 0.16 + uThink * 0.09;
+        vec3 displaced = position + n * noise * amp;
+        vec4 worldPos = modelMatrix * vec4(displaced, 1.0);
+        vNormalW = normalize(mat3(modelMatrix) * n);
+        vViewDir = normalize(cameraPosition - worldPos.xyz);
+        gl_Position = projectionMatrix * viewMatrix * worldPos;
+      }
+    `,
+    fragmentShader: `
+      uniform float uAudio;
+      uniform float uThink;
+      uniform vec3 uColorOuter;
+      uniform vec3 uColorInner;
+      varying vec3 vNormalW;
+      varying vec3 vViewDir;
+      varying float vNoise;
+
+      void main() {
+        float fresnel = 1.0 - max(dot(normalize(vNormalW), normalize(vViewDir)), 0.0);
+        fresnel = pow(fresnel, 1.8 + uAudio * 1.6);
+        vec3 color = mix(uColorOuter, uColorInner, clamp(uThink * 1.3, 0.0, 1.0));
+        color += vNoise * 0.08;
+        float alpha = fresnel * (0.55 + uAudio * 0.35 + uThink * 0.2);
+        gl_FragColor = vec4(color, alpha);
+      }
+    `,
+  });
+  const energySurface = new THREE.Mesh(energyGeo, energyMat);
+  faceGroup.add(energySurface);
+
+  // Inner shell — the "mind": brightens, grows, and spins faster while
+  // actively thinking (real brain.request/brain.response activity).
+  const innerGeo = new THREE.SphereGeometry(1.0, 18, 14);
+  const innerWire = new THREE.WireframeGeometry(innerGeo);
+  const innerMat = new THREE.LineBasicMaterial({
+    color: 0xffb15c, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending,
+  });
+  const innerShell = new THREE.LineSegments(innerWire, innerMat);
+  faceGroup.add(innerShell);
+
+  // The bright particle "mind" inside it — reuses buildBrain's
+  // point-cloud + synapse-line machinery (continuous drift, periodic
+  // re-wiring, brain.request/response pulse) unchanged from the earlier
+  // head build, just centered in the core instead of inside a skull.
+  const brain = buildBrain(0, 0, 0, 0.82, 0.82, 0.82);
+  faceGroup.add(brain.group);
+
+  // Two crossing orbit rings, continuously and independently rotating —
+  // this page's own identity now, not echoing one shot of a reference
+  // video. Spin faster with voice activity, same as the outer shell.
+  const ringsGroup = new THREE.Group();
+  const orbitRingGeo = new THREE.RingGeometry(2.05, 2.09, 80);
+  const orbitRing1 = new THREE.Mesh(orbitRingGeo, new THREE.MeshBasicMaterial({
+    color: 0x6fd8e8, transparent: true, opacity: 0.45, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+  }));
+  orbitRing1.rotation.x = Math.PI / 2 + 0.35;
+  ringsGroup.add(orbitRing1);
+  const orbitRing2 = new THREE.Mesh(orbitRingGeo, new THREE.MeshBasicMaterial({
+    color: 0xffb15c, transparent: true, opacity: 0.4, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+  }));
+  orbitRing2.rotation.x = Math.PI / 2 - 0.35;
+  orbitRing2.rotation.y = 0.6;
+  ringsGroup.add(orbitRing2);
+  faceGroup.add(ringsGroup);
+
+  // Soft outward bloom halo — same gradual-falloff texture as the
+  // earlier head build's, for the same reason: the small accent-dot
+  // sprite texture shows a visible hard-edged circle at this large a
+  // scale.
+  const coreHalo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: haloTex, color: 0x6fd8e8, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.4,
+  }));
+  coreHalo.scale.set(6.5, 6.5, 1);
+  faceGroup.add(coreHalo);
+
+  /* Thin wireframe ring beneath the core, like a scan/base plane. */
+  const ringGeo = new THREE.RingGeometry(2.3, 2.34, 64);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x6fd8e8, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI / 2 - 0.15;
+  ring.position.y = -2.0;
+  scene.add(ring);
+
+  /* ---------------------------------------------------------------
+   * 3. Animation loop: slow auto-rotate, idle shader time, periodic
+   *    glitch burst (visual only — no functional state here).
+   * ------------------------------------------------------------- */
+  const clock = new THREE.Clock();
+  let glitchUntil = 0;
+  let nextGlitchAt = 6 + Math.random() * 6;
+  // Declared here (before animate() first runs) rather than down by the
+  // face-tracking button code, since `let` bindings referenced inside
+  // animate() would otherwise throw — animate() executes synchronously
+  // on its first call, before later `let` statements in this same
+  // function would have run.
+  let faceTrackingActive = false;
+  let targetYaw = 0;
+  let targetPitch = 0;
+  let lastFaceSeenAt = 0;
+  // Bumped by pushActivityLine() below on brain.request/brain.response
+  // events (real ones from Core, or the labeled demo feed) and decayed
+  // every frame in animate() to brighten/grow the core's inner "mind"
+  // shell while Jarvis is actually "thinking" instead of a fixed idle
+  // pulse. brainIntensity tracks *how much* thinking (real messageCount/
+  // toolCallCount from the event payload, not just whether) so a bigger
+  // real thought grows the core more than a small one, not just longer.
+  let brainPulse = 0;
+  let brainIntensity = 0;
+  let nextBrainRewireAt = 0;
+  // Declared here (before animate() first runs) rather than down by
+  // audioLoop() below, for the same reason as the `let`s above — a
+  // variable referenced inside animate() must already exist the first
+  // time animate() runs, since that first call happens synchronously
+  // before any `let` declared later in the script has executed.
+  let audioGlow = 0;
+  const jarvisStateEl = document.getElementById("jarvis-state");
+  let lastJarvisStateLabel = "";
+  // Real, PERSISTENT growth — distinct from brainPulse/audioGlow above,
+  // which are momentary and decay back down every time. Per direct user
+  // request ("based on how it answers me, how it thinks... it should also
+  // grow"): every real brain.request/brain.response Core ever sends this
+  // page (never the labeled DEMO feed — see the isReal param on
+  // pushActivityLine below) nudges a persisted counter, and the Core's
+  // idle baseline size very slowly grows with it, with real diminishing
+  // returns (a log curve, capped at +22% — chosen small enough that even
+  // full growth stays well inside the clearance margins measured for the
+  // side panels, including the narrow-viewport fit from the responsive
+  // pass above) so it never runs away or crowds anything out. Declared
+  // here (before animate()'s first synchronous call) for the same TDZ
+  // reason as the other `let`s above.
+  const GROWTH_STORAGE_KEY = "jarvis_total_real_brain_events";
+  const GROWTH_CAP_EVENTS = 300;
+  const GROWTH_MAX = 0.22;
+  function loadTotalRealBrainEvents() {
+    try {
+      return parseInt(localStorage.getItem(GROWTH_STORAGE_KEY), 10) || 0;
+    } catch (e) {
+      return 0; // localStorage can throw (private browsing, blocked, file:// edge cases) — never let growth break the page
+    }
+  }
+  function saveTotalRealBrainEvents(n) {
+    try { localStorage.setItem(GROWTH_STORAGE_KEY, String(n)); } catch (e) { /* non-fatal — growth just won't persist this session */ }
+  }
+  function growthScaleFor(n) {
+    return 1 + Math.min(GROWTH_MAX, (Math.log10(1 + n) / Math.log10(1 + GROWTH_CAP_EVENTS)) * GROWTH_MAX);
+  }
+  let totalRealBrainEvents = loadTotalRealBrainEvents();
+  let growthScale = growthScaleFor(totalRealBrainEvents);
+  const rgbSplit = document.getElementById("rgb-split");
+  const banner = document.getElementById("glitch-banner");
+  const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (REDUCED_MOTION) nextGlitchAt = Infinity; // no periodic glitch bursts at all
+
+  function triggerGlitch() {
+    const now = clock.getElapsedTime();
+    glitchUntil = now + 0.5 + Math.random() * 0.4;
+    rgbSplit.style.opacity = "0.5";
+    rgbSplit.style.background =
+      "linear-gradient(90deg, rgba(255,60,60,0.12), transparent 40%, rgba(60,200,255,0.12))";
+    if (Math.random() < 0.5) {
+      banner.style.transition = "none";
+      banner.style.opacity = "1";
+      setTimeout(() => {
+        banner.style.transition = "opacity 0.6s ease";
+        banner.style.opacity = "0";
+      }, 550);
+    }
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+
+    if (t > nextGlitchAt) {
+      triggerGlitch();
+      nextGlitchAt = t + 7 + Math.random() * 8;
+    }
+    const inGlitch = t < glitchUntil;
+    if (!inGlitch) rgbSplit.style.opacity = String(Math.max(0, parseFloat(rgbSplit.style.opacity || "0") - 0.06));
+
+    // Inner "mind" shell + particle brain: a small idle breathing base,
+    // brightened/grown by real (or labeled-demo) brain.request/
+    // brain.response activity and decaying back down — never a fixed
+    // animation pretending to be "thinking". brainIntensity (how big the
+    // real thought was — messageCount/toolCallCount, see
+    // pushActivityLine below) scales how much it grows, not just whether.
+    brainPulse = Math.max(0, brainPulse - 0.012);
+    brainIntensity = Math.max(0, brainIntensity - 0.01);
+    {
+      const brainGlow = 0.55 + Math.sin(t * 1.3) * 0.1 + brainPulse * 0.45;
+      brain.pointsMat.opacity = Math.min(1, brainGlow);
+      brain.lineMat.opacity = Math.min(0.55, 0.15 + brainPulse * 0.4);
+      innerMat.opacity = Math.min(0.85, 0.4 + brainPulse * 0.45);
+      // The inner shell + brain physically grow while actively "thinking"
+      // (real brain.request/brain.response activity), not just
+      // brightening — per direct user request, with the growth amount
+      // itself scaled by how big the real thought was (brainIntensity).
+      // Never fully static even at rest (a slow idle breathing term),
+      // same principle as every other motion source on this page.
+      const thinkScale = 1 + brainPulse * (0.2 + brainIntensity * 0.35) + (REDUCED_MOTION ? 0 : Math.sin(t * 0.5) * 0.035);
+      brain.group.scale.setScalar(thinkScale);
+      innerShell.scale.setScalar(thinkScale);
+      if (!REDUCED_MOTION) innerShell.rotation.y = t * (0.1 + brainPulse * 0.5);
+      if (brain.pointsMat.userData.shader) brain.pointsMat.userData.shader.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
+    }
+    if (faceDotsMat.userData.shader) {
+      faceDotsMat.userData.shader.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
+    }
+
+    // Outer "body" shell + orbit rings: brighten, grow, and spin faster
+    // with real voice activity (audioGlow — fed by the mic today via
+    // audioLoop() below, ready for real Core TTS output later, same
+    // hooks that used to drive the old head's mouth-open animation).
+    {
+      const voiceScale = 1 + audioGlow * 0.35;
+      outerShell.scale.setScalar(voiceScale);
+      outerGlow.scale.setScalar(1.035 * voiceScale);
+      outerMat.opacity = Math.min(1, 0.7 + audioGlow * 0.3);
+      energySurface.scale.setScalar(voiceScale);
+      energyMat.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
+      energyMat.uniforms.uAudio.value = audioGlow;
+      energyMat.uniforms.uThink.value = brainPulse;
+      if (!REDUCED_MOTION) {
+        outerShell.rotation.y = t * (0.08 + audioGlow * 0.4);
+        ringsGroup.rotation.z = t * (0.12 + audioGlow * 0.35);
+        ringsGroup.rotation.x = Math.sin(t * 0.2) * 0.15;
+      }
+    }
+
+    // Real-signal state label under the JARVIS wordmark — the same two
+    // real signals already driving the Core's shape (brainPulse for
+    // thinking, audioGlow for voice), just surfaced as text too. No
+    // "LISTENING" state: that's the industry-standard 4th state (idle/
+    // listening/thinking/speaking) but Core has no real speech-detection
+    // signal to back it with, so it's deliberately left out rather than
+    // faked — same rule as everywhere else on this page. Only writes to
+    // the DOM when the label actually changes, not every frame.
+    {
+      const label = brainPulse > 0.08 ? "THINKING" : audioGlow > 0.08 ? "VOICE ACTIVE" : "IDLE";
+      if (label !== lastJarvisStateLabel) {
+        jarvisStateEl.textContent = label;
+        jarvisStateEl.className = label === "THINKING" ? "thinking" : label === "VOICE ACTIVE" ? "voice" : "";
+        lastJarvisStateLabel = label;
+      }
+    }
+
+    // Continuous per-particle drift — "always thinking", not a structure
+    // that only moves when a real event bumps brainPulse. Amplitude grows
+    // a little further while brainPulse is high, so real activity still
+    // reads as "moving more," but it's never fully static at rest.
+    if (!REDUCED_MOTION) {
+      const jitterAmp = 0.05 + brainPulse * 0.05;
+      const bp = brain.posAttr.array;
+      for (let i = 0; i < brain.n; i++) {
+        const ph = brain.phases[i];
+        bp[i * 3] = brain.basePositions[i * 3] + Math.sin(t * 0.9 + ph) * jitterAmp;
+        bp[i * 3 + 1] = brain.basePositions[i * 3 + 1] + Math.cos(t * 0.7 + ph * 1.3) * jitterAmp;
+        bp[i * 3 + 2] = brain.basePositions[i * 3 + 2] + Math.sin(t * 0.8 + ph * 0.6) * jitterAmp;
+      }
+      brain.posAttr.needsUpdate = true;
+
+      // Re-wire a few synapse lines every ~1.1s so the connections
+      // visibly re-form over time, like real firing, instead of a fixed
+      // static network.
+      if (t > nextBrainRewireAt) {
+        for (let k = 0; k < 4; k++) brain.rewire(Math.floor(Math.random() * brain.lineEndpoints.length));
+        nextBrainRewireAt = t + 1.1;
+      }
+      const lp = brain.lineGeo.attributes.position.array;
+      for (let i = 0; i < brain.lineEndpoints.length; i++) {
+        const [ia, ib] = brain.lineEndpoints[i];
+        lp[i * 6] = bp[ia * 3]; lp[i * 6 + 1] = bp[ia * 3 + 1]; lp[i * 6 + 2] = bp[ia * 3 + 2];
+        lp[i * 6 + 3] = bp[ib * 3]; lp[i * 6 + 4] = bp[ib * 3 + 1]; lp[i * 6 + 5] = bp[ib * 3 + 2];
+      }
+      brain.lineGeo.attributes.position.needsUpdate = true;
+    }
+
+    if (!REDUCED_MOTION) {
+      // Face-tracking (webcam) overrides the idle drift while a real face
+      // was seen recently — smoothly turns the whole core toward the
+      // tracked position instead of the ambient sine-wave sway. Falls
+      // back to idle drift the instant tracking is off or the face has
+      // been lost for >1.5s, rather than freezing at the last angle.
+      if (faceTrackingActive && performance.now() - lastFaceSeenAt < 1500) {
+        faceGroup.rotation.y += (targetYaw - faceGroup.rotation.y) * 0.08;
+        faceGroup.rotation.x += (targetPitch - faceGroup.rotation.x) * 0.08;
+        faceGroup.rotation.z += (0 - faceGroup.rotation.z) * 0.08;
+      } else {
+        faceGroup.rotation.y = Math.sin(t * 0.24) * 0.4;
+        faceGroup.rotation.x = Math.sin(t * 0.15) * 0.07;
+        faceGroup.rotation.z = Math.sin(t * 0.09) * 0.025;
+      }
+      // Subtle continuous "breathing" scale on the whole core, a little
+      // stronger while actively thinking or speaking — reinforces that
+      // this is alive, not a static prop, even when facing straight
+      // ahead and silent.
+      const breathe = 1 + Math.sin(t * 0.7) * 0.012 + brainPulse * 0.01 + audioGlow * 0.015;
+      faceGroup.scale.setScalar(breathe * growthScale);
+    }
+    if (!REDUCED_MOTION) ring.rotation.z = t * 0.15;
+
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    // Re-fit the Core to the new aspect ratio (e.g. a phone rotated, or a
+    // desktop window narrowed past the portrait breakpoint) without
+    // disturbing the user's own orbit angle, just the distance.
+    camDistance = responsiveCamDistance();
+    updateCameraFromOrbit();
+  });
+
+  /* ---------------------------------------------------------------
+   * 4. HUD telemetry panels. NEURAL SYNC / MEMORY LOAD / LATENCY have no
+   *    real Core equivalent (Core exposes no CPU/process telemetry) and
+   *    stay honestly cosmetic — jittering flavor, not measurements. TOOL
+   *    REGISTRY and the device row ARE real: polled from GET /status
+   *    below and start in an honest "no data yet" state rather than a
+   *    fabricated-looking default, exactly like the bottom activity
+   *    panel's DEMO/LIVE distinction.
+   * ------------------------------------------------------------- */
+  const leftLines = [
+    ["NEURAL SYNC", "98.2%", 0.98],
+    ["MEMORY LOAD", "64%", 0.64],
+    ["TOOL REGISTRY", "—", 0],
+    ["PERMISSION GATE", "NOMINAL", 0.9],
+    // Real, not cosmetic — see the growth declarations above. Shown here
+    // (rather than left silent) for the same reason the Core's state
+    // label is shown as text in Round 4: if the Core's baseline size is
+    // visibly changing, the dashboard should say why instead of leaving
+    // it a mystery.
+    ["GROWTH", `×${growthScale.toFixed(2)}`, (growthScale - 1) / GROWTH_MAX],
+  ];
+  const rightLines = [
+    ["DEVICES", "—", 0],
+    ["LATENCY", "18ms", 0.85],
+    ["OBSERVERS", "—", 0],
+    ["PROTOCOL", "v2", 0.7],
+  ];
+
+  function renderPanel(container, lines) {
+    container.innerHTML = "";
+    lines.forEach(([label, val, frac]) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML = `${label}<span class="bar"><span style="transform:scaleX(${frac})"></span></span><span class="val">${val}</span>`;
+      container.appendChild(row);
+    });
+    const cursorRow = document.createElement("div");
+    cursorRow.className = "row";
+    cursorRow.innerHTML = `&gt;<span id="cursor"></span>`;
+    container.appendChild(cursorRow);
+  }
+  const panelLeftRows = document.getElementById("panel-left-rows");
+  const panelRightRows = document.getElementById("panel-right-rows");
+  renderPanel(panelLeftRows, leftLines);
+  renderPanel(panelRightRows, rightLines);
+
+  // Called from pushActivityLine() above on every real (never demo)
+  // brain.request/brain.response — keeps the GROWTH row in sync with the
+  // same growthScale value actually applied to the Core's size.
+  function updateGrowthRow() {
+    leftLines[4][1] = `×${growthScale.toFixed(2)}`;
+    leftLines[4][2] = (growthScale - 1) / GROWTH_MAX;
+    renderPanel(panelLeftRows, leftLines);
+  }
+
+  setInterval(() => {
+    // subtle live-feeling jitter on the purely-cosmetic values only —
+    // never on the real TOOL REGISTRY/DEVICES/OBSERVERS rows, which
+    // pollStatus() below owns exclusively.
+    leftLines[0][2] = Math.min(1, Math.max(0.7, leftLines[0][2] + (Math.random() - 0.5) * 0.03));
+    leftLines[0][1] = (leftLines[0][2] * 100).toFixed(1) + "%";
+    rightLines[1][1] = Math.round(12 + Math.random() * 14) + "ms";
+    renderPanel(panelLeftRows, leftLines);
+    renderPanel(panelRightRows, rightLines);
+  }, 1800);
+
+  /* ---------------------------------------------------------------
+   * 4b. Real status poll — GET /status on Core every 1s (matching the
+   *     cadence of the dashboard reference this was compared against).
+   *     Updates the TOOL REGISTRY / DEVICES / OBSERVERS rows with real
+   *     numbers and flips both panel headings to LIVE; on any failure
+   *     (Core offline, unreachable) they honestly read "NO DATA" rather
+   *     than silently keeping stale or fabricated-looking numbers.
+   * ------------------------------------------------------------- */
+  function corePort() { return new URLSearchParams(location.search).get("port") || "4770"; }
+  function coreHost() { return new URLSearchParams(location.search).get("host") || "localhost"; }
+
+  function setPanelStatus(isLive) {
+    for (const id of ["status-indicator-left", "status-indicator-right"]) {
+      const el = document.getElementById(id);
+      el.textContent = isLive ? "LIVE" : "NO DATA";
+      el.className = "status " + (isLive ? "live" : "demo");
+    }
+  }
+
+  async function pollStatus() {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 900);
+      const res = await fetch(`http://${coreHost()}:${corePort()}/status`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = await res.json();
+
+      // Core's /status now returns devices/tools as real arrays (shared
+      // with its own dashboard at src/communication/websocket/dashboard.ts,
+      // one real contract instead of two endpoints drifting apart) rather
+      // than pre-aggregated counts — aggregate here instead.
+      const toolCount = data.tools.length;
+      const deviceTotal = data.devices.length;
+      const deviceOnline = data.devices.filter((d) => d.status === "online").length;
+
+      leftLines[2][1] = `${toolCount} REGISTERED`;
+      leftLines[2][2] = Math.min(1, toolCount / 8);
+
+      rightLines[0][1] = deviceTotal === 0 ? "NONE REGISTERED" : `${deviceOnline}/${deviceTotal} ONLINE`;
+      rightLines[0][2] = deviceTotal === 0 ? 0 : deviceOnline / deviceTotal;
+      rightLines[2][1] = `${data.observers} CONNECTED`;
+      rightLines[2][2] = Math.min(1, data.observers / 3);
+
+      setPanelStatus(true);
+    } catch (e) {
+      leftLines[2][1] = "—";
+      leftLines[2][2] = 0;
+      rightLines[0][1] = "—";
+      rightLines[0][2] = 0;
+      rightLines[2][1] = "—";
+      rightLines[2][2] = 0;
+      setPanelStatus(false);
+    }
+    renderPanel(panelLeftRows, leftLines);
+    renderPanel(panelRightRows, rightLines);
+  }
+  pollStatus();
+  setInterval(pollStatus, 1000);
+
+  /* ---------------------------------------------------------------
+   * 5. Live "behind the scenes" activity feed. Connects to JARVIS
+   *    Core's real /observer WebSocket (broadcasts actual EventBus
+   *    events: brain requests/responses, tool calls, permission
+   *    checks, device connections) — never fabricated once connected.
+   *    Falls back to a clearly-labeled DEMO feed only when Core isn't
+   *    reachable, so nothing here is ever silently pretending to be real.
+   * ------------------------------------------------------------- */
+  const MAX_ACTIVITY_LINES = 7;
+  const activityLinesEl = document.getElementById("activity-lines");
+  const activityStatusEl = document.getElementById("activity-status");
+  const jarvisCoreStatusEl = document.getElementById("jarvis-core-status");
+  const activityQueue = [];
+
+  function kindFor(type) {
+    if (type.startsWith("tool.")) return "k-tool";
+    if (type.startsWith("brain.")) return "k-brain";
+    if (type.startsWith("permission.")) return "k-perm";
+    if (type.startsWith("device.")) return "k-device";
+    return "";
+  }
+
+  function describeEvent(type, payload) {
+    switch (type) {
+      case "brain.request": return `brain.request  messages=${payload.messageCount}`;
+      case "brain.response": return `brain.response  tool_calls=${payload.toolCallCount}  "${String(payload.text || "").slice(0, 46)}"`;
+      case "tool.requested": return `tool.requested  ${payload.toolCall && payload.toolCall.toolName}(${JSON.stringify(payload.toolCall && payload.toolCall.input || {}).slice(0, 40)})`;
+      case "tool.executed": return `tool.executed  ${payload.toolName}  ok=${payload.result && payload.result.success}`;
+      case "tool.dispatched": return `tool.dispatched  ${payload.toolName} -> device:${String(payload.deviceId).slice(0, 8)}`;
+      case "permission.checked": return `permission.checked  ${payload.toolId}  allowed=${payload.result && payload.result.allowed}`;
+      case "device.registered": return `device.registered  ${payload.device && payload.device.name}`;
+      case "device.connected": return `device.connected  ${String(payload.deviceId).slice(0, 8)}`;
+      case "device.disconnected": return `device.disconnected  ${String(payload.deviceId).slice(0, 8)}  (${payload.reason})`;
+      default: return `${type}  ${JSON.stringify(payload).slice(0, 60)}`;
+    }
+  }
+
+  function pushActivityLine(type, payload, timestamp, isReal = false) {
+    const time = new Date(timestamp || Date.now()).toLocaleTimeString([], { hour12: false });
+    activityQueue.push({ time, text: describeEvent(type, payload || {}), kind: kindFor(type) });
+    if (activityQueue.length > MAX_ACTIVITY_LINES) activityQueue.shift();
+    activityLinesEl.innerHTML = activityQueue
+      .map((l) => `<div class="line"><span class="t">${l.time}</span>  <span class="${l.kind}">${l.text}</span></div>`)
+      .join("");
+    if (type === "brain.request" || type === "brain.response") {
+      brainPulse = 1;
+      // How big was this real thought? messageCount for a request, tool
+      // calls for a response — a longer conversation or more tool calls
+      // grows the core more than a trivial one, not just for the same
+      // fixed duration. Takes the larger of the two if both have fired
+      // recently, decaying independently in animate().
+      const p = payload || {};
+      const magnitude = type === "brain.request" ? (p.messageCount || 1) / 6 : ((p.toolCallCount || 0) + 1) / 4;
+      brainIntensity = Math.max(brainIntensity, Math.min(1, magnitude));
+      // Persistent growth (see the declarations above): only ever from a
+      // real Core connection, never the labeled DEMO feed, so the Core
+      // never grows from anything but genuine use.
+      if (isReal) {
+        totalRealBrainEvents++;
+        saveTotalRealBrainEvents(totalRealBrainEvents);
+        growthScale = growthScaleFor(totalRealBrainEvents);
+        updateGrowthRow();
+      }
+    }
+  }
+
+  function setActivityStatus(isLive) {
+    activityStatusEl.textContent = isLive ? "LIVE · CONNECTED TO CORE" : "DEMO · CORE OFFLINE";
+    activityStatusEl.className = "status " + (isLive ? "live" : "demo");
+    // The headline under the JARVIS wordmark used to hardcode "CORE
+    // ONLINE" unconditionally, even with no real connection at all — the
+    // single most prominent piece of fabricated state on the whole page.
+    // It now mirrors the same real isLive check the activity panel uses.
+    jarvisCoreStatusEl.textContent = isLive ? "CORE ONLINE" : "CORE OFFLINE";
+    jarvisCoreStatusEl.className = isLive ? "live" : "demo";
+  }
+
+  // Demo feed: only ever runs while there's no real Core connection, and
+  // is honestly labeled as such in the panel header above.
+  const DEMO_EVENTS = [
+    ["brain.request", { messageCount: 3 }],
+    ["tool.requested", { toolCall: { toolName: "getActiveApplication", input: {} } }],
+    ["permission.checked", { toolId: "getActiveApplication", result: { allowed: true } }],
+    ["tool.executed", { toolName: "getActiveApplication", result: { success: true } }],
+    ["brain.response", { toolCallCount: 0, text: "You currently have Safari in the foreground." }],
+    ["device.connected", { deviceId: "imac-primary-001" }],
+  ];
+  let demoTimer = null;
+  function startDemoFeed() {
+    if (demoTimer) return;
+    let i = 0;
+    demoTimer = setInterval(() => {
+      const [type, payload] = DEMO_EVENTS[i % DEMO_EVENTS.length];
+      pushActivityLine(type, payload, Date.now());
+      i++;
+    }, 2200);
+  }
+  function stopDemoFeed() {
+    if (demoTimer) { clearInterval(demoTimer); demoTimer = null; }
+  }
+
+  function connectObserver() {
+    let socket;
+    try {
+      socket = new WebSocket(`ws://${coreHost()}:${corePort()}/observer`);
+    } catch (e) {
+      setActivityStatus(false);
+      startDemoFeed();
+      return;
+    }
+    const connectTimeout = setTimeout(() => {
+      if (socket.readyState !== WebSocket.OPEN) socket.close();
+    }, 2500);
+
+    socket.addEventListener("open", () => {
+      clearTimeout(connectTimeout);
+      stopDemoFeed();
+      setActivityStatus(true);
+      pushActivityLine("device.connected", { deviceId: "observer (this page)" }, Date.now(), true);
+    });
+    socket.addEventListener("message", (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        pushActivityLine(msg.type, msg.payload, msg.timestamp, true);
+      } catch (e) { /* ignore malformed frames */ }
+    });
+    socket.addEventListener("close", () => {
+      setActivityStatus(false);
+      startDemoFeed();
+      setTimeout(connectObserver, 5000); // keep trying — Core may start later
+    });
+    socket.addEventListener("error", () => socket.close());
+  }
+
+  setActivityStatus(false);
+  startDemoFeed();
+  connectObserver();
+
+  /* ---------------------------------------------------------------
+   * 6. Real voice reactivity via Web Audio. `window.JarvisHologram`
+   *    exposes hooks to feed it any real audio source — a <audio>
+   *    element playing Jarvis's TTS output once that exists, or the
+   *    microphone for testing right now (Core has no TTS yet, so
+   *    there is nothing genuine to auto-connect to today).
+   * ------------------------------------------------------------- */
+  let audioCtx = null;
+  let analyser = null;
+  let audioData = null;
+  const voiceRing = document.getElementById("voice-ring");
+
+  /* WhatsApp-voice-message-style bar meter — draws real analyser data
+     only (a flat idle line at 0 while nothing is connected, never a
+     fabricated waveform), scrolling like a live voice-note. */
+  const voiceBarsCanvas = document.getElementById("voice-bars");
+  const vbCtx = voiceBarsCanvas.getContext("2d");
+  const VB_COUNT = 28;
+  const vbHistory = new Array(VB_COUNT).fill(0);
+  function resizeVoiceBars() {
+    const rect = voiceBarsCanvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    voiceBarsCanvas.width = Math.max(1, rect.width * dpr);
+    voiceBarsCanvas.height = Math.max(1, rect.height * dpr);
+  }
+  resizeVoiceBars();
+  window.addEventListener("resize", resizeVoiceBars);
+
+  function drawVoiceBars(currentLevel) {
+    vbHistory.shift();
+    vbHistory.push(currentLevel);
+    const w = voiceBarsCanvas.width, h = voiceBarsCanvas.height;
+    vbCtx.clearRect(0, 0, w, h);
+    const barW = w / VB_COUNT;
+    for (let i = 0; i < VB_COUNT; i++) {
+      const level = vbHistory[i];
+      const barH = Math.max(h * 0.08, level * h * 0.92);
+      const x = i * barW;
+      const y = (h - barH) / 2;
+      vbCtx.fillStyle = analyser ? "rgba(139,255,208,0.9)" : "rgba(111,216,232,0.3)";
+      const bw = barW * 0.56;
+      if (vbCtx.roundRect) {
+        vbCtx.beginPath();
+        vbCtx.roundRect(x + barW * 0.22, y, bw, barH, Math.min(bw / 2, barH / 2));
+        vbCtx.fill();
+      } else {
+        vbCtx.fillRect(x + barW * 0.22, y, bw, barH); // older engines without roundRect support
+      }
+    }
+  }
+
+  function ensureAudioGraph() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.75;
+    audioData = new Uint8Array(analyser.frequencyBinCount);
+  }
+
+  function sampleAudioLevel() {
+    if (!analyser) return 0;
+    analyser.getByteFrequencyData(audioData);
+    let sum = 0;
+    for (let i = 0; i < audioData.length; i++) sum += audioData[i];
+    return Math.min(1, (sum / audioData.length / 255) * 2.2);
+  }
+
+  /* A real per-frequency-bin spectrum, not a single averaged level like
+     #voice-bars above — draws audioData (already sampled every frame by
+     sampleAudioLevel(), reused here rather than a second analyser read)
+     directly as bars, one per frequency bin, so this actually shows how
+     the voice's frequency content is shaped over time, not just its
+     overall loudness. Flat/dim while nothing is connected, same honesty
+     rule as every other real-data element on this page. */
+  const voiceSpectrumCanvas = document.getElementById("voice-spectrum");
+  const vsCtx = voiceSpectrumCanvas.getContext("2d");
+  const voiceStatusEl = document.getElementById("voice-status");
+  const VS_BARS = 24;
+  function resizeVoiceSpectrum() {
+    const rect = voiceSpectrumCanvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    voiceSpectrumCanvas.width = Math.max(1, rect.width * dpr);
+    voiceSpectrumCanvas.height = Math.max(1, rect.height * dpr);
+  }
+  resizeVoiceSpectrum();
+  window.addEventListener("resize", resizeVoiceSpectrum);
+
+  function drawVoiceSpectrum() {
+    const w = voiceSpectrumCanvas.width, h = voiceSpectrumCanvas.height;
+    vsCtx.clearRect(0, 0, w, h);
+    const barW = w / VS_BARS;
+    // Most speech energy sits in the lower half of the FFT's frequency
+    // bins — sampling only the first ~60% of them (not the full range up
+    // to the Nyquist frequency) keeps every visible bar meaningful
+    // instead of half the display sitting flat at near-zero.
+    const usableBins = analyser ? Math.floor(audioData.length * 0.6) : 0;
+    for (let i = 0; i < VS_BARS; i++) {
+      const level = analyser ? (audioData[Math.floor((i / VS_BARS) * usableBins)] / 255) : 0;
+      const barH = Math.max(h * 0.04, level * h * 0.96);
+      const x = i * barW;
+      const y = h - barH;
+      const grad = vsCtx.createLinearGradient(0, h, 0, 0);
+      grad.addColorStop(0, analyser ? "rgba(111,216,232,0.9)" : "rgba(111,216,232,0.25)");
+      grad.addColorStop(1, analyser ? "rgba(255,177,92,0.9)" : "rgba(255,177,92,0.2)");
+      vsCtx.fillStyle = grad;
+      const bw = barW * 0.62;
+      vsCtx.fillRect(x + barW * 0.19, y, bw, barH);
+    }
+  }
+
+  (function audioLoop() {
+    requestAnimationFrame(audioLoop);
+    const level = sampleAudioLevel();
+    audioGlow += (level - audioGlow) * 0.25;
+    const glow = audioGlow;
+    voiceRing.style.borderColor = `rgba(111,216,232,${(glow * 0.8).toFixed(2)})`;
+    voiceRing.style.transform = `scale(${1 + glow * 0.15})`;
+    voiceRing.style.boxShadow = glow > 0.05 ? `0 0 ${20 + glow * 60}px rgba(111,216,232,${glow * 0.5})` : "none";
+    drawVoiceBars(analyser ? level : 0);
+    drawVoiceSpectrum();
+  })();
+
+  window.JarvisHologram = {
+    /** Feed a live <audio> or <video> element (e.g. Jarvis's TTS playback) into the reactive visualizer. */
+    connectAudioElement(mediaEl) {
+      ensureAudioGraph();
+      const source = audioCtx.createMediaElementSource(mediaEl);
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+    },
+    /** Feed a raw MediaStream (e.g. from getUserMedia or a WebRTC/TTS stream) into the reactive visualizer. */
+    connectMediaStream(stream) {
+      ensureAudioGraph();
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+    },
+  };
+
+  const audioBtn = document.getElementById("audio-ctl");
+  let micActive = false;
+  audioBtn.addEventListener("click", async () => {
+    if (micActive) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      window.JarvisHologram.connectMediaStream(stream);
+      micActive = true;
+      audioBtn.textContent = "🎙 MIC LIVE (voice-reactive)";
+      audioBtn.classList.add("active");
+      voiceStatusEl.textContent = "LIVE";
+      voiceStatusEl.classList.remove("demo");
+      voiceStatusEl.classList.add("live");
+    } catch (e) {
+      audioBtn.textContent = "🎙 MIC DENIED";
+    }
+  });
+
+  /* ---------------------------------------------------------------
+   * 6. Webcam face tracking — real detection (face-api.js, vendored
+   *    locally under ./facetrack/ same as three.min.js, no CDN
+   *    dependency), not a fake "always look at center" animation. While
+   *    a face is being seen, the head's rotation (section 3's animate()
+   *    loop, above) turns toward the tracked position instead of its
+   *    idle sine-wave sway, and falls back to idle the moment no face
+   *    has been seen for >1.5s. Lazy-loaded only on click: the model +
+   *    runtime is ~1.6MB, not worth loading for everyone who never
+   *    touches the button.
+   * ------------------------------------------------------------- */
+  const faceCtl = document.getElementById("face-ctl");
+  const faceCam = document.getElementById("face-cam");
+  let faceApiReady = false;
+
+  function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error(`failed to load ${src}`));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function detectLoop() {
+    if (!faceTrackingActive) return;
+    try {
+      const result = await faceapi
+        .detectSingleFace(faceCam, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+        .withFaceLandmarks(true);
+      if (result && faceCam.videoWidth) {
+        const box = result.detection.box;
+        const cx = (box.x + box.width / 2) / faceCam.videoWidth;
+        const cy = (box.y + box.height / 2) / faceCam.videoHeight;
+        // Raw (unmirrored) webcam stream: a face that moves to ITS OWN
+        // right appears on the LEFT of the frame. Inverting X here makes
+        // the head turn toward where the user actually is (mirror-style,
+        // like maintaining eye contact) instead of away from them.
+        const offsetX = (0.5 - cx) * 2; // -1..1
+        const offsetY = (cy - 0.5) * 2; // -1..1
+        targetYaw = Math.max(-0.55, Math.min(0.55, offsetX * 0.55));
+        targetPitch = Math.max(-0.3, Math.min(0.3, offsetY * 0.3));
+        lastFaceSeenAt = performance.now();
+      }
+    } catch (e) {
+      // One bad detection frame shouldn't kill the whole loop.
+    }
+    setTimeout(detectLoop, 120);
+  }
+
+  faceCtl.addEventListener("click", async () => {
+    if (faceTrackingActive) return;
+    faceCtl.textContent = "👁 LOADING…";
+    faceCtl.className = "loading";
+    try {
+      if (!faceApiReady) {
+        if (location.protocol === "file:") {
+          throw new Error(
+            "Face tracking needs the page served over http(s) — fetch() " +
+            "for the model files is blocked by the browser under file://" +
+            "(see README: 'python3 -m http.server' from this folder)."
+          );
+        }
+        await loadScriptOnce("./facetrack/face-api.min.js");
+        // The bundled tfjs registers a 'wasm' backend at higher priority
+        // than 'webgl', but no .wasm binary is vendored here (only the
+        // detector/landmark weights) — forcing 'webgl' explicitly avoids
+        // tfjs trying and failing to initialize the wasm backend first.
+        await faceapi.tf.setBackend("webgl");
+        await faceapi.tf.ready();
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri("./facetrack/weights"),
+          faceapi.nets.faceLandmark68TinyNet.loadFromUri("./facetrack/weights"),
+        ]);
+        faceApiReady = true;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+      faceCam.srcObject = stream;
+      await faceCam.play();
+      faceTrackingActive = true;
+      faceCtl.textContent = "👁 FACE TRACKING LIVE";
+      faceCtl.className = "active";
+      detectLoop();
+    } catch (e) {
+      console.error("[jarvis-hologram] face tracking failed to start:", e);
+      faceCtl.textContent = location.protocol === "file:"
+        ? "👁 NEEDS LOCAL SERVER (see README)"
+        : "👁 CAMERA/MODEL FAILED";
+      faceCtl.className = "";
+    }
+  });
+})();
+</script>
+</body>
+</html>

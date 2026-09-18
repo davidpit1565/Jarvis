@@ -38,18 +38,35 @@ import {
 
 type SocketData =
   | { kind: "device"; deviceId: string | null; ip: string | null }
+  // Read-only spectator on /observer (e.g. the hologram UI) — never part
+  // of the device protocol, just mirrored every EventBus event.
+  | { kind: "observer" }
   | { kind: "audio-ingest" }
   | { kind: "audio-viewer" };
 
 type DeviceSocket = ServerWebSocket<Extract<SocketData, { kind: "device" }>>;
 type BunServer = Server<SocketData>;
 
+/** Every EventBus event this server will mirror out to observer sockets. */
+const OBSERVABLE_EVENTS = [
+  "conversation.message",
+  "brain.request",
+  "brain.response",
+  "tool.requested",
+  "tool.executed",
+  "tool.dispatched",
+  "permission.checked",
+  "device.registered",
+  "device.connected",
+  "device.disconnected",
+] as const;
+
 export interface JarvisWebSocketServerDependencies {
   deviceRegistry: DeviceRegistry;
   deviceConnectionManager: DeviceConnectionManager;
   pairingService: PairingService;
   eventBus: EventBus;
-  /** Optional: enables tool names/targets in the GET /status dashboard feed. */
+  /** Optional: enables tool names/targets in the GET /status feed (dashboard and hologram UI both poll it). */
   toolRegistry?: ToolRegistry;
   /** Optional: recent activity feed shown on the dashboard. */
   activityLog?: ActivityLog;
@@ -205,7 +222,33 @@ export class JarvisWebSocketServer {
    */
   private readonly pendingOAuthStates: Map<string, number> = new Map();
 
-  constructor(private readonly deps: JarvisWebSocketServerDependencies) {}
+  /**
+   * Read-only spectators connected on `/observer` (e.g. the hologram UI in
+   * `ui/hologram/`) — never part of the device protocol, never trusted with
+   * device.register/tool.result, just mirrored every EventBus event so a
+   * human can watch what Core is actually doing in real time.
+   */
+  private observers: Set<ServerWebSocket<SocketData>> = new Set();
+
+  constructor(private readonly deps: JarvisWebSocketServerDependencies) {
+    this.subscribeObserverBroadcast();
+  }
+
+  private subscribeObserverBroadcast(): void {
+    for (const eventName of OBSERVABLE_EVENTS) {
+      this.deps.eventBus.on(eventName, (payload) => {
+        this.broadcastToObservers(eventName, payload);
+      });
+    }
+  }
+
+  private broadcastToObservers(type: string, payload: unknown): void {
+    if (this.observers.size === 0) return;
+    const message = JSON.stringify({ type, payload, timestamp: new Date().toISOString() });
+    for (const ws of this.observers) {
+      ws.send(message);
+    }
+  }
 
   start(port: number) {
     return Bun.serve<SocketData>({
@@ -220,13 +263,16 @@ export class JarvisWebSocketServer {
       websocket: {
         open: (ws) => {
           const socket = ws as ServerWebSocket<SocketData>;
-          if (socket.data.kind === "audio-viewer") {
+          if (socket.data.kind === "observer") {
+            this.observers.add(socket);
+          } else if (socket.data.kind === "audio-viewer") {
             this.deps.audioLevelBroadcaster?.addViewer(socket);
           }
           // Device sockets: a no-op here — only meaningful once they register.
         },
         message: (ws, raw) => {
           const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.kind === "observer") return; // read-only channel, nothing to accept from it
           if (socket.data.kind === "audio-ingest") {
             this.handleAudioStreamMessage(raw.toString());
             return;
@@ -238,6 +284,10 @@ export class JarvisWebSocketServer {
         },
         close: (ws) => {
           const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.kind === "observer") {
+            this.observers.delete(socket);
+            return;
+          }
           if (socket.data.kind === "device") {
             const deviceId = socket.data.deviceId;
             if (deviceId) {
@@ -370,6 +420,12 @@ export class JarvisWebSocketServer {
               return new Response("Not found", { status: 404 });
             }
             return server.upgrade(req, { data: { kind: "audio-viewer" } })
+              ? undefined
+              : new Response("Upgrade failed", { status: 400 });
+          }
+
+          if (isUpgradeRequest && url.pathname === "/observer") {
+            return server.upgrade(req, { data: { kind: "observer" } })
               ? undefined
               : new Response("Upgrade failed", { status: 400 });
           }
@@ -686,12 +742,16 @@ export class JarvisWebSocketServer {
   }
 
   /**
-   * GET /status — read-only JSON feed the dashboard polls. Gated the same
-   * way as GET / and GET /dashboard: once any Face ID/Touch ID credential
-   * is registered, a valid session is required here too — otherwise the
-   * dashboard lock would be purely cosmetic, since this feed carries
-   * everything the locked page shows (devices, activity, token/tool usage,
-   * record counts) and more.
+   * GET /status — read-only JSON feed the dashboard and the hologram UI
+   * (`ui/hologram/`) both poll. Gated the same way as GET / and GET
+   * /dashboard: once any Face ID/Touch ID credential is registered, a
+   * valid session is required here too — otherwise the dashboard lock
+   * would be purely cosmetic, since this feed carries everything the
+   * locked page shows (devices, activity, token/tool usage, record
+   * counts) and more. `observers` (the hologram's own /observer
+   * spectator count) was added on top of the dashboard's existing shape
+   * rather than given a separate endpoint, so both consumers share one
+   * real contract instead of two endpoints drifting apart.
    */
   private handleStatusJson(): Response {
     const {
@@ -726,26 +786,39 @@ export class JarvisWebSocketServer {
 
     const tokenUsage = tokenUsageStore?.totals();
 
-    return Response.json({
-      devices,
-      tools,
-      phoneGatewayEnabled: Boolean(phoneGateway),
-      telegramGatewayEnabled: Boolean(telegramGateway),
-      lockdown: lockdownService?.status() ?? { active: false, reason: null, activatedAt: null },
-      activity: activityLog?.list() ?? [],
-      webAuthnConfigured: webAuthnService?.hasCredentials() ?? true,
-      audioWaveformEnabled: Boolean(audioLevelBroadcaster),
-      tokenUsage: tokenUsage
-        ? { ...tokenUsage, estimatedCostUsd: estimateCostUsd(tokenUsage, DEFAULT_MODEL) ?? null }
-        : undefined,
-      toolUsage: toolAuditLog?.summary(),
-      counts: {
-        memory: memoryStore?.search("").length,
-        reminders: reminderStore?.list(true).length,
-        pendingReminders: reminderStore?.list(false).length,
-        conversationHistory: conversationHistoryStore?.count(),
+    return Response.json(
+      {
+        devices,
+        tools,
+        phoneGatewayEnabled: Boolean(phoneGateway),
+        telegramGatewayEnabled: Boolean(telegramGateway),
+        lockdown: lockdownService?.status() ?? { active: false, reason: null, activatedAt: null },
+        activity: activityLog?.list() ?? [],
+        webAuthnConfigured: webAuthnService?.hasCredentials() ?? true,
+        audioWaveformEnabled: Boolean(audioLevelBroadcaster),
+        observers: this.observers.size,
+        tokenUsage: tokenUsage
+          ? { ...tokenUsage, estimatedCostUsd: estimateCostUsd(tokenUsage, DEFAULT_MODEL) ?? null }
+          : undefined,
+        toolUsage: toolAuditLog?.summary(),
+        counts: {
+          memory: memoryStore?.search("").length,
+          reminders: reminderStore?.list(true).length,
+          pendingReminders: reminderStore?.list(false).length,
+          conversationHistory: conversationHistoryStore?.count(),
+        },
       },
-    });
+      // CORS: the hologram UI is typically opened as a `file://` page (or
+      // a different origin/port than Core), so the browser needs this
+      // header to let a same-effort fetch() read the response at all —
+      // without it the request still reaches the server (as curl shows)
+      // but the browser silently blocks the page from seeing the body.
+      // Fine to leave wide open when the dashboard isn't locked: this
+      // endpoint intentionally exposes only aggregate/summary data, no
+      // secrets, and is still gated by the session check above once a
+      // Face ID/Touch ID credential is registered.
+      { headers: { "Access-Control-Allow-Origin": "*" } }
+    );
   }
 
   /**
