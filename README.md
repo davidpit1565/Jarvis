@@ -110,6 +110,43 @@ What's new in Phase 2:
   validation" below for what's verified vs. still needs a real Mac (both
   of these specifically also need the Accessibility permission granted
   to the Agent, which no earlier tool required).
+- **Mac device control** (`SET_VOLUME`, `TOGGLE_WIFI`, `CREATE_FOLDER`,
+  `EMPTY_TRASH`): four more named, safely-scoped device tools, deliberately
+  built on pure native framework APIs (CoreAudio, CoreWLAN, `FileManager`)
+  rather than any shell command or scripted Finder command — the same
+  boundary `ToolRegistry.swift`'s own doc comment states and that this
+  README's Security section repeats: no shell execution, no AppleScript,
+  no generic "run this on my Mac" tool exists or ever will. `SET_VOLUME`
+  (0-100, clamped) and `TOGGLE_WIFI` are `SAFE_ACTION` — both trivially
+  reversible. `CREATE_FOLDER` is also `SAFE_ACTION`, restricted to the
+  Agent's existing `FileAccessPolicy` allowlist (Desktop/Documents/
+  Downloads/the Jarvis folder) and refuses to overwrite anything that
+  already exists. `EMPTY_TRASH` is `CONFIRM` — permanently deletes
+  everything in `~/.Trash` by removing each entry via `FileManager`
+  directly (never AppleScript's "empty trash" command, never a shell
+  `rm -rf`), so it always asks fresh before running even though everything
+  in the Trash is, by definition, something already chosen for deletion.
+  All four are granted the same way as `CLICK_ELEMENT`/`TYPE_TEXT` above:
+  auto-granted on a device's pairing approval (see `autoGrantToolIdsOnApproval`
+  in `src/index.ts`), with `EMPTY_TRASH` still asking per-invocation
+  regardless of the grant. Explicitly declined alongside these: full
+  arbitrary device control (a generic command/automation executor) and
+  installing/removing applications — both cross the same "no arbitrary
+  execution" line these tools were built to respect.
+- **macOS Reminders integration** (`LIST_MAC_REMINDERS`, `CREATE_MAC_REMINDER`,
+  `COMPLETE_MAC_REMINDER`): reads and writes the user's real macOS
+  Reminders app via EventKit's public `EKEventStore` API — never
+  AppleScript's `tell application "Reminders"`. Deliberately distinct
+  from JARVIS's own SQLite-backed `ReminderStore`/`CREATE_REMINDER`
+  family: those are a JARVIS-only task list, these three write into the
+  actual Reminders app the user (and Siri, and their other Apple
+  devices) already sees. All three are `SAFE_ACTION` — reversible by
+  editing the reminder back in the Reminders app. `COMPLETE_MAC_REMINDER`
+  finds its target by an exact title match among incomplete reminders,
+  refusing to guess when zero or multiple match — same discipline as
+  `CLICK_ELEMENT`. Requires the Agent's `Info.plist` to declare
+  `NSRemindersFullAccessUsageDescription` (added) and the user to grant
+  Reminders access when macOS first prompts for it.
 - **Bilingual (Hebrew + English) conversation**: a fixed system instruction
   (`src/core/brain/systemPrompt.ts`) tells Claude to detect and respond in
   the user's language, including mixed Hebrew/English in one message. Tool
@@ -683,6 +720,31 @@ speech-to-text and text-to-speech have to be told which language(s) to use:
 If `TWILIO_AUTH_TOKEN`/`TWILIO_PUBLIC_BASE_URL` aren't set, the `/voice/*`
 routes don't exist at all (`404`) and nothing else changes — the phone
 gateway is fully optional.
+
+### Text JARVIS (SMS)
+
+The same Twilio number the phone gateway answers calls on can also receive
+texts — at zero extra setup, since it reuses `TWILIO_AUTH_TOKEN`/
+`TWILIO_PUBLIC_BASE_URL` (and the caller allowlist, `TWILIO_ALLOWED_CALLERS`,
+if you've set one) rather than needing a separate number or secret. In the
+Twilio console, set the phone number's **messaging** webhook (not the voice
+one) to `https://<your-app>.fly.dev/sms/incoming`, method `HTTP POST`. Each
+number gets its own ongoing conversation thread, exactly like Telegram — no
+"hang up" between texts, so JARVIS remembers context across a whole text
+conversation, not just one message at a time.
+
+**One real limitation**: a `CONFIRM`/`DANGEROUS` tool (e.g. deleting
+something, publishing a reel) can't be confirmed over SMS and is always
+auto-denied, the same as on a phone call — Twilio's inbound SMS webhook
+expects a synchronous reply within a few seconds, so there's no way to hold
+that request open and answer it from whatever text arrives next. Everything
+read-only or `SAFE_ACTION` (checking your calendar, reminders, weather,
+news, saving a memory) works normally. If you need to actually approve
+something, use Telegram or the terminal instead — both are reliable enough
+two-way channels to support the real yes/no round trip.
+
+If `TWILIO_AUTH_TOKEN`/`TWILIO_PUBLIC_BASE_URL` aren't set, `/sms/incoming`
+doesn't exist at all (`404`), same as the voice routes.
 
 ### Cloud deployment
 

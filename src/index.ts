@@ -26,6 +26,13 @@ import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
 import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
 import { clickElementTool } from "@/tools/system/ClickElementTool";
 import { typeTextTool } from "@/tools/system/TypeTextTool";
+import { setVolumeTool } from "@/tools/system/SetVolumeTool";
+import { toggleWifiTool } from "@/tools/system/ToggleWifiTool";
+import { createFolderTool } from "@/tools/system/CreateFolderTool";
+import { emptyTrashTool } from "@/tools/system/EmptyTrashTool";
+import { listMacRemindersTool } from "@/tools/system/ListMacRemindersTool";
+import { createMacReminderTool } from "@/tools/system/CreateMacReminderTool";
+import { completeMacReminderTool } from "@/tools/system/CompleteMacReminderTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
@@ -103,6 +110,7 @@ import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/TwilioVoiceGateway";
+import { TwilioSmsGateway, type SmsSession } from "@/communication/phone/TwilioSmsGateway";
 import { TelegramGateway, type TelegramSession } from "@/communication/telegram/TelegramGateway";
 import { DeviceVoiceGateway, type DeviceVoiceSession } from "@/communication/voice/DeviceVoiceGateway";
 import { createNotifyUserTool } from "@/tools/telegram/NotifyUserTool";
@@ -270,6 +278,13 @@ function main() {
   toolRegistry.registerTool(composeEmailDraftTool);
   toolRegistry.registerTool(clickElementTool);
   toolRegistry.registerTool(typeTextTool);
+  toolRegistry.registerTool(setVolumeTool);
+  toolRegistry.registerTool(toggleWifiTool);
+  toolRegistry.registerTool(createFolderTool);
+  toolRegistry.registerTool(emptyTrashTool);
+  toolRegistry.registerTool(listMacRemindersTool);
+  toolRegistry.registerTool(createMacReminderTool);
+  toolRegistry.registerTool(completeMacReminderTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
   toolRegistry.registerTool(createDeleteMemoryTool(memoryStore, undoStore));
@@ -498,6 +513,34 @@ function main() {
           config.twilioVoiceRate
         )
       : undefined;
+
+  // A texting thread gets its own conversation, like a phone call, but
+  // kept for the life of the process — same reasoning as Telegram (no
+  // natural "hang up" for text). Uses the exact same ConfirmationService
+  // as the phone gateway (auto-deny): see TwilioSmsGateway's own comment
+  // for why a real yes/no round trip isn't possible over a webhook that
+  // Twilio expects a synchronous reply to.
+  function createSmsSession(_fromNumber: string): SmsSession {
+    const smsConversation = new ConversationManager(eventBus);
+    const smsOrchestrator = new Orchestrator({
+      brain,
+      conversation: smsConversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService: phoneConfirmationService,
+      channelContext: "This conversation is happening over text message (SMS) right now.",
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      lockdownService,
+    });
+    return { orchestrator: smsOrchestrator, userId: DEFAULT_USER_ID };
+  }
+
+  // Rides the same Twilio number/credentials the phone gateway already
+  // requires — no new account, number, or secret needed to turn this on.
+  const smsGateway = config.twilioAuthToken && config.twilioPublicBaseUrl ? new TwilioSmsGateway(createSmsSession) : undefined;
 
   // A Telegram chat gets its own conversation thread, like a phone call,
   // but kept for the life of the process rather than one call's duration —
@@ -827,6 +870,7 @@ function main() {
     toolRegistry,
     activityLog,
     phoneGateway,
+    smsGateway,
     twilioAuthToken: config.twilioAuthToken,
     twilioPublicBaseUrl: config.twilioPublicBaseUrl,
     twilioAllowedCallers: config.twilioAllowedCallers,
@@ -875,7 +919,20 @@ function main() {
     // own doc comment on this field for why). CONFIRM tools still ask
     // per-invocation regardless (confirmViaChat below) — a grant here
     // only means "may be asked," never "runs without asking."
-    autoGrantToolIdsOnApproval: ["OPEN_URL", "OPEN_APPLICATION", "COMPOSE_EMAIL_DRAFT", "CLICK_ELEMENT", "TYPE_TEXT"],
+    autoGrantToolIdsOnApproval: [
+      "OPEN_URL",
+      "OPEN_APPLICATION",
+      "COMPOSE_EMAIL_DRAFT",
+      "CLICK_ELEMENT",
+      "TYPE_TEXT",
+      "SET_VOLUME",
+      "TOGGLE_WIFI",
+      "CREATE_FOLDER",
+      "EMPTY_TRASH",
+      "LIST_MAC_REMINDERS",
+      "CREATE_MAC_REMINDER",
+      "COMPLETE_MAC_REMINDER",
+    ],
   });
   wsServerRef = wsServer;
   const httpHandle = wsServer.start(config.port);
@@ -942,6 +999,11 @@ function main() {
     phoneGateway
       ? "Phone gateway: enabled (POST /voice/incoming, /voice/gather, /voice/status)"
       : "Phone gateway: disabled (set TWILIO_AUTH_TOKEN and TWILIO_PUBLIC_BASE_URL to enable)"
+  );
+  console.log(
+    smsGateway
+      ? "SMS gateway: enabled (POST /sms/incoming) — same Twilio number as the phone gateway"
+      : "SMS gateway: disabled (rides the phone gateway's own config — set TWILIO_AUTH_TOKEN and TWILIO_PUBLIC_BASE_URL to enable both)"
   );
   if (audioLevelBroadcaster) {
     console.log("Audio waveform: enabled (Twilio Media Streams — extra cost ~$0.004/min on the Twilio account)");
@@ -1023,6 +1085,7 @@ function main() {
     permissionService,
     confirmationService,
     phoneGateway,
+    smsGateway,
     telegramGateway,
     eventBus,
   };

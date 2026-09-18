@@ -32,5 +32,7 @@ calls fail silently with no prompt ever shown.
     <string>JARVIS transcribes your microphone on-device to detect the "Hey JARVIS" wake phrase and understand voice commands.</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>JARVIS lists your recent photos' metadata (filename, date, dimensions) when you ask it to — no image content is read, only that list.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>JARVIS reads and creates reminders in your Reminders app when you ask it to.</string>
 </dict>
 </plist>
