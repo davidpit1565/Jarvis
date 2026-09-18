@@ -841,11 +841,19 @@ conversations too, not just the current one.
   can't be brute-forced or spammed by hammering the endpoint. In-memory
   and per-process, resetting on restart — a deliberate simplicity tradeoff
   for a single-instance personal assistant. "Per client IP" actually means
-  the `Fly-Client-IP` header when present, falling back to the raw socket
-  address otherwise — found and fixed during this session's own review:
-  behind Fly.io's proxy, the raw socket address is Fly's own internal hop,
-  the same for every request, which had been silently collapsing every
-  caller into one shared rate-limit bucket per route in production.
+  the `Fly-Client-IP` header, but **only when `FLY_APP_NAME` confirms this
+  process is actually running as a Fly Machine** — falling back to the raw
+  socket address otherwise (including local dev/tests and any non-Fly
+  deployment of this same Dockerfile, e.g. Railway/Render/a VPS). Two real
+  bugs found and fixed during this session's own review, back to back:
+  first, behind Fly.io's proxy the raw socket address is Fly's own
+  internal hop, the same for every request, silently collapsing every
+  caller into one shared rate-limit bucket per route in production; then,
+  the initial fix trusted the `Fly-Client-IP` header unconditionally,
+  which would have let any caller on a non-Fly deployment set an arbitrary
+  value on every request and get a fresh bucket each time — a
+  straightforward brute-force bypass, since nothing on those hosts strips
+  a client-supplied header of that name the way Fly's own proxy does.
 - Device-scoped permission grants: authorizing a tool on one device never
   authorizes it on another.
 - `CONFIRM`/`DANGEROUS` tools require a fresh, per-call human confirmation

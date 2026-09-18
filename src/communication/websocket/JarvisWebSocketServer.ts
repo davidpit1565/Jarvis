@@ -982,19 +982,39 @@ function isDataDirectoryWritable(dataDirectory: string | undefined): boolean {
 }
 
 /**
+ * True only when this process is actually running as a Fly.io Machine —
+ * Fly injects FLY_APP_NAME (among others) into every Machine's
+ * environment automatically, and nothing else does. Deliberately NOT just
+ * "is the Fly-Client-IP header present": that header is only trustworthy
+ * because Fly's own proxy always overwrites any client-supplied value of
+ * it before forwarding — a guarantee that holds only when Fly's proxy is
+ * actually the sole entry point. This same Dockerfile is documented to
+ * also run on Railway, Render, or a plain VPS (see README "Cloud
+ * deployment"); on any of those, nothing strips a client-supplied
+ * Fly-Client-IP header, so blindly trusting its presence would let any
+ * caller set an arbitrary value on every request and get a fresh
+ * rate-limit bucket each time — a straightforward brute-force bypass on
+ * pairing/auth/device-registration. Read fresh each call, not cached at
+ * module load, purely so tests can toggle it per case.
+ */
+function isRunningOnFly(): boolean {
+  return Boolean(process.env.FLY_APP_NAME);
+}
+
+/**
  * The real caller's IP, not the address the app's socket actually sees.
  * Fly.io's edge proxy terminates the client connection and forwards to
  * this app over its own internal network — `server.requestIP()` returns
  * *that* internal hop, which is the same for every request when deployed,
  * collapsing per-IP rate limiting into one shared bucket for every caller.
- * Fly always sets `Fly-Client-IP` to the actual origin address on requests
- * it proxies, so it's trusted here; this only matters once actually
- * running behind Fly (or a similarly trusted proxy) — locally/in tests,
- * where the header is never set, this falls straight through to the raw
- * socket address exactly as before.
+ * `Fly-Client-IP` is only trusted when `isRunningOnFly()` is true (see
+ * above) — everywhere else, including local dev/tests and any non-Fly
+ * deployment of this same Dockerfile, this falls straight through to the
+ * raw socket address exactly as before.
  */
 function clientIp(req: Request, server: BunServer): string | null {
-  return req.headers.get("Fly-Client-IP") ?? server.requestIP(req)?.address ?? null;
+  const flyClientIp = isRunningOnFly() ? req.headers.get("Fly-Client-IP") : null;
+  return flyClientIp ?? server.requestIP(req)?.address ?? null;
 }
 
 /**
