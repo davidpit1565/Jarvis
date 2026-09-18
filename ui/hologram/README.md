@@ -320,9 +320,28 @@ integrated one, clears 60fps easily either way.
   bursts stop scheduling entirely. Voice-reactive and thinking-reactive
   brightness/scale changes stay on, since those are direct responses to
   real signals rather than ambient decoration.
-- A real `<=600px` layout (verified at 390x844, iPhone-sized): panels
-  shrink and drop their bar meters, the activity header stacks instead of
+- A real `<=600px` layout (verified at 390x844, iPhone-sized, plus
+  820x1180 tablet-portrait and 1024x700 narrow-landscape): panels shrink
+  and drop their bar meters, the activity header stacks instead of
   overlapping its status text, and title/plinth text scale down.
+  **This used to just be a claim** — actually screenshotting 390x844
+  turned up two real defects an untested "<=600px" media query had missed
+  entirely: the Core's on-screen size is driven by the camera's fixed
+  vertical FOV, which ties it to viewport *height* alone, so on a narrow
+  *portrait* phone (width the real limiting dimension) it swallowed the
+  whole screen width and rendered directly on top of both side panels —
+  "VOICE" was unreadable, sitting mid-mesh. Fixed with
+  `responsiveCamDistance()`: the camera pulls back further, proportional
+  to how much narrower width is than height, whenever width < height —
+  a no-op on every desktop/landscape viewport (where height was already
+  the limiting dimension, matching the original tuning exactly), so this
+  changes nothing about the framing already approved for desktop. Second,
+  separate defect: the mic/face-tracking buttons kept their desktop
+  bottom-corner position and ran directly into the "PERSONAL AI · CORE
+  OFFLINE" plinth text at phone heights — fixed by repositioning them and
+  capping the plinth text's width so it wraps instead of reaching that far
+  right. Both found and fixed by actually rendering the breakpoint, not by
+  reading the media query and assuming it worked.
 - Not done: screen-reader semantics (this is a purely visual HUD with no
   screen-reader-relevant content today) and touch-specific interactions
   (the mic button works via a plain click/tap, nothing more elaborate is

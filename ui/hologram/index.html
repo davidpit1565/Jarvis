@@ -145,14 +145,34 @@
      still reads fine at this size), and stack the activity header. */
   @media (max-width: 600px) {
     #hud-title { font-size: 9px; letter-spacing: 3px; width: 90%; }
-    .panel { width: 42vw; font-size: 9px; }
+    /* Capped in px, not just vw: the Core itself shrinks to fit narrow
+       portrait widths (see responsiveCamDistance() in the script), so the
+       panels need a matching, tighter absolute cap rather than a fraction
+       of width alone — 42vw was tuned before that fix existed and is too
+       wide for what the shrunk Core now leaves clear on either side. */
+    .panel { width: min(42vw, 108px); font-size: 8.5px; padding: 6px 8px; }
     .panel .bar { display: none; }
     .panel .row { white-space: normal; }
     .panel .row .val { margin-left: 5px; }
     #activity { bottom: 17%; font-size: 9px; }
     #activity .heading { flex-direction: column; align-items: flex-start; gap: 2px; }
     #jarvis-label { font-size: 16px; letter-spacing: 8px; }
-    #audio-ctl { font-size: 8px; padding: 5px 8px; }
+    /* Real overlap found by screenshot: these two buttons kept their
+       desktop bottom-% position, which lands squarely on top of the
+       PERSONAL AI / CORE OFFLINE / state text at phone heights, since the
+       plinth block's own bottom-% doesn't shrink to match. Pushed to the
+       very bottom-right corner instead, small enough to clear it. */
+    #audio-ctl { font-size: 8px; padding: 5px 8px; bottom: 0.5%; }
+    #face-ctl {
+      font-size: 8px; padding: 5px 8px; bottom: 3.9%;
+      max-width: 26vw; white-space: normal; line-height: 1.35;
+    }
+    /* Narrower than its natural width so the centered line wraps instead
+       of reaching all the way out to where the face/mic buttons sit in
+       the bottom-right corner — screenshot showed "CORE OFFLINE" running
+       directly into "ENABLE FACE TRACKING" otherwise. */
+    #jarvis-sub { font-size: 8px; letter-spacing: 2px; max-width: 46vw; margin: 6px auto 0; }
+    #jarvis-state { font-size: 7.5px; margin-top: 3px; }
   }
 
   #glitch-banner {
@@ -384,9 +404,26 @@
    *     the head turn to face wherever your real face is, which is a
    *     different thing from the camera's current viewing angle.
    * ------------------------------------------------------------- */
+  // The fixed vertical FOV ties the Core's on-screen size to viewport
+  // HEIGHT alone — fine on desktop/landscape, where height is already the
+  // narrower dimension. On a narrow portrait phone, width becomes the
+  // narrower dimension instead, but the Core doesn't know that and keeps
+  // sizing itself off height — so it swallows the entire width, leaving
+  // the flanking side panels no room at all (verified: they rendered
+  // directly overlapping the sphere at 390x844, "VOICE" unreadable mid-
+  // mesh). Pulling the camera back further, proportional to how much
+  // narrower width is than height, fixes that without touching desktop
+  // framing at all (the factor is 1 whenever width >= height). The 1.9x
+  // headroom past the literal ratio was tuned against a real 390-wide
+  // screenshot, not guessed, to give panels actual clearance rather than
+  // just touching the sphere's edge.
+  function responsiveCamDistance() {
+    const w = window.innerWidth, h = window.innerHeight;
+    return w >= h ? 12 : 12 * (h / w) * 1.9;
+  }
   let camAzimuth = 0;
   let camElevation = 0;
-  let camDistance = 12;
+  let camDistance = responsiveCamDistance();
   let orbitDragging = false;
   let lastPointerX = 0;
   let lastPointerY = 0;
@@ -989,6 +1026,11 @@
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    // Re-fit the Core to the new aspect ratio (e.g. a phone rotated, or a
+    // desktop window narrowed past the portrait breakpoint) without
+    // disturbing the user's own orbit angle, just the distance.
+    camDistance = responsiveCamDistance();
+    updateCameraFromOrbit();
   });
 
   /* ---------------------------------------------------------------
