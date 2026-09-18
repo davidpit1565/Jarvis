@@ -918,7 +918,13 @@ conversations too, not just the current one.
 
 - No arbitrary shell execution, AppleScript execution, sudo, process
   injection, or unrestricted keyboard/mouse/application automation —
-  anywhere in Core or the Agent source.
+  anywhere in Core or the Agent source. Enforced by a real test
+  (`tests/security/noArbitraryExecution.test.ts`), not just this
+  paragraph: it scans every `.ts`/`.swift` file for `child_process`,
+  `Bun.spawn`, `execSync`, `NSAppleScript`, `osascript`, a raw shell path,
+  or Swift's `Process()`, and fails if a new one shows up anywhere
+  outside one reviewed, allowlisted exception (a fixed `tar` invocation
+  for `GET /backup`, no user/model input involved).
 - Every capability is an explicitly registered tool with an ID, schema,
   permission level, and (for device tools) a named, compiled-in Agent
   function — never a generic "run this" path.
