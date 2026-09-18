@@ -40,7 +40,16 @@ are combined:
 
 1. **A wireframe grid head** — a procedurally-displaced low-poly sphere,
    proportioned like an actual human head/face (taller than wide, not a
-   rounder "ball"): tapered to a rounded jaw/chin, a brow ridge, a real
+   rounder "ball"), built from a sphere whose `thetaLength` is cut short
+   of its south pole (`Math.PI * 0.9`, not the full `Math.PI`) — a full
+   sphere always converges its bottom vertices to one exact point no
+   matter how the taper below is tuned, which read as a pointed
+   witch-chin funnel instead of a human jaw ending in a small rounded
+   rim right where the neck picks up. Tapered to that rounded jaw/chin
+   (narrower **and** shorter than the temple span, not just narrower —
+   width-only tapering left a long alien-like lower face) and to a
+   narrower crown (a head that stays full temple-width all the way to
+   the top reads as an oversized braincase), plus a brow ridge, a real
    protruding nose (bridge, tip bulb, nostril flare), a cheekbone ridge
    with a cheek hollow just below it, and a short wireframe neck
    underneath instead of the head floating with nothing below it.

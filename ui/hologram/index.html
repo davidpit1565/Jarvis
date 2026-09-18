@@ -763,7 +763,13 @@
 
   function buildHeadWireframe() {
     const WIDTH_SEGS = 28, HEIGHT_SEGS = 20;
-    const sphere = new THREE.SphereGeometry(HEAD_R, WIDTH_SEGS, HEIGHT_SEGS);
+    // thetaLength < PI cuts the sphere off before its south pole — a
+    // real chin ends in a small rounded rim (right where the neck picks
+    // up), not a point. A plain full sphere always converges bottom
+    // vertices to one exact point no matter how the taper below is
+    // tuned, which is what kept reading as a witch-chin funnel instead
+    // of a human jaw.
+    const sphere = new THREE.SphereGeometry(HEAD_R, WIDTH_SEGS, HEIGHT_SEGS, 0, Math.PI * 2, 0, Math.PI * 0.9);
     const posAttr = sphere.attributes.position;
     const v = new THREE.Vector3();
     for (let i = 0; i < posAttr.count; i++) {
