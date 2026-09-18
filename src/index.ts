@@ -42,6 +42,8 @@ import { createCreateCalendarEventTool } from "@/tools/calendar/CreateCalendarEv
 import { createDeleteCalendarEventTool } from "@/tools/calendar/DeleteCalendarEventTool";
 import { GmailClient } from "@/gmail/GmailClient";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
+import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
+import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -133,6 +135,12 @@ function main() {
     : undefined;
   if (gmailClient) {
     toolRegistry.registerTool(createSearchEmailTool(gmailClient));
+  }
+
+  const weatherEnabled = config.weatherLatitude !== undefined && config.weatherLongitude !== undefined;
+  if (weatherEnabled) {
+    const weatherClient = new OpenMeteoClient(config.weatherLatitude!, config.weatherLongitude!);
+    toolRegistry.registerTool(createGetWeatherTool(weatherClient));
   }
 
   toolRegistry.registerTool(readOnlyFileInfoTool);

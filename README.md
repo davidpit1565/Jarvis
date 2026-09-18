@@ -731,6 +731,16 @@ reuse per chat, error-reply fallback) and HTTP routing (secret-token
 verification, malformed JSON, disabled-gateway 404) against the actual
 `Bun.serve` server.
 
+## Weather
+
+Setting `JARVIS_WEATHER_LATITUDE`/`JARVIS_WEATHER_LONGITUDE` (both
+required together) enables **`GET_WEATHER`** (`READ`) — a real current
+temperature/wind/conditions lookup for that one location, via
+[Open-Meteo](https://open-meteo.com)'s free forecast API. No API key, no
+account, no cost — matching this project's "as close to free as possible"
+goal. Find your own coordinates at any map site (right-click → "What's
+here").
+
 ## Live audio waveform (see JARVIS's voice on a call)
 
 Setting `JARVIS_AUDIO_WAVEFORM=true` adds a live waveform to the
@@ -1196,7 +1206,7 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
 - Local tools: `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION`/
   `OPEN_APPLICATION` (device — app name/bundle ID only, and launching a
   named app), memory/reminder/conversation-history/calendar/wake-up-call/
-  `SEARCH_EMAIL` tools (see their own sections above). Real internet search/URL reading
+  `SEARCH_EMAIL`/`GET_WEATHER` tools (see their own sections above). Real internet search/URL reading
   exist separately, as Anthropic's own server-side `web_search`/`web_fetch`
   tools (opt-in via `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not
   through this registry — see "Real internet search" / "Real URL reading"

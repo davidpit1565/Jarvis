@@ -32,6 +32,8 @@ const ENV_KEYS = [
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_WEBHOOK_SECRET",
   "TELEGRAM_ALLOWED_CHAT_IDS",
+  "JARVIS_WEATHER_LATITUDE",
+  "JARVIS_WEATHER_LONGITUDE",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -334,6 +336,32 @@ describe("loadConfig", () => {
 
   test("throws when only the Telegram webhook secret is set, without the bot token", () => {
     process.env.TELEGRAM_WEBHOOK_SECRET = "shh";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("loads weather settings when both latitude and longitude are set", () => {
+    process.env.JARVIS_WEATHER_LATITUDE = "32.08";
+    process.env.JARVIS_WEATHER_LONGITUDE = "34.78";
+
+    const config = loadConfig();
+    expect(config.weatherLatitude).toBe(32.08);
+    expect(config.weatherLongitude).toBe(34.78);
+  });
+
+  test("leaves weather settings undefined when neither is set", () => {
+    const config = loadConfig();
+    expect(config.weatherLatitude).toBeUndefined();
+    expect(config.weatherLongitude).toBeUndefined();
+  });
+
+  test("throws when only weather latitude is set, without longitude", () => {
+    process.env.JARVIS_WEATHER_LATITUDE = "32.08";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("throws when weather latitude is not a valid number", () => {
+    process.env.JARVIS_WEATHER_LATITUDE = "not-a-number";
+    process.env.JARVIS_WEATHER_LONGITUDE = "34.78";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 });

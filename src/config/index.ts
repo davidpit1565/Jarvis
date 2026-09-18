@@ -90,6 +90,14 @@ export interface JarvisConfig {
   /** Numeric Telegram chat IDs allowed to talk to the bot; empty/unset means any chat that finds/adds the bot can. */
   telegramAllowedChatIds?: string[];
   /**
+   * Both required together to enable GET_WEATHER — a real, free (Open-Meteo,
+   * no API key) current-weather lookup for one fixed location, since a
+   * personal assistant only ever needs to know the weather where its one
+   * user actually is.
+   */
+  weatherLatitude?: number;
+  weatherLongitude?: number;
+  /**
    * Shared secret required on POST /pairing/approve. Mandatory once the
    * phone gateway is configured, since that makes this same server
    * reachable from the public internet — without it, the pairing code
@@ -277,6 +285,22 @@ export function loadConfig(): JarvisConfig {
     );
   }
 
+  const weatherLatitudeRaw = process.env.JARVIS_WEATHER_LATITUDE?.trim();
+  const weatherLongitudeRaw = process.env.JARVIS_WEATHER_LONGITUDE?.trim();
+  const weatherLatitude = weatherLatitudeRaw ? Number(weatherLatitudeRaw) : undefined;
+  const weatherLongitude = weatherLongitudeRaw ? Number(weatherLongitudeRaw) : undefined;
+
+  if ((weatherLatitudeRaw && Number.isNaN(weatherLatitude)) || (weatherLongitudeRaw && Number.isNaN(weatherLongitude))) {
+    throw new ConfigError("JARVIS_WEATHER_LATITUDE and JARVIS_WEATHER_LONGITUDE must be valid numbers");
+  }
+
+  const weatherFieldsSet = [weatherLatitude, weatherLongitude].filter((v) => v !== undefined).length;
+  if (weatherFieldsSet > 0 && weatherFieldsSet < 2) {
+    throw new ConfigError(
+      "JARVIS_WEATHER_LATITUDE and JARVIS_WEATHER_LONGITUDE must both be set together (or neither) to enable weather lookups"
+    );
+  }
+
   return {
     anthropicApiKey,
     port,
@@ -316,6 +340,8 @@ export function loadConfig(): JarvisConfig {
     telegramBotToken,
     telegramWebhookSecret,
     telegramAllowedChatIds,
+    weatherLatitude,
+    weatherLongitude,
   };
 }
 
