@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline/promises";
+import { dirname } from "node:path";
 import { loadConfig } from "@/config";
 import { EventBus } from "@/core/events/EventBus";
 import { ConversationManager } from "@/core/conversation/ConversationManager";
@@ -203,6 +204,7 @@ function main() {
     memoryStore,
     toolAuditLog,
     conversationHistoryStore,
+    dataDirectory: config.memoryDbPath === ":memory:" ? undefined : dirname(config.memoryDbPath),
     backupDbPaths: [
       config.memoryDbPath,
       config.webauthnDbPath,

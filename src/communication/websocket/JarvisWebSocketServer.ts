@@ -1,6 +1,7 @@
 import type { Server, ServerWebSocket } from "bun";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
+import { writeFileSync, unlinkSync } from "node:fs";
 import packageJson from "../../../package.json";
 import type { EventBus } from "@/core/events/EventBus";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
@@ -109,6 +110,15 @@ export interface JarvisWebSocketServerDependencies {
   toolAuditLog?: ToolAuditLog;
   /** Optional: exposes a conversation-history turn count in GET /status. */
   conversationHistoryStore?: ConversationHistoryStore;
+  /**
+   * Directory the SQLite databases actually live in. When set, GET /health
+   * does a real write+delete test against it on every check, so a full or
+   * unwritable data volume shows up as `status: "degraded"` (HTTP 503)
+   * instead of every store's writes silently failing while Fly.io's health
+   * check keeps reporting the machine as fine. Omit for :memory: setups
+   * (tests, local dev without persistence) where there's no disk to check.
+   */
+  dataDirectory?: string;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -224,17 +234,22 @@ export class JarvisWebSocketServer {
           // since that's exactly the situation an uptime monitor or Fly.io
           // deploy health check needs to detect isn't a full outage.
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/health") {
-            return Response.json({
-              status: "ok",
-              uptimeSeconds: process.uptime(),
-              version: packageJson.version,
-              // Unset unless the deploy pipeline sets it explicitly — there's
-              // no CI here to inject a git SHA automatically. Documented in
-              // .env.example / README for anyone who wants to wire it up
-              // (e.g. `fly secrets set JARVIS_COMMIT_SHA=$(git rev-parse HEAD)`
-              // before `fly deploy`) to confirm exactly which commit is live.
-              commit: process.env.JARVIS_COMMIT_SHA ?? null,
-            });
+            const diskWritable = isDataDirectoryWritable(this.deps.dataDirectory);
+            return Response.json(
+              {
+                status: diskWritable ? "ok" : "degraded",
+                uptimeSeconds: process.uptime(),
+                version: packageJson.version,
+                // Unset unless the deploy pipeline sets it explicitly — there's
+                // no CI here to inject a git SHA automatically. Documented in
+                // .env.example / README for anyone who wants to wire it up
+                // (e.g. `fly secrets set JARVIS_COMMIT_SHA=$(git rev-parse HEAD)`
+                // before `fly deploy`) to confirm exactly which commit is live.
+                commit: process.env.JARVIS_COMMIT_SHA ?? null,
+                diskWritable,
+              },
+              { status: diskWritable ? 200 : 503 }
+            );
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
@@ -822,6 +837,26 @@ export class JarvisWebSocketServer {
     payload: { command: string; args?: Record<string, unknown> }
   ): void {
     ws.send(JSON.stringify(makeEnvelope(type, payload, deviceId, randomUUID())));
+  }
+}
+
+/**
+ * A real write+delete test against the data directory, not just a stat
+ * check — a full disk can leave a directory perfectly "existing" and
+ * listable while every actual write to it fails with ENOSPC. Returns true
+ * when no directory is configured (e.g. :memory: setups in tests/local
+ * dev), since there's nothing to check and this must never be the reason
+ * a health check without persistence reports unhealthy.
+ */
+function isDataDirectoryWritable(dataDirectory: string | undefined): boolean {
+  if (!dataDirectory) return true;
+  const probePath = join(dataDirectory, ".jarvis-health-check");
+  try {
+    writeFileSync(probePath, "");
+    unlinkSync(probePath);
+    return true;
+  } catch {
+    return false;
   }
 }
 

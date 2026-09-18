@@ -885,6 +885,12 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   `fly secrets set JARVIS_COMMIT_SHA=$(git rev-parse HEAD)` — there's no CI
   here to inject it automatically) for confirming exactly which deployed
   commit is actually live after a redeploy.
+- **`GET /health` actually tests the data volume, not just reports
+  uptime** — every check does a real write-then-delete against the data
+  directory and reports `diskWritable`; a full or unwritable disk now
+  fails the check (`status: "degraded"`, HTTP 503) instead of silently
+  breaking every SQLite write while Fly.io keeps routing traffic to the
+  machine as if nothing were wrong.
 - Both `SIGINT` and `SIGTERM` (what Fly.io/Docker/Kubernetes actually send
   for a normal stop/redeploy) trigger the same graceful shutdown: stop
   accepting connections, close every SQLite store, then exit.

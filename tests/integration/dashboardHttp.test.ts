@@ -1,4 +1,5 @@
 import { describe, test, expect, afterEach } from "bun:test";
+import { mkdirSync, rmSync } from "node:fs";
 import { EventBus } from "@/core/events/EventBus";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
@@ -116,6 +117,51 @@ describe("Dashboard HTTP routes", () => {
     } finally {
       if (original !== undefined) process.env.JARVIS_COMMIT_SHA = original;
     }
+  });
+
+  test("GET /health reports ok/diskWritable=true when the data directory is actually writable", async () => {
+    const dataDirectory = `/tmp/jarvis-health-test-${crypto.randomUUID()}`;
+    mkdirSync(dataDirectory, { recursive: true });
+
+    try {
+      const eventBus = new EventBus();
+      const server = new JarvisWebSocketServer({
+        deviceRegistry: new DeviceRegistry(),
+        deviceConnectionManager: new DeviceConnectionManager(eventBus),
+        pairingService: new PairingService(),
+        eventBus,
+        dataDirectory,
+      });
+      const handle = server.start(0);
+      activeHandle = handle;
+
+      const response = await fetch(`http://localhost:${handle.port}/health`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { status: string; diskWritable: boolean };
+      expect(body.status).toBe("ok");
+      expect(body.diskWritable).toBe(true);
+    } finally {
+      rmSync(dataDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("GET /health reports degraded/503 when the data directory isn't writable", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      dataDirectory: "/nonexistent/jarvis-data-directory-that-does-not-exist",
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/health`);
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { status: string; diskWritable: boolean };
+    expect(body.status).toBe("degraded");
+    expect(body.diskWritable).toBe(false);
   });
 
   test("GET /health reports the configured commit when JARVIS_COMMIT_SHA is set", async () => {
