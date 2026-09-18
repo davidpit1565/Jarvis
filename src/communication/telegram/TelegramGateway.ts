@@ -11,6 +11,32 @@ export type TelegramSessionFactory = (chatId: string) => TelegramSession;
 const TELEGRAM_API_BASE_URL = "https://api.telegram.org/bot";
 const ERROR_MESSAGE = "Sorry, something went wrong on my end. Please try again.";
 
+// Telegram's Bot API rejects any message text over 4096 characters with a
+// 400. Anything JARVIS actually says (a news digest, a long memory/reminder
+// listing) can easily exceed that, so outgoing text is split into chunks
+// this size or smaller before sending.
+const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
+
+/** Splits `text` into chunks Telegram will accept, preferring to break on a newline near the limit. */
+function splitIntoTelegramChunks(text: string): string[] {
+  if (text.length <= TELEGRAM_MAX_MESSAGE_LENGTH) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > TELEGRAM_MAX_MESSAGE_LENGTH) {
+    const window = remaining.slice(0, TELEGRAM_MAX_MESSAGE_LENGTH);
+    const breakAt = window.lastIndexOf("\n");
+    const splitAt = breakAt > 0 ? breakAt : TELEGRAM_MAX_MESSAGE_LENGTH;
+
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).replace(/^\n/, "");
+  }
+
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
 /**
  * A scoped Telegram integration — the user adds this specific bot to
  * specific chats, and JARVIS only ever sees/responds to messages sent to
@@ -80,14 +106,16 @@ export class TelegramGateway {
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
-    const response = await fetch(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text }),
-    });
+    for (const chunk of splitIntoTelegramChunks(text)) {
+      const response = await fetch(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: chunk }),
+      });
 
-    if (!response.ok) {
-      throw new Error(`Telegram sendMessage failed (${response.status}): ${await response.text().catch(() => "")}`);
+      if (!response.ok) {
+        throw new Error(`Telegram sendMessage failed (${response.status}): ${await response.text().catch(() => "")}`);
+      }
     }
   }
 

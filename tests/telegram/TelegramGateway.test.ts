@@ -102,6 +102,55 @@ describe("TelegramGateway.handleUpdate", () => {
   });
 });
 
+describe("TelegramGateway.sendMessage", () => {
+  test("sends a short message as a single request", async () => {
+    const { calls } = stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await gateway.sendMessage("123", "short reply");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.text).toBe("short reply");
+  });
+
+  test("splits a message over Telegram's 4096-character limit into multiple requests", async () => {
+    const { calls } = stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    const longText = "a".repeat(9000);
+    await gateway.sendMessage("123", longText);
+
+    expect(calls.length).toBeGreaterThan(1);
+    for (const call of calls) {
+      expect(call.text.length).toBeLessThanOrEqual(4096);
+    }
+    expect(calls.map((c) => c.text).join("")).toBe(longText);
+  });
+
+  test("prefers to split on a newline near the limit rather than mid-word", async () => {
+    const { calls } = stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    const firstLine = "x".repeat(4000);
+    const secondLine = "y".repeat(4000);
+    const longText = `${firstLine}\n${secondLine}`;
+    await gateway.sendMessage("123", longText);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.text).toBe(firstLine);
+    expect(calls[1]!.text).toBe(secondLine);
+  });
+});
+
 describe("TelegramGateway.awaitConfirmation", () => {
   test("resolves true when the chat replies yes", async () => {
     const { calls } = stubSendMessage();

@@ -855,6 +855,11 @@ anything outside a chat this specific bot was added to, and (once
 - Only plain text messages are handled — photos, stickers, and other
   message types are silently ignored, since there's nothing meaningful for
   JARVIS to do with them today.
+- Outgoing messages over Telegram's 4096-character limit are split into
+  multiple sequential messages (preferring to break on a newline near the
+  limit) instead of failing outright — a long news digest, memory listing,
+  or search-results summary used to trigger a silent "something went wrong"
+  reply instead of ever reaching you.
 - `/start` and `/help` are answered locally with a canned greeting/help
   message, never reaching the brain — so tapping "start" on a new chat
   doesn't burn a real API call on a message the bot can answer itself.
