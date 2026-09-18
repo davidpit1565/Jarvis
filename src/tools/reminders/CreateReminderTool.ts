@@ -15,6 +15,18 @@ function isValidIsoDate(value: string): boolean {
   return !Number.isNaN(Date.parse(value));
 }
 
+// The model resolves phrases like "tomorrow morning" into an absolute
+// timestamp itself; a date-math slip (wrong day, AM/PM, timezone, year)
+// would otherwise silently create a reminder that's already overdue the
+// moment it's created. A small grace period avoids rejecting a
+// legitimate "remind me right now" due to processing lag between the
+// model resolving "now" and this call actually running.
+const PAST_DUE_AT_GRACE_MS = 60_000;
+
+function isTooFarInThePast(isoDate: string): boolean {
+  return Date.parse(isoDate) < Date.now() - PAST_DUE_AT_GRACE_MS;
+}
+
 /**
  * Lets Claude create a reminder/task — the concrete mechanism behind "JARVIS,
  * remind me to..." A reminder is deliberately distinct from a memory: it has
@@ -55,6 +67,9 @@ export function createCreateReminderTool(reminderStore: ReminderStore): LocalToo
       if (input.dueAt !== undefined) {
         if (typeof input.dueAt !== "string" || !isValidIsoDate(input.dueAt)) {
           return { success: false, error: "dueAt must be a valid ISO 8601 timestamp" };
+        }
+        if (isTooFarInThePast(input.dueAt)) {
+          return { success: false, error: "dueAt must not be in the past — resolve relative phrases to the actual future date" };
         }
       }
       if (input.recurrence !== undefined) {

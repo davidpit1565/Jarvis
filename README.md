@@ -147,7 +147,11 @@ reminder has a lifecycle (pending, then completed), a memory doesn't:
   reminder/task, optionally with an ISO 8601 `dueAt` Claude resolves from
   whatever the user actually said ("remind me at 6pm"). Optionally pass
   `recurrence` (`"daily"`/`"weekly"`, requires `dueAt`) for a repeating
-  reminder — "remind me every day to take my medication."
+  reminder — "remind me every day to take my medication." A `dueAt`
+  that's already in the past (a date-math slip resolving a relative
+  phrase like "tomorrow morning" — wrong day, AM/PM, timezone, year) is
+  rejected rather than silently creating a reminder that's overdue the
+  moment it's made; `UPDATE_REMINDER`'s `dueAt` gets the same check.
 - **`LIST_REMINDERS`** (`READ`) — pending reminders by default, soonest-due
   first (undated ones last); pass `includeCompleted` to see everything.
 - **`COMPLETE_REMINDER`** (`SAFE_ACTION`, standing-granted) — marks one

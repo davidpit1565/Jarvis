@@ -16,6 +16,15 @@ function isValidIsoDate(value: string): boolean {
   return !Number.isNaN(Date.parse(value));
 }
 
+// Same reasoning as CreateReminderTool: a date-math slip when resolving
+// a relative phrase would otherwise silently move a reminder to a time
+// that's already past. Small grace period for processing lag.
+const PAST_DUE_AT_GRACE_MS = 60_000;
+
+function isTooFarInThePast(isoDate: string): boolean {
+  return Date.parse(isoDate) < Date.now() - PAST_DUE_AT_GRACE_MS;
+}
+
 /**
  * Edits an existing reminder's text and/or due date in place — e.g.
  * "actually make that 7pm instead" or fixing a typo. Without this, the
@@ -58,6 +67,9 @@ export function createUpdateReminderTool(reminderStore: ReminderStore): LocalToo
       if (input.dueAt !== undefined && input.dueAt !== null) {
         if (typeof input.dueAt !== "string" || !isValidIsoDate(input.dueAt)) {
           return { success: false, error: "dueAt must be a valid ISO 8601 timestamp, or null" };
+        }
+        if (isTooFarInThePast(input.dueAt)) {
+          return { success: false, error: "dueAt must not be in the past — resolve relative phrases to the actual future date" };
         }
       }
       if (input.recurrence !== undefined && input.recurrence !== null && !VALID_RECURRENCES.includes(input.recurrence)) {

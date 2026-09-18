@@ -56,6 +56,14 @@ describe("CREATE_REMINDER tool", () => {
     expect(result.success).toBe(false);
   });
 
+  test("rejects a dueAt already in the past — a likely date-math slip resolving a relative phrase", async () => {
+    const tool = createCreateReminderTool(store);
+    const result = await tool.execute({ text: "Task", dueAt: "2020-01-01T00:00:00.000Z" }, context);
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/must not be in the past/);
+    expect(store.list()).toHaveLength(0);
+  });
+
   test("creates a recurring reminder with a dueAt", async () => {
     const tool = createCreateReminderTool(store);
     const result = await tool.execute(
@@ -277,6 +285,15 @@ describe("UPDATE_REMINDER tool", () => {
     const tool = createUpdateReminderTool(store);
     const result = await tool.execute({ id: record.id, dueAt: "not-a-date" }, context);
     expect(result.success).toBe(false);
+  });
+
+  test("rejects a new dueAt already in the past", async () => {
+    const record = store.create({ text: "Task" });
+    const tool = createUpdateReminderTool(store);
+    const result = await tool.execute({ id: record.id, dueAt: "2020-01-01T00:00:00.000Z" }, context);
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/must not be in the past/);
+    expect(store.get(record.id)?.dueAt).toBeNull();
   });
 
   test("sets recurrence on an existing reminder", async () => {
