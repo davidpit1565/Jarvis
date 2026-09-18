@@ -739,7 +739,13 @@ automated from here):
   it in place, or take it off, not just read it. `UPDATE_CALENDAR_EVENT`
   sends a partial PATCH (only the given fields), so editing an event's
   time doesn't require deleting and recreating it — which would drop its
-  attendees/description for no reason. The OAuth
+  attendees/description for no reason. It validates that the resulting
+  start/end (computed against the event's existing values for whichever
+  side isn't being changed, not just the fields given in this call) still
+  has end after start, the same check `CREATE_CALENDAR_EVENT` already
+  had — so moving just the start past an unchanged end (or vice versa)
+  fails locally with a clear error instead of round-tripping to Google
+  for an inverted event or an opaque remote error. The OAuth
   scope requested is full `.../auth/calendar` (not `.readonly`) for
   exactly this reason — the permission-level check at the tool layer is
   what actually gates when writes happen, not the OAuth scope.

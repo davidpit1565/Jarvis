@@ -73,6 +73,16 @@ export function createUpdateCalendarEventTool(
       try {
         const eventBeforeUpdate = await calendarClient.getEvent(input.eventId).catch(() => null);
 
+        const effectiveStart = input.start ?? eventBeforeUpdate?.start;
+        const effectiveEnd = input.end ?? eventBeforeUpdate?.end;
+        if (
+          effectiveStart &&
+          effectiveEnd &&
+          Date.parse(effectiveEnd) <= Date.parse(effectiveStart)
+        ) {
+          return { success: false, error: "end must be after start" };
+        }
+
         const event = await calendarClient.updateEvent(input.eventId, {
           summary: input.summary,
           start: input.start,

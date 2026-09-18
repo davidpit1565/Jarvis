@@ -73,7 +73,7 @@ describe("UPDATE_CALENDAR_EVENT tool", () => {
         );
       }
       return new Response(
-        JSON.stringify({ id: "ev1", summary: "Dentist", location: "Clinic", start: { dateTime: "2026-01-20T10:00:00Z" }, end: { dateTime: "2026-01-20T10:30:00Z" } }),
+        JSON.stringify({ id: "ev1", summary: "Dentist", location: "Clinic", start: { dateTime: "2026-01-20T10:00:00Z" }, end: { dateTime: "2026-01-20T11:45:00Z" } }),
         { status: 200 }
       );
     }) as unknown as typeof fetch;
@@ -85,8 +85,54 @@ describe("UPDATE_CALENDAR_EVENT tool", () => {
     expect(undoStore.takeLast()).toEqual({
       type: "calendar_event_updated",
       eventId: "ev1",
-      previous: { summary: "Dentist", start: "2026-01-20T10:00:00Z", end: "2026-01-20T10:30:00Z", location: "Clinic" },
+      previous: { summary: "Dentist", start: "2026-01-20T10:00:00Z", end: "2026-01-20T11:45:00Z", location: "Clinic" },
     });
+  });
+
+  test("rejects when the new start and end are both provided with end before start", async () => {
+    const tool = createUpdateCalendarEventTool(makeClient());
+    const result = await tool.execute(
+      { eventId: "ev1", start: "2026-01-20T12:00:00Z", end: "2026-01-20T11:00:00Z" },
+      context
+    );
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/end must be after start/);
+  });
+
+  test("rejects a new start that would push past the event's existing (unchanged) end", async () => {
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        throw new Error("should not reach the API — validation should reject first");
+      }
+      return new Response(
+        JSON.stringify({ id: "ev1", summary: "Dentist", start: { dateTime: "2026-01-20T10:00:00Z" }, end: { dateTime: "2026-01-20T10:30:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const tool = createUpdateCalendarEventTool(makeClient());
+    const result = await tool.execute({ eventId: "ev1", start: "2026-01-20T11:00:00Z" }, context);
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/end must be after start/);
+  });
+
+  test("rejects a new end that would land before the event's existing (unchanged) start", async () => {
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        throw new Error("should not reach the API — validation should reject first");
+      }
+      return new Response(
+        JSON.stringify({ id: "ev1", summary: "Dentist", start: { dateTime: "2026-01-20T10:00:00Z" }, end: { dateTime: "2026-01-20T10:30:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const tool = createUpdateCalendarEventTool(makeClient());
+    const result = await tool.execute({ eventId: "ev1", end: "2026-01-20T09:00:00Z" }, context);
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/end must be after start/);
   });
 
   test("still updates successfully even if fetching the event's previous values fails", async () => {
