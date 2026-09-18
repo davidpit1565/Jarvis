@@ -40,24 +40,36 @@ are combined:
 
 1. **A wireframe grid head** — a procedurally-displaced low-poly sphere,
    proportioned like an actual human head/face (taller than wide, not a
-   rounder "ball" — an earlier attempt at fixing an alien-looking head
-   overcorrected into that): tapered to a rounded jaw/chin, a brow ridge,
-   a real protruding nose (bridge, tip bulb, and nostril flare — not one
-   soft general bump), a cheekbone ridge with a cheek hollow just below
-   it, two small bright eye spheres seated on the surface curve, and a
-   short wireframe neck underneath instead of the head floating with
-   nothing below it. Rendered as glowing `THREE.LineSegments` edges plus a
-   bright dot at every vertex — the structural layer that reads as
-   "digital face" at a glance, matching the reference video's dominant
-   visual (a triangulated mesh grid, not a photo-like cloud of noise).
-2. **A particle shimmer layer wrapped onto that same surface** — `index.html`
+   rounder "ball"): tapered to a rounded jaw/chin, a brow ridge, a real
+   protruding nose (bridge, tip bulb, nostril flare), a cheekbone ridge
+   with a cheek hollow just below it, and a short wireframe neck
+   underneath instead of the head floating with nothing below it.
+   Rendered as glowing `THREE.LineSegments` edges plus a bright dot at
+   every vertex — the base "digital head" layer.
+2. **Explicit facial line art on top of that** (`buildFace()` in
+   `index.html`) — after a frame-by-frame rewatch of the reference video
+   at 4fps (not just a couple of stills), its face turned out to be
+   drawn with actual anatomical contour lines — almond eye outlines with
+   a bright pupil glint, eyebrow arcs, a nose bridge/nostril outline, and
+   a cheek-to-jaw boundary line — with the grid mesh layered on top for
+   texture, not vertex sculpting alone carrying the likeness. Each line
+   is a small `THREE.Line`/`THREE.LineLoop` whose points are projected
+   onto the same front-surface ellipsoid the wireframe head is built
+   from (via a shared `projectToSurface()` helper), so every feature
+   sits flush on the head's actual curve at any proportion. This is the
+   single biggest fix for "reads as an alien, not a face" — vertex bumps
+   alone were barely visible head-on and only showed up in profile.
+3. **A particle shimmer layer wrapped onto that same surface** — `index.html`
    separately draws a stylized face mask (head silhouette, eye sockets,
    nose/mouth shading, a procedural circuit-trace overlay) onto an
    offscreen 2D canvas, then samples that canvas's pixel alpha to place
-   several thousand `THREE.Points` particles. Each particle is projected
-   onto the front surface of the *same* ellipsoid the wireframe head is
-   built from (not a flat plane with random depth jitter, which is what
-   the first version of this did) — so it actually follows the head's
+   several thousand `THREE.Points` particles (reduced from an original
+   26,000 to 15,000 once the explicit face lines above existed — a denser
+   shimmer was competing with them rather than supporting texture). Each
+   particle is projected onto the front surface of the *same* ellipsoid
+   the wireframe head is built from (not a flat plane with random depth
+   jitter, which is what the first version of this did) — so it actually
+   follows the head's
    curvature and looks correct from an angle instead of reading as a flat
    card floating in front of the wireframe.
 

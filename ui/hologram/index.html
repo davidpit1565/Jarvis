@@ -588,7 +588,11 @@
 
   const MASK_SIZE = 340;
   const mask = buildFaceMask(MASK_SIZE);
-  const { positions: rawPos, alphas } = sampleParticles(mask, MASK_SIZE, 26000);
+  // Reduced from 26000: with real facial contour lines now drawn
+  // explicitly (eyes, brows, nose, cheeks — see buildFace() below), a
+  // dense particle shimmer on top was visual noise competing with them
+  // rather than supporting texture.
+  const { positions: rawPos, alphas } = sampleParticles(mask, MASK_SIZE, 15000);
   const count = alphas.length;
 
   const geometry = new THREE.BufferGeometry();
@@ -784,7 +788,7 @@
 
     const wireGeo = new THREE.WireframeGeometry(sphere);
     const wireMat = new THREE.LineBasicMaterial({
-      color: 0x8fe8f5, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending,
+      color: 0x8fe8f5, transparent: true, opacity: 0.26, blending: THREE.AdditiveBlending,
     });
     const wireframe = new THREE.LineSegments(wireGeo, wireMat);
 
@@ -823,27 +827,87 @@
   headWire.add(buildNeck());
 
   /* ---------------------------------------------------------------
-   * 2b-i. Eyes. A smooth grid dome with no eyes reads as an alien, not a
-   *     face — two small bright spheres seated on the same front-surface
-   *     curve as the wireframe (same ellipsoid formula, evaluated at the
-   *     eye position) fixes that with almost no cost.
+   * 2b-i. Face line art. A uniform grid dome with only subtle vertex
+   *     bumps reads as alien/featureless from the front — the reference
+   *     video's face is actually drawn with explicit anatomical contour
+   *     lines (almond eye outlines, brow arcs, a nose outline, cheek/jaw
+   *     lines) with the grid layered on top for texture, not vertex
+   *     sculpting alone carrying the likeness. This reproduces that:
+   *     each feature is a small `THREE.Line`/`THREE.LineLoop` whose
+   *     points are projected onto the same front-surface ellipsoid the
+   *     wireframe head itself is built from (so it sits flush on the
+   *     surface, not floating in front of it), addressed in xf/yf
+   *     fractions of the head's own half-width/half-height so it stays
+   *     correct if HEAD_SX/SY/SZ change again.
    * ------------------------------------------------------------- */
-  function buildEyes() {
-    const ex = HEAD_R * HEAD_SX * 0.4;
-    const ey = HEAD_R * HEAD_SY * 0.2;
-    const nx = ex / (HEAD_R * HEAD_SX), nyv = ey / (HEAD_R * HEAD_SY);
-    const ez = HEAD_R * HEAD_SZ * Math.sqrt(Math.max(0, 1 - nx * nx - nyv * nyv)) * 1.05;
-    const eyeGeo = new THREE.SphereGeometry(0.036, 12, 12);
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xeafcff });
+  function projectToSurface(xf, yf, lift) {
+    const x = xf * rx, y = yf * ry;
+    const nx = x / rx, nyv = y / ry;
+    const under = Math.max(0, 1 - nx * nx - nyv * nyv);
+    const z = rz * Math.sqrt(under) * (lift || 1.03);
+    return new THREE.Vector3(x, y, z);
+  }
+  function buildFaceLine(pointsFrac, opts) {
+    opts = opts || {};
+    const pts = pointsFrac.map(([xf, yf]) => projectToSurface(xf, yf, opts.lift));
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({
+      color: opts.color || 0xdfffff, transparent: true,
+      opacity: opts.opacity != null ? opts.opacity : 0.75, blending: THREE.AdditiveBlending,
+    });
+    return opts.loop ? new THREE.LineLoop(geo, mat) : new THREE.Line(geo, mat);
+  }
+
+  function buildFace() {
     const group = new THREE.Group();
+    const EYE_X = 0.4, EYE_Y = 0.2;
+
+    for (const sx of [-1, 1]) {
+      // Eyebrow: a short arc above the eye.
+      group.add(buildFaceLine([
+        [sx * 0.24, EYE_Y + 0.11], [sx * 0.4, EYE_Y + 0.15], [sx * 0.54, EYE_Y + 0.1],
+      ], { opacity: 0.85, color: 0xffffff }));
+
+      // Almond eye outline — the actual "eye" shape, not just a dot.
+      const eyePts = [];
+      for (let k = 0; k <= 10; k++) {
+        const a = (k / 10) * Math.PI * 2;
+        eyePts.push([sx * (EYE_X + Math.cos(a) * 0.095), EYE_Y + Math.sin(a) * 0.042]);
+      }
+      group.add(buildFaceLine(eyePts, { loop: true, opacity: 1, color: 0xffffff, lift: 1.06 }));
+
+      // Nostril flare, connected to the shared nose bridge/tip below.
+      group.add(buildFaceLine([
+        [0, -0.16], [sx * 0.07, -0.21], [sx * 0.1, -0.14],
+      ], { opacity: 0.9, color: 0xffffff, lift: 1.06 }));
+
+      // Cheek -> jaw contour: the face's outer boundary line, from near
+      // the temple down past the cheekbone to the chin.
+      group.add(buildFaceLine([
+        [sx * 0.78, 0.18], [sx * 0.72, -0.1], [sx * 0.6, -0.42],
+        [sx * 0.4, -0.68], [sx * 0.15, -0.8],
+      ], { opacity: 0.8, color: 0xffffff, lift: 1.05 }));
+    }
+
+    // Nose bridge, straight down the center from brow to tip.
+    group.add(buildFaceLine([[0, 0.26], [0, 0.05], [0, -0.16]], { opacity: 0.9, color: 0xffffff, lift: 1.06 }));
+
+    // Bright "pupil" glint inside each eye — small emissive sphere seated
+    // on the same surface, at the eye's own centre.
+    const nx = EYE_X, nyv = EYE_Y;
+    const under = Math.max(0, 1 - nx * nx - nyv * nyv);
+    const ez = rz * Math.sqrt(under) * 1.06;
+    const eyeGeo = new THREE.SphereGeometry(0.032, 12, 12);
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xeafcff });
     for (const sx of [-1, 1]) {
       const eye = new THREE.Mesh(eyeGeo, eyeMat);
-      eye.position.set(sx * ex, ey, ez);
+      eye.position.set(sx * EYE_X * rx, EYE_Y * ry, ez);
       group.add(eye);
     }
+
     return group;
   }
-  headWire.add(buildEyes());
+  headWire.add(buildFace());
 
   /* ---------------------------------------------------------------
    * 2b-i-b. A visible "brain" inside the translucent skull — the
@@ -857,9 +921,12 @@
    *     when Core is actually running and thinking, not a fixed pulse.
    * ------------------------------------------------------------- */
   function buildBrain() {
-    const bx = rx * 0.72, by = ry * 0.62, bz = rz * 0.66;
-    const centerY = ry * 0.1;
-    const centerZ = -rz * 0.05;
+    // Pulled back and shrunk a little further behind the eye/nose/cheek
+    // plane than a first pass had it — otherwise the brain particles
+    // visually bleed into and bury the face contour lines built above.
+    const bx = rx * 0.65, by = ry * 0.5, bz = rz * 0.5;
+    const centerY = ry * 0.15;
+    const centerZ = -rz * 0.22;
     const n = 900;
     // Base (resting) position per particle, plus a random phase/speed so
     // each one drifts on its own sine cycle — this is what gives the
