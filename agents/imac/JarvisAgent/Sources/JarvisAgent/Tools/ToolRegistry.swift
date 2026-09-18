@@ -36,6 +36,7 @@ final class AgentToolRegistry {
     static func buildDefault() -> AgentToolRegistry {
         let registry = AgentToolRegistry()
         registry.register(GetActiveApplicationTool.make())
+        registry.register(OpenApplicationTool.make())
         return registry
     }
 }

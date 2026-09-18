@@ -504,13 +504,14 @@ export class JarvisWebSocketServer {
    * overrides an existing, deliberately-set role.
    */
   private maybeAssignRequestedRole(deviceId: string): void {
-    const { deviceRegistry } = this.deps;
+    const { deviceRegistry, eventBus } = this.deps;
     const device = deviceRegistry.getDevice(deviceId);
     if (!device || device.role !== null || !device.requestedRole) return;
 
     try {
       deviceRegistry.setRole(deviceId, device.requestedRole);
       console.log(`[jarvis] device "${device.name}" (${deviceId}) granted role: ${device.requestedRole}`);
+      eventBus.emit("device.roleGranted", { deviceId, role: device.requestedRole });
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown reason";
       console.log(`[jarvis] could not grant requested role to "${deviceId}": ${message}`);

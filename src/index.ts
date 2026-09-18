@@ -10,6 +10,7 @@ import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionService } from "@/permissions/PermissionService";
 import { readOnlyFileInfoTool } from "@/tools/filesystem/ReadOnlyFileInfoTool";
 import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationTool";
+import { openApplicationTool } from "@/tools/system/OpenApplicationTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
@@ -123,6 +124,7 @@ function main() {
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
+  toolRegistry.registerTool(openApplicationTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
   toolRegistry.registerTool(createDeleteMemoryTool(memoryStore));
@@ -156,6 +158,30 @@ function main() {
   }
 
   const deviceRegistry = new DeviceRegistry(config.deviceRegistryDbPath);
+
+  // Device-scoped SAFE_ACTION tools a device automatically gets once it's
+  // trusted as "primary" — that trust decision (a human approving its
+  // pairing code, then granting it the primary role) is already the
+  // deliberate, one-time consent step; piggybacking standing tool access
+  // on it, rather than inventing a second separate consent step per tool,
+  // keeps this consistent with how every other primary-device capability
+  // already works. Granted both when a device newly receives the role
+  // (via "device.roleGranted") and, since PermissionService's grants are
+  // in-memory only, re-derived at startup for any device that already
+  // has the role persisted from before a restart.
+  const STANDARD_PRIMARY_DEVICE_TOOLS = ["OPEN_APPLICATION"];
+  function grantPrimaryDeviceTools(deviceId: string): void {
+    for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {
+      permissionService.grant(DEFAULT_USER_ID, toolId, deviceId);
+    }
+  }
+  eventBus.on("device.roleGranted", ({ deviceId, role }) => {
+    if (role === "primary") grantPrimaryDeviceTools(deviceId);
+  });
+  for (const device of deviceRegistry.listDevices()) {
+    if (device.role === "primary") grantPrimaryDeviceTools(device.id);
+  }
+
   const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const conversation = new ConversationManager(eventBus);

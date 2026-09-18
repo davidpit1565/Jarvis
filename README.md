@@ -1081,20 +1081,33 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
 
 ## Current limitations
 
-- Local tools: `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION` (device —
-  app name/bundle ID only), `SAVE_MEMORY`/`SEARCH_MEMORY` (persistent
-  key/value memory), `CREATE_REMINDER`/`LIST_REMINDERS`/`COMPLETE_REMINDER`
-  (persistent tasks), and `SEARCH_CONVERSATION_HISTORY` (persistent
-  transcript search). Real internet search/URL reading exist separately,
-  as Anthropic's own server-side `web_search`/`web_fetch` tools (opt-in via
-  `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not through this
-  registry — see "Real internet search" / "Real URL reading" above.
-- `PermissionService` is the one remaining in-memory registry (its two
-  standing grants are re-applied at every startup in `src/index.ts`, so
-  this has no practical effect today). Every other store — memory,
-  reminders, activity log, conversation history, WebAuthn credentials,
-  paired-device credentials, and device identity/role — persists across
-  restarts.
+- Local tools: `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION`/
+  `OPEN_APPLICATION` (device — app name/bundle ID only, and launching a
+  named app), memory/reminder/conversation-history/calendar/wake-up-call
+  tools (see their own sections above). Real internet search/URL reading
+  exist separately, as Anthropic's own server-side `web_search`/`web_fetch`
+  tools (opt-in via `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not
+  through this registry — see "Real internet search" / "Real URL reading"
+  above.
+- **No arbitrary automation, by design.** There is no generic "run this
+  shell command"/AppleScript/settings-change tool, and never will be —
+  every capability the Agent can execute is a named, compiled-in Swift
+  function (see `agents/imac/JarvisAgent/Sources/JarvisAgent/Tools/ToolRegistry.swift`'s
+  own comment on this), not an interpreter for arbitrary instructions.
+  `OPEN_APPLICATION` only launches a named app via the OS's own public
+  API — it cannot run a command, a script, or anything else. This is a
+  deliberate security boundary, not a missing feature: an assistant with
+  unrestricted computer control and a compromised admin token/machine
+  becomes a weapon against its own user, not just an inconvenience.
+- `PermissionService`'s grants are in-memory, not persisted — but
+  device-scoped `SAFE_ACTION` tools (currently `OPEN_APPLICATION`) are
+  automatically re-granted for any device already holding the `primary`
+  role at startup, and granted fresh the moment a device newly receives
+  that role (`"device.roleGranted"` event) — so this has no practical
+  effect once a device is actually trusted as primary. Every other
+  store — memory, reminders, activity log, conversation history, WebAuthn
+  credentials, paired-device credentials, calendar OAuth tokens, wake-up
+  call schedule, and device identity/role — persists across restarts.
 - The phone gateway's caller allowlist (`TWILIO_ALLOWED_CALLERS`) is
   optional and off by default — if you don't set it, anyone who calls the
   configured Twilio number reaches the same JARVIS conversation as the

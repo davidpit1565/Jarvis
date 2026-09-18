@@ -1,6 +1,6 @@
 import type { ToolCallRequest, ConversationMessage } from "./conversation";
 import type { PermissionCheckResult } from "./permissions";
-import type { Device } from "./devices";
+import type { Device, DeviceRole } from "./devices";
 import type { ToolResult } from "./tools";
 import type { TokenUsage } from "./brain";
 
@@ -21,6 +21,7 @@ export interface JarvisEventMap {
   "device.registered": { device: Device };
   "device.connected": { deviceId: string };
   "device.disconnected": { deviceId: string; reason: string };
+  "device.roleGranted": { deviceId: string; role: DeviceRole };
 }
 
 export type JarvisEventName = keyof JarvisEventMap;

@@ -18,7 +18,7 @@ function setupServer() {
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const server = new JarvisWebSocketServer({ deviceRegistry, deviceConnectionManager, pairingService, eventBus });
   const handle = server.start(0); // port 0: let the OS pick a free port
-  return { handle, port: handle.port, deviceRegistry, deviceConnectionManager, pairingService };
+  return { handle, port: handle.port, deviceRegistry, deviceConnectionManager, pairingService, eventBus };
 }
 
 describe("Pairing approval over HTTP", () => {
@@ -97,8 +97,11 @@ describe("Pairing approval over HTTP", () => {
   });
 
   test("approving a device that requested primary actually grants it the role", async () => {
-    const { handle, port, deviceRegistry } = setupServer();
+    const { handle, port, deviceRegistry, eventBus } = setupServer();
     activeHandle = handle;
+
+    const roleGrantedEvents: { deviceId: string; role: string }[] = [];
+    eventBus.on("device.roleGranted", (event) => roleGrantedEvents.push(event));
 
     const deviceId = "test-imac-primary";
     const ws = new WebSocket(`ws://localhost:${port}`);
@@ -142,6 +145,7 @@ describe("Pairing approval over HTTP", () => {
 
     expect(deviceRegistry.getDevice(deviceId)?.role).toBe("primary");
     expect(deviceRegistry.getPrimaryDevice()?.id).toBe(deviceId);
+    expect(roleGrantedEvents).toEqual([{ deviceId, role: "primary" }]);
 
     ws.close();
   });
