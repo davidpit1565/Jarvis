@@ -6,6 +6,12 @@ export interface JarvisConfig {
   webauthnDbPath: string;
   /** Path to the SQLite database storing reminders/tasks. */
   remindersDbPath: string;
+  /**
+   * Path to the SQLite database backing the dashboard's activity log, so
+   * recent activity survives a restart/redeploy instead of resetting to
+   * "Nothing yet." every time.
+   */
+  activityLogDbPath: string;
   /** Both must be set together to enable the optional Twilio phone gateway. */
   twilioAuthToken?: string;
   /**
@@ -89,6 +95,7 @@ export function loadConfig(): JarvisConfig {
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
   const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
   const remindersDbPath = process.env.JARVIS_REMINDERS_DB_PATH ?? "./data/jarvis-reminders.sqlite";
+  const activityLogDbPath = process.env.JARVIS_ACTIVITY_LOG_DB_PATH ?? "./data/jarvis-activity.sqlite";
 
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new ConfigError(`Invalid JARVIS_PORT: must be an integer between 1 and 65535`);
@@ -140,6 +147,7 @@ export function loadConfig(): JarvisConfig {
     memoryDbPath,
     webauthnDbPath,
     remindersDbPath,
+    activityLogDbPath,
     twilioAuthToken,
     twilioPublicBaseUrl,
     twilioAllowedCallers,

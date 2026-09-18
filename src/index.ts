@@ -42,7 +42,7 @@ function main() {
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
   const reminderStore = new ReminderStore(config.remindersDbPath);
-  const activityLog = new ActivityLog();
+  const activityLog = new ActivityLog(config.activityLogDbPath);
   const webAuthnStore = new WebAuthnStore(config.webauthnDbPath);
   const webAuthnService = new WebAuthnService(webAuthnStore);
   const sessionStore = new SessionStore();
@@ -142,7 +142,7 @@ function main() {
     sessionStore,
     audioLevelBroadcaster,
   });
-  wsServer.start(config.port);
+  const httpHandle = wsServer.start(config.port);
 
   eventBus.on("brain.request", () => {
     activityLog.record("JARVIS is thinking…", "thinking");
@@ -200,13 +200,27 @@ function main() {
     );
   }
 
-  process.on("SIGINT", () => {
+  // SIGTERM is what Fly.io/Docker/Kubernetes actually send for a normal
+  // stop or redeploy — SIGINT (Ctrl+C) was the only signal handled before,
+  // so a cloud restart previously skipped this cleanup entirely and relied
+  // on the runtime being killed out from under open SQLite handles/sockets
+  // instead of closing them itself. Both signals now do the same graceful
+  // shutdown: stop accepting new connections, close every store, then exit.
+  let shuttingDown = false;
+  function shutdown(signal: string): void {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n[jarvis] received ${signal}, shutting down…`);
+    httpHandle.stop();
     memoryStore.close();
     reminderStore.close();
+    activityLog.close();
     webAuthnStore.close();
     rl.close();
     process.exit(0);
-  });
+  }
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 
   runChatLoop(orchestrator);
 

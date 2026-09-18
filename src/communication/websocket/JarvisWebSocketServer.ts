@@ -133,6 +133,15 @@ export class JarvisWebSocketServer {
           // never intercept that or every device connection would break.
           const isUpgradeRequest = req.headers.get("upgrade")?.toLowerCase() === "websocket";
 
+          // Deliberately unauthenticated and independent of everything else
+          // (Face ID lock, admin token, phone gateway config) — a health
+          // check has to keep working even if those are misconfigured,
+          // since that's exactly the situation an uptime monitor or Fly.io
+          // deploy health check needs to detect isn't a full outage.
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/health") {
+            return Response.json({ status: "ok", uptimeSeconds: process.uptime() });
+          }
+
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
             return this.handleStatusJson();
           }

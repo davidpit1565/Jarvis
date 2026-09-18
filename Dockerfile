@@ -17,4 +17,11 @@ COPY tsconfig.json ./
 ENV NODE_ENV=production
 EXPOSE 4770
 
+# Lets `docker ps` and any Docker-aware host (Railway, Render, a plain VPS
+# running `docker run --health-cmd`) see whether the process is actually
+# serving, not just alive — Fly.io uses its own [[http_service.checks]] in
+# fly.toml instead, since Fly doesn't read Docker HEALTHCHECK.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+  CMD bun -e "fetch('http://localhost:4770/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+
 CMD ["bun", "run", "src/index.ts"]

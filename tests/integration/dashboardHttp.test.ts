@@ -48,6 +48,24 @@ describe("Dashboard HTTP routes", () => {
     expect(body).toContain("/status");
   });
 
+  test("GET /health reports ok with an uptime, unauthenticated", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/health`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { status: string; uptimeSeconds: number };
+    expect(body.status).toBe("ok");
+    expect(typeof body.uptimeSeconds).toBe("number");
+  });
+
   test("GET /dashboard serves the same page as GET /", async () => {
     const eventBus = new EventBus();
     const server = new JarvisWebSocketServer({
