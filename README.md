@@ -130,6 +130,20 @@ reminder has a lifecycle (pending, then completed), a memory doesn't:
 - **`COMPLETE_REMINDER`** (`SAFE_ACTION`, standing-granted) — marks one
   done by id.
 
+## Conversation history search
+
+Every user/assistant text turn (tool calls/results are excluded — protocol
+noise, not something worth searching for) is durably logged to SQLite
+(`src/history/ConversationHistoryStore.ts`, `JARVIS_CONVERSATION_HISTORY_DB_PATH`)
+via the existing `conversation.message` event, across every conversation
+JARVIS has ever had — the terminal chat and every phone call alike, since
+they all share one `EventBus`. **`SEARCH_CONVERSATION_HISTORY`** (`READ`)
+lets Claude answer "what did we talk about" / "did I already tell you..."
+with an actual case-insensitive substring search over that transcript,
+instead of only seeing the current thread. Distinct from `SEARCH_MEMORY`
+(explicit facts Claude chose to save) and reminders (tasks) — this is the
+raw record of what was actually said.
+
 ## Confirmation flow for CONFIRM / DANGEROUS tools
 
 `CONFIRM` and `DANGEROUS` tools now have a real approval path instead of

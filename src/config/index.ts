@@ -12,6 +12,8 @@ export interface JarvisConfig {
    * "Nothing yet." every time.
    */
   activityLogDbPath: string;
+  /** Path to the SQLite database storing the full conversation transcript, for SEARCH_CONVERSATION_HISTORY. */
+  conversationHistoryDbPath: string;
   /** Both must be set together to enable the optional Twilio phone gateway. */
   twilioAuthToken?: string;
   /**
@@ -96,6 +98,8 @@ export function loadConfig(): JarvisConfig {
   const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
   const remindersDbPath = process.env.JARVIS_REMINDERS_DB_PATH ?? "./data/jarvis-reminders.sqlite";
   const activityLogDbPath = process.env.JARVIS_ACTIVITY_LOG_DB_PATH ?? "./data/jarvis-activity.sqlite";
+  const conversationHistoryDbPath =
+    process.env.JARVIS_CONVERSATION_HISTORY_DB_PATH ?? "./data/jarvis-conversation-history.sqlite";
 
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new ConfigError(`Invalid JARVIS_PORT: must be an integer between 1 and 65535`);
@@ -148,6 +152,7 @@ export function loadConfig(): JarvisConfig {
     webauthnDbPath,
     remindersDbPath,
     activityLogDbPath,
+    conversationHistoryDbPath,
     twilioAuthToken,
     twilioPublicBaseUrl,
     twilioAllowedCallers,

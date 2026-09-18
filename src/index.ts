@@ -16,6 +16,8 @@ import { ReminderStore } from "@/reminders/ReminderStore";
 import { createCreateReminderTool } from "@/tools/reminders/CreateReminderTool";
 import { createListRemindersTool } from "@/tools/reminders/ListRemindersTool";
 import { createCompleteReminderTool } from "@/tools/reminders/CompleteReminderTool";
+import { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
+import { createSearchConversationHistoryTool } from "@/tools/history/SearchConversationHistoryTool";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -42,6 +44,7 @@ function main() {
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
   const reminderStore = new ReminderStore(config.remindersDbPath);
+  const conversationHistoryStore = new ConversationHistoryStore(config.conversationHistoryDbPath);
   const activityLog = new ActivityLog(config.activityLogDbPath);
   const webAuthnStore = new WebAuthnStore(config.webauthnDbPath);
   const webAuthnService = new WebAuthnService(webAuthnStore);
@@ -54,6 +57,7 @@ function main() {
   toolRegistry.registerTool(createCreateReminderTool(reminderStore));
   toolRegistry.registerTool(createListRemindersTool(reminderStore));
   toolRegistry.registerTool(createCompleteReminderTool(reminderStore));
+  toolRegistry.registerTool(createSearchConversationHistoryTool(conversationHistoryStore));
 
   const permissionService = new PermissionService();
   // This is a single-user personal assistant, not a multi-tenant system —
@@ -178,6 +182,16 @@ function main() {
     activityLog.record(`Device disconnected: ${deviceId} (${reason})`);
   });
 
+  eventBus.on("conversation.message", ({ message }) => {
+    // Only user/assistant text turns are worth searching later — tool
+    // calls/results are protocol noise, not something a human would ever
+    // search for ("what did we talk about"), and are already visible via
+    // the activity log's own tool.executed entries.
+    if (message.role === "user" || message.role === "assistant") {
+      conversationHistoryStore.record(message.role, message.content);
+    }
+  });
+
   eventBus.on("tool.executed", ({ toolName, result }) => {
     activityLog.record(`${toolName} → ${result.success ? "ok" : `failed: ${result.error}`}`);
   });
@@ -214,6 +228,7 @@ function main() {
     httpHandle.stop();
     memoryStore.close();
     reminderStore.close();
+    conversationHistoryStore.close();
     activityLog.close();
     webAuthnStore.close();
     rl.close();
