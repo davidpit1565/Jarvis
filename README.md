@@ -461,7 +461,13 @@ connected, closes its socket right away rather than waiting for it to
 disconnect naturally. The device keeps showing up in `GET /status` (its
 history isn't erased) but can never reconnect without a brand-new pairing
 code approved again. This is the only way to cut a device off without
-shell access to wherever Core actually runs.
+shell access to wherever Core actually runs. It also emits a
+`"device.revoked"` event that clears the device's standing
+`PermissionService` grants (`OPEN_APPLICATION`/`QUIT_APPLICATION`/
+`OPEN_URL`) — defense in depth: those grants otherwise never expire on
+their own, so this ensures a revoked device that somehow reconnected
+anyway (a bug elsewhere in the pairing/auth path) can't silently keep
+acting on its old standing trust.
 
 ## Phone gateway (call JARVIS)
 

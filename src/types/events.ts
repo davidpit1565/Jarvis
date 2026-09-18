@@ -22,6 +22,7 @@ export interface JarvisEventMap {
   "device.connected": { deviceId: string };
   "device.disconnected": { deviceId: string; reason: string };
   "device.roleGranted": { deviceId: string; role: DeviceRole };
+  "device.revoked": { deviceId: string };
 }
 
 export type JarvisEventName = keyof JarvisEventMap;

@@ -610,14 +610,22 @@ export class JarvisWebSocketServer {
    * device off doesn't wait for it to naturally disconnect first. The
    * device keeps showing up in GET /status (its history isn't erased) but
    * can never reconnect without a brand-new pairing code approved again.
+   *
+   * Also emits "device.revoked" so index.ts can clear this device's
+   * standing PermissionService grants (OPEN_APPLICATION etc.) — defense
+   * in depth: those grants otherwise stay valid forever since nothing
+   * else ever clears them, so a revoked device that somehow reconnected
+   * (a bug elsewhere in the pairing/auth path) shouldn't silently keep
+   * its old standing trust.
    */
   revokeDevice(deviceId: string): void {
-    const { pairingService, deviceConnectionManager } = this.deps;
+    const { pairingService, deviceConnectionManager, eventBus } = this.deps;
     pairingService.revoke(deviceId);
     if (deviceConnectionManager.hasConnection(deviceId)) {
       deviceConnectionManager.removeConnection(deviceId, "revoked");
     }
     this.pendingConnections.delete(deviceId);
+    eventBus.emit("device.revoked", { deviceId });
   }
 
   /**

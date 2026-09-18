@@ -250,6 +250,15 @@ function main() {
   for (const device of deviceRegistry.listDevices()) {
     if (device.role === "primary") grantPrimaryDeviceTools(device.id);
   }
+  // Defense in depth: a revoked device's standing tool grants otherwise
+  // stay valid forever, since nothing else ever clears them. If it ever
+  // reconnected anyway (a bug elsewhere in the pairing/auth path), it
+  // shouldn't silently keep acting on its old standing trust.
+  eventBus.on("device.revoked", ({ deviceId }) => {
+    for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {
+      permissionService.revoke(DEFAULT_USER_ID, toolId, deviceId);
+    }
+  });
 
   const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);

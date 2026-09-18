@@ -18,7 +18,7 @@ function setupServer(adminToken?: string) {
     adminToken,
   });
   const handle = server.start(0);
-  return { handle, port: handle.port, pairingService, deviceConnectionManager };
+  return { handle, port: handle.port, pairingService, deviceConnectionManager, eventBus };
 }
 
 /** Registers a device, waits for its pairing code, approves it, and returns its credential. */
@@ -168,6 +168,23 @@ describe("Device revocation over HTTP", () => {
     });
 
     expect(response.status).toBe(200);
+  });
+
+  test("emits device.revoked on the event bus so grants can be cleared", async () => {
+    const { handle, port, eventBus } = setupServer();
+    activeHandle = handle;
+    const deviceId = "revoke-emits-event";
+
+    const revoked: string[] = [];
+    eventBus.on("device.revoked", ({ deviceId }) => revoked.push(deviceId));
+
+    await fetch(`http://localhost:${port}/pairing/revoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId }),
+    });
+
+    expect(revoked).toEqual([deviceId]);
   });
 
   test("rejects a malformed body", async () => {
