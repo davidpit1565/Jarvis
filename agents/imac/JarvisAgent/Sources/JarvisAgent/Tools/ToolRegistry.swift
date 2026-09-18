@@ -48,6 +48,7 @@ final class AgentToolRegistry {
         registry.register(ScheduleMacNotificationTool.make())
         registry.register(ComposeEmailDraftTool.make())
         registry.register(ClickElementTool.make())
+        registry.register(TypeTextTool.make())
         registry.register(SetVolumeTool.make())
         registry.register(ToggleWifiTool.make())
         registry.register(CreateFolderTool.make())
