@@ -23,17 +23,34 @@ import {
 
 type SocketData =
   | { kind: "device"; deviceId: string | null }
+  // Read-only spectator on /observer (e.g. the hologram UI) — never part
+  // of the device protocol, just mirrored every EventBus event.
+  | { kind: "observer" }
   | { kind: "audio-ingest" }
   | { kind: "audio-viewer" };
 
 type DeviceSocket = ServerWebSocket<Extract<SocketData, { kind: "device" }>>;
+
+/** Every EventBus event this server will mirror out to observer sockets. */
+const OBSERVABLE_EVENTS = [
+  "conversation.message",
+  "brain.request",
+  "brain.response",
+  "tool.requested",
+  "tool.executed",
+  "tool.dispatched",
+  "permission.checked",
+  "device.registered",
+  "device.connected",
+  "device.disconnected",
+] as const;
 
 export interface JarvisWebSocketServerDependencies {
   deviceRegistry: DeviceRegistry;
   deviceConnectionManager: DeviceConnectionManager;
   pairingService: PairingService;
   eventBus: EventBus;
-  /** Optional: enables tool names/targets in the GET /status dashboard feed. */
+  /** Optional: enables tool names/targets in the GET /status feed (dashboard and hologram UI both poll it). */
   toolRegistry?: ToolRegistry;
   /** Optional: recent activity feed shown on the dashboard. */
   activityLog?: ActivityLog;
@@ -111,7 +128,33 @@ export class JarvisWebSocketServer {
   /** Sockets that have sent device.register but aren't authenticated yet, keyed by deviceId. */
   private pendingConnections: Map<string, DeviceSocket> = new Map();
 
-  constructor(private readonly deps: JarvisWebSocketServerDependencies) {}
+  /**
+   * Read-only spectators connected on `/observer` (e.g. the hologram UI in
+   * `ui/hologram/`) — never part of the device protocol, never trusted with
+   * device.register/tool.result, just mirrored every EventBus event so a
+   * human can watch what Core is actually doing in real time.
+   */
+  private observers: Set<ServerWebSocket<SocketData>> = new Set();
+
+  constructor(private readonly deps: JarvisWebSocketServerDependencies) {
+    this.subscribeObserverBroadcast();
+  }
+
+  private subscribeObserverBroadcast(): void {
+    for (const eventName of OBSERVABLE_EVENTS) {
+      this.deps.eventBus.on(eventName, (payload) => {
+        this.broadcastToObservers(eventName, payload);
+      });
+    }
+  }
+
+  private broadcastToObservers(type: string, payload: unknown): void {
+    if (this.observers.size === 0) return;
+    const message = JSON.stringify({ type, payload, timestamp: new Date().toISOString() });
+    for (const ws of this.observers) {
+      ws.send(message);
+    }
+  }
 
   start(port: number) {
     return Bun.serve<SocketData>({
@@ -129,8 +172,9 @@ export class JarvisWebSocketServer {
           }
 
           // A WebSocket handshake is itself an HTTP GET with an Upgrade
-          // header — device agents connect to "/", so these routes must
-          // never intercept that or every device connection would break.
+          // header — device agents (and the hologram UI's /observer
+          // socket) connect this way, so these routes must never
+          // intercept that or every connection would break.
           const isUpgradeRequest = req.headers.get("upgrade")?.toLowerCase() === "websocket";
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
@@ -149,6 +193,12 @@ export class JarvisWebSocketServer {
             const { webAuthnService } = this.deps;
             const locked = webAuthnService?.hasCredentials() && !this.hasValidSession(req);
             return new Response(locked ? LOCK_HTML : DASHBOARD_HTML, { headers: { "Content-Type": "text/html" } });
+          }
+
+          if (isUpgradeRequest && url.pathname === "/observer") {
+            return server.upgrade(req, { data: { kind: "observer" } })
+              ? undefined
+              : new Response("Upgrade failed", { status: 400 });
           }
 
           if (isUpgradeRequest && url.pathname === "/voice/audio-stream") {
@@ -185,13 +235,16 @@ export class JarvisWebSocketServer {
       websocket: {
         open: (ws) => {
           const socket = ws as ServerWebSocket<SocketData>;
-          if (socket.data.kind === "audio-viewer") {
+          if (socket.data.kind === "observer") {
+            this.observers.add(socket);
+          } else if (socket.data.kind === "audio-viewer") {
             this.deps.audioLevelBroadcaster?.addViewer(socket);
           }
           // Device sockets: a no-op here — only meaningful once they register.
         },
         message: (ws, raw) => {
           const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.kind === "observer") return; // read-only channel, nothing to accept from it
           if (socket.data.kind === "audio-ingest") {
             this.handleAudioStreamMessage(raw.toString());
             return;
@@ -203,6 +256,10 @@ export class JarvisWebSocketServer {
         },
         close: (ws) => {
           const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.kind === "observer") {
+            this.observers.delete(socket);
+            return;
+          }
           if (socket.data.kind === "device") {
             const deviceId = socket.data.deviceId;
             if (deviceId) {
@@ -446,7 +503,14 @@ export class JarvisWebSocketServer {
     audioLevelBroadcaster.broadcast(computeAudioLevel(payload), track);
   }
 
-  /** GET /status — read-only JSON feed the dashboard polls; no auth today, matching the rest of Core. */
+  /**
+   * GET /status — read-only JSON feed both the dashboard and the hologram
+   * UI (`ui/hologram/`) poll; no auth today, matching the rest of Core's
+   * HTTP surface. `observers` (the hologram's own /observer spectator
+   * count) was added on top of the dashboard's existing shape rather than
+   * given a separate endpoint, so both consumers share one real contract
+   * instead of two endpoints drifting apart.
+   */
   private handleStatusJson(): Response {
     const { deviceRegistry, toolRegistry, phoneGateway, activityLog, webAuthnService, audioLevelBroadcaster } =
       this.deps;
@@ -465,14 +529,25 @@ export class JarvisWebSocketServer {
       target: tool.target,
     }));
 
-    return Response.json({
-      devices,
-      tools,
-      phoneGatewayEnabled: Boolean(phoneGateway),
-      activity: activityLog?.list() ?? [],
-      webAuthnConfigured: webAuthnService?.hasCredentials() ?? true,
-      audioWaveformEnabled: Boolean(audioLevelBroadcaster),
-    });
+    return Response.json(
+      {
+        devices,
+        tools,
+        phoneGatewayEnabled: Boolean(phoneGateway),
+        activity: activityLog?.list() ?? [],
+        webAuthnConfigured: webAuthnService?.hasCredentials() ?? true,
+        audioWaveformEnabled: Boolean(audioLevelBroadcaster),
+        observers: this.observers.size,
+      },
+      // CORS: the hologram UI is typically opened as a `file://` page (or
+      // a different origin/port than Core), so the browser needs this
+      // header to let a same-effort fetch() read the response at all —
+      // without it the request still reaches the server (as curl shows)
+      // but the browser silently blocks the page from seeing the body.
+      // Fine to leave wide open: this endpoint is already unauthenticated
+      // and intentionally exposes only aggregate/summary data, no secrets.
+      { headers: { "Access-Control-Allow-Origin": "*" } }
+    );
   }
 
   private hasValidSession(req: Request): boolean {
