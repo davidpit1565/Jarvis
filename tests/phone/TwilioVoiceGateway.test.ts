@@ -329,4 +329,75 @@ describe("TwilioVoiceGateway", () => {
 
     expect(body).toContain("<Gather");
   });
+
+  test("handleWakeUpCallConnected speaks the brain's own opening line", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused (regular session)"), userId: "local-user" }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => ({
+        orchestrator: makeStubOrchestrator(async () => "Good morning! You have a meeting at 9."),
+        userId: "local-user",
+      })
+    );
+
+    const response = await gateway.handleWakeUpCallConnected("CA-wakeup");
+    const body = await response.text();
+
+    expect(body).toContain("Good morning! You have a meeting at 9.");
+    expect(body).toContain("<Gather");
+  });
+
+  test("handleWakeUpCallConnected falls back to a canned greeting if the brain call fails", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused"), userId: "local-user" }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => ({
+        orchestrator: makeStubOrchestrator(async () => {
+          throw new Error("boom");
+        }),
+        userId: "local-user",
+      })
+    );
+
+    const response = await gateway.handleWakeUpCallConnected("CA-wakeup-2");
+    const body = await response.text();
+
+    expect(body).toContain("Good morning");
+    expect(body).toContain("<Gather");
+  });
+
+  test("a follow-up handleGather for a wake-up call's CallSid finds the same session", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused (regular session)"), userId: "local-user" }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => ({ orchestrator: makeStubOrchestrator(async () => "wake-up opener"), userId: "local-user" })
+    );
+
+    await gateway.handleWakeUpCallConnected("CA-wakeup-3");
+    const response = await gateway.handleGather("CA-wakeup-3", "I'm up");
+    const body = await response.text();
+
+    expect(body).toContain("<Gather");
+  });
+
+  test("defaults the wake-up session factory to the regular one when not given", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "same factory response"),
+      userId: "local-user",
+    }));
+
+    const response = await gateway.handleWakeUpCallConnected("CA-wakeup-4");
+    const body = await response.text();
+
+    expect(body).toContain("same factory response");
+  });
 });

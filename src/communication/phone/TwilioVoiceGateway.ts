@@ -16,6 +16,18 @@ const ERROR_EN = "Sorry, something went wrong on my end. Please try again.";
 const ERROR_HE = "משהו השתבש אצלי. נסה שוב בבקשה.";
 const GOODBYE_EN = "I didn't hear anything. Goodbye.";
 const GOODBYE_HE = "לא שמעתי כלום. להתראות.";
+const WAKEUP_FALLBACK_EN = "Good morning! Time to wake up.";
+const WAKEUP_FALLBACK_HE = "בוקר טוב! הגיע הזמן לקום.";
+/**
+ * What kicks off a wake-up call's conversation — sent to the Orchestrator
+ * as if it were a user turn, so Claude generates the actual spoken
+ * greeting itself (personalized from real reminders/memory context) rather
+ * than JARVIS always saying the same canned line every single morning.
+ */
+const WAKEUP_TRIGGER_MESSAGE =
+  "(This is a scheduled wake-up call JARVIS just placed. Open the conversation now: greet the user, tell " +
+  "them it's time to get up, and give one real, specific, motivating reason from what you actually know " +
+  "about today. Keep it short and energetic, spoken aloud on a phone call.)";
 const CALL_LIMIT_EN = "This call has gone on for a while — let's continue over text. Goodbye for now.";
 const CALL_LIMIT_HE = "השיחה הזו נמשכת כבר זמן רב — נמשיך בהודעות. להתראות בינתיים.";
 
@@ -116,7 +128,15 @@ export class TwilioVoiceGateway {
      */
     private readonly audioStreamUrl?: string,
     hebrewVoice: string = DEFAULT_HEBREW_VOICE,
-    gatherLanguage: string = DEFAULT_GATHER_LANGUAGE
+    gatherLanguage: string = DEFAULT_GATHER_LANGUAGE,
+    /**
+     * Builds the session for an outbound wake-up call — separate from
+     * `createSession` so it can carry a distinct `channelContext` telling
+     * Claude this is a call JARVIS itself placed, not one it answered.
+     * Falls back to `createSession` when omitted (the wake-up feature
+     * still works, just without that extra framing).
+     */
+    private readonly createWakeUpSession: PhoneSessionFactory = createSession
   ) {
     this.voice = voice;
     this.hebrewVoice = hebrewVoice;
@@ -165,6 +185,30 @@ export class TwilioVoiceGateway {
       ? `<Start><Stream url="${escapeXml(this.audioStreamUrl)}" track="both_tracks" /></Start>`
       : "";
     return twimlResponse(streamTag + this.gatherPrompt(this.sayBilingual(GREETING_HE, GREETING_EN)));
+  }
+
+  /**
+   * Twilio calls this once an outbound wake-up call is answered (see
+   * TwilioOutboundCaller.placeCall's `twimlUrl`). Unlike handleIncomingCall,
+   * JARVIS speaks first: it asks its own brain for an opening line (so the
+   * greeting is personalized from real reminders/memory context, not a
+   * fixed canned sentence) before gathering the user's spoken reply. Once
+   * the session is created, every following /voice/gather POST for this
+   * callSid finds it in `this.sessions` exactly like an inbound call would.
+   */
+  async handleWakeUpCallConnected(callSid: string): Promise<Response> {
+    const session = this.createWakeUpSession(callSid);
+    this.sessions.set(callSid, session);
+
+    let spokenTwiml: string;
+    try {
+      const responseText = await session.orchestrator.handleUserMessage(session.userId, WAKEUP_TRIGGER_MESSAGE);
+      spokenTwiml = this.sayTag(responseText);
+    } catch {
+      spokenTwiml = this.sayBilingual(WAKEUP_FALLBACK_HE, WAKEUP_FALLBACK_EN);
+    }
+
+    return twimlResponse(this.gatherPrompt(spokenTwiml));
   }
 
   /** POST /voice/gather — Twilio calls this with the caller's transcribed speech. */

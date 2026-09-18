@@ -539,6 +539,37 @@ above, which hasn't been done in this environment. In particular, the
 actual sound of `Polly.Matthew-Neural` (or any other voice) hasn't been
 heard — only that the TwiML correctly requests it.
 
+## Wake-up calls (JARVIS calls you)
+
+The phone gateway above is inbound-only — you call JARVIS. Setting
+`TWILIO_ACCOUNT_SID`, `TWILIO_FROM_NUMBER`, and `JARVIS_OWNER_PHONE_NUMBER`
+(all three together, on top of the phone gateway's own `TWILIO_AUTH_TOKEN`/
+`TWILIO_PUBLIC_BASE_URL`) enables the reverse: JARVIS actually calls *you*,
+on a recurring daily schedule — a real alarm clock replacement, not just
+another reminder notification.
+
+- **`CREATE_WAKEUP_CALL`** (`SAFE_ACTION`, standing-granted) — just tell
+  JARVIS "wake me up at 7am every day" and it schedules a recurring daily
+  call at that time (`src/wakeup/WakeUpCallStore.ts`,
+  `JARVIS_WAKEUP_CALL_DB_PATH`). **`LIST_WAKEUP_CALLS`** (`READ`) and
+  **`DELETE_WAKEUP_CALL`** (`SAFE_ACTION`, standing-granted) round out
+  managing the schedule entirely through conversation.
+- A scheduler tick every 30 seconds (`src/index.ts`) checks the schedule
+  against the current time in `JARVIS_TIMEZONE` and places any due call
+  via `TwilioOutboundCaller` (Twilio's REST API) — idempotent by design
+  (`lastTriggeredDate` per entry), so an occasional double tick can never
+  double-dial.
+- When you answer, JARVIS doesn't play a canned recording — it asks its
+  own brain for an opening line first (via the same `channelContext`
+  mechanism used for regular calls, but framed as "you placed this call,
+  not the user"), so the greeting is genuinely personalized from whatever
+  reminders/memory are actually relevant that day. If you push back
+  ("I'm tired"), it's explicitly instructed to persuade you further with
+  another real, specific reason rather than immediately backing off —
+  the way a determined friend would, not a snooze button.
+- Real Twilio per-minute cost applies to every call actually placed —
+  same pricing as the inbound gateway, just outbound-initiated.
+
 ## Live audio waveform (see JARVIS's voice on a call)
 
 Setting `JARVIS_AUDIO_WAVEFORM=true` adds a live waveform to the
@@ -693,6 +724,12 @@ and תחפש לי את האתר של Apple"*). This is owned entirely by the
 conversational layer (`ClaudeBrain` + a fixed system prompt) — the
 `ToolRegistry`, `DeviceRegistry`, and wire protocol are English-only and
 contain no language-detection logic, by design.
+
+An explicit instruction always overrides the detected language: "answer
+me in Hebrew" holds for the rest of the conversation even if you keep
+typing/speaking in English afterward, and a lasting version of it ("always
+answer me in...") gets saved via `SAVE_MEMORY` so it holds in future
+conversations too, not just the current one.
 
 ## Security controls
 

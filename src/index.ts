@@ -26,6 +26,12 @@ import { createUpdateReminderTool } from "@/tools/reminders/UpdateReminderTool";
 import { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import { createSearchConversationHistoryTool } from "@/tools/history/SearchConversationHistoryTool";
 import { createClearConversationHistoryTool } from "@/tools/history/ClearConversationHistoryTool";
+import { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
+import { getDueWakeUpCalls, formatTimeOfDay, formatDateKey } from "@/wakeup/getDueWakeUpCalls";
+import { createCreateWakeUpCallTool } from "@/tools/wakeup/CreateWakeUpCallTool";
+import { createListWakeUpCallsTool } from "@/tools/wakeup/ListWakeUpCallsTool";
+import { createDeleteWakeUpCallTool } from "@/tools/wakeup/DeleteWakeUpCallTool";
+import { TwilioOutboundCaller } from "@/communication/phone/TwilioOutboundCaller";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -164,6 +170,44 @@ function main() {
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
 
+  const wakeUpCallsEnabled = Boolean(
+    config.twilioAuthToken &&
+      config.twilioPublicBaseUrl &&
+      config.twilioAccountSid &&
+      config.twilioFromNumber &&
+      config.ownerPhoneNumber
+  );
+  const wakeUpCallStore = new WakeUpCallStore(config.wakeUpCallDbPath);
+
+  // A wake-up call gets its own conversation thread like any other phone
+  // call, but with a distinct channelContext: JARVIS placed this call
+  // itself (the user didn't call in), and its whole point is to actually
+  // get them out of bed, persuading further if they push back, using
+  // whatever real context (reminders, memory) is actually relevant today —
+  // not the same "how can I help" framing as an inbound call.
+  function createWakeUpPhoneSession(_callSid: string): PhoneSession {
+    const phoneConversation = new ConversationManager(eventBus);
+    const phoneOrchestrator = new Orchestrator({
+      brain,
+      conversation: phoneConversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService,
+      channelContext:
+        "This is a scheduled wake-up call that JARVIS itself just placed — the user didn't call in, JARVIS " +
+        "called them. Open by greeting them and telling them it's time to get up, giving one real, specific, " +
+        "motivating reason pulled from what you actually know (check reminders/memory for anything relevant " +
+        "today — a meeting, a task, a workout). If they push back or say they're tired, don't just accept it: " +
+        "persuade them further with another real, specific reason, the way a determined friend would, rather " +
+        "than immediately backing off. Keep replies short and energetic — this is a live phone call.",
+      contextProvider: () => buildContextNote(config, reminderStore),
+    });
+    return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
+  }
+
   // Media Streams is a real, small extra Twilio cost (~$0.004/min on top
   // of call minutes) — only wired up when explicitly enabled, and only
   // meaningful once the phone gateway itself is configured.
@@ -180,9 +224,51 @@ function main() {
           config.twilioVoice,
           audioStreamUrl,
           config.twilioVoiceHebrew,
-          config.twilioGatherLanguage
+          config.twilioGatherLanguage,
+          createWakeUpPhoneSession
         )
       : undefined;
+
+  let wakeUpInterval: ReturnType<typeof setInterval> | undefined;
+  if (wakeUpCallsEnabled) {
+    toolRegistry.registerTool(createCreateWakeUpCallTool(wakeUpCallStore));
+    toolRegistry.registerTool(createListWakeUpCallsTool(wakeUpCallStore));
+    toolRegistry.registerTool(createDeleteWakeUpCallTool(wakeUpCallStore));
+    permissionService.grant(DEFAULT_USER_ID, "CREATE_WAKEUP_CALL");
+    permissionService.grant(DEFAULT_USER_ID, "DELETE_WAKEUP_CALL");
+
+    const outboundCaller = new TwilioOutboundCaller(
+      config.twilioAccountSid!,
+      config.twilioAuthToken!,
+      config.twilioFromNumber!
+    );
+    const wakeUpTwimlUrl = new URL("/voice/wakeup-connected", config.twilioPublicBaseUrl!).toString();
+
+    // Every 30s rather than tied to setInterval's own drift-prone timing —
+    // WakeUpCallStore's lastTriggeredDate check makes this idempotent, so
+    // a slightly early/late or occasionally doubled tick never double-dials.
+    wakeUpInterval = setInterval(() => {
+      const now = new Date();
+      const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
+      const todayDateStr = formatDateKey(now, config.timezone);
+      const due = getDueWakeUpCalls(wakeUpCallStore.list(), nowTimeOfDay, todayDateStr);
+
+      for (const call of due) {
+        outboundCaller
+          .placeCall(config.ownerPhoneNumber!, wakeUpTwimlUrl)
+          .then(() => {
+            wakeUpCallStore.markTriggered(call.id, todayDateStr);
+            activityLog.record(`Placed wake-up call${call.label ? ` (${call.label})` : ""}`);
+          })
+          .catch((error) => {
+            console.error(
+              `[jarvis] failed to place wake-up call ${call.id}:`,
+              error instanceof Error ? error.message : String(error)
+            );
+          });
+      }
+    }, 30_000);
+  }
 
   const wsServer = new JarvisWebSocketServer({
     deviceRegistry,
@@ -215,6 +301,7 @@ function main() {
       config.deviceRegistryDbPath,
       config.toolAuditLogDbPath,
       config.tokenUsageDbPath,
+      config.wakeUpCallDbPath,
     ],
   });
   const httpHandle = wsServer.start(config.port);
@@ -310,6 +397,8 @@ function main() {
     deviceRegistry.close();
     pairingService.close();
     webAuthnStore.close();
+    wakeUpCallStore.close();
+    if (wakeUpInterval) clearInterval(wakeUpInterval);
     rl.close();
     process.exit(0);
   }

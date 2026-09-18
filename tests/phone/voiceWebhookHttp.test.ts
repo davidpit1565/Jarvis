@@ -74,6 +74,26 @@ describe("Voice webhook HTTP routing", () => {
     expect(body).toContain("<Gather");
   });
 
+  test("a correctly signed wakeup-connected webhook speaks the brain's response and gathers", async () => {
+    const { handle, port } = setupServer(makeStubSessionFactory(async () => "Good morning David, time to get up!"));
+    activeHandle = handle;
+
+    const path = "/voice/wakeup-connected";
+    const params = { CallSid: "CA-wakeup-1" };
+    const signature = sign(`${PUBLIC_BASE_URL}${path}`, params);
+
+    const response = await fetch(`http://localhost:${port}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Twilio-Signature": signature },
+      body: new URLSearchParams(params),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("Good morning David, time to get up!");
+    expect(body).toContain("<Gather");
+  });
+
   test("an unsigned request is rejected with 403", async () => {
     const { handle, port } = setupServer(makeStubSessionFactory(async () => "unused"));
     activeHandle = handle;

@@ -18,6 +18,10 @@ const ENV_KEYS = [
   "JARVIS_WEB_FETCH_MAX_USES",
   "JARVIS_AUDIO_WAVEFORM",
   "JARVIS_TIMEZONE",
+  "TWILIO_ACCOUNT_SID",
+  "TWILIO_FROM_NUMBER",
+  "JARVIS_OWNER_PHONE_NUMBER",
+  "JARVIS_WAKEUP_CALL_DB_PATH",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -80,6 +84,37 @@ describe("loadConfig", () => {
   test("throws when only TWILIO_PUBLIC_BASE_URL is set", () => {
     process.env.TWILIO_PUBLIC_BASE_URL = "https://example.ngrok.io";
     expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("loads outbound call settings when all three are set", () => {
+    process.env.TWILIO_ACCOUNT_SID = "ACxxx";
+    process.env.TWILIO_FROM_NUMBER = "+15005550006";
+    process.env.JARVIS_OWNER_PHONE_NUMBER = "+15551234567";
+
+    const config = loadConfig();
+    expect(config.twilioAccountSid).toBe("ACxxx");
+    expect(config.twilioFromNumber).toBe("+15005550006");
+    expect(config.ownerPhoneNumber).toBe("+15551234567");
+  });
+
+  test("leaves outbound call settings undefined when none are set", () => {
+    const config = loadConfig();
+    expect(config.twilioAccountSid).toBeUndefined();
+    expect(config.twilioFromNumber).toBeUndefined();
+    expect(config.ownerPhoneNumber).toBeUndefined();
+  });
+
+  test("throws when only some outbound call settings are set", () => {
+    process.env.TWILIO_ACCOUNT_SID = "ACxxx";
+    expect(() => loadConfig()).toThrow(ConfigError);
+
+    process.env.TWILIO_FROM_NUMBER = "+15005550006";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults JARVIS_WAKEUP_CALL_DB_PATH", () => {
+    const config = loadConfig();
+    expect(config.wakeUpCallDbPath).toBe("./data/jarvis-wakeup-calls.sqlite");
   });
 
   test("rejects an invalid JARVIS_PORT", () => {

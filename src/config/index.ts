@@ -39,6 +39,19 @@ export interface JarvisConfig {
   twilioPublicBaseUrl?: string;
   /** E.164 numbers allowed to call JARVIS; empty/unset means any caller is let through. */
   twilioAllowedCallers?: string[];
+  /**
+   * Twilio Account SID, the Twilio phone number to call FROM, and the
+   * owner's own phone number to call — all three required together to
+   * enable outbound calls (currently: scheduled wake-up calls). Distinct
+   * from the inbound phone gateway's config above: a Twilio account can
+   * receive calls without ever placing one, so this is opt-in on top of
+   * that, not implied by it.
+   */
+  twilioAccountSid?: string;
+  twilioFromNumber?: string;
+  ownerPhoneNumber?: string;
+  /** Path to the SQLite database storing recurring wake-up/scheduled-call times. */
+  wakeUpCallDbPath: string;
   /** Twilio <Say> voice name (e.g. "Polly.Matthew-Neural"); unset uses the gateway's own default. */
   twilioVoice?: string;
   /**
@@ -162,6 +175,19 @@ export function loadConfig(): JarvisConfig {
 
   const audioWaveformEnabled = process.env.JARVIS_AUDIO_WAVEFORM?.trim().toLowerCase() === "true";
 
+  const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID?.trim() || undefined;
+  const twilioFromNumber = process.env.TWILIO_FROM_NUMBER?.trim() || undefined;
+  const ownerPhoneNumber = process.env.JARVIS_OWNER_PHONE_NUMBER?.trim() || undefined;
+  const wakeUpCallDbPath = process.env.JARVIS_WAKEUP_CALL_DB_PATH ?? "./data/jarvis-wakeup-calls.sqlite";
+
+  const outboundCallFieldsSet = [twilioAccountSid, twilioFromNumber, ownerPhoneNumber].filter(Boolean).length;
+  if (outboundCallFieldsSet > 0 && outboundCallFieldsSet < 3) {
+    throw new ConfigError(
+      "TWILIO_ACCOUNT_SID, TWILIO_FROM_NUMBER, and JARVIS_OWNER_PHONE_NUMBER must all be set together " +
+        "(or none of them) to enable outbound calls (e.g. scheduled wake-up calls)"
+    );
+  }
+
   if (twilioAuthToken && twilioPublicBaseUrl && !adminToken) {
     throw new ConfigError(
       "JARVIS_ADMIN_TOKEN is required once the phone gateway is configured (TWILIO_AUTH_TOKEN/TWILIO_PUBLIC_BASE_URL) — " +
@@ -189,6 +215,10 @@ export function loadConfig(): JarvisConfig {
     twilioVoice,
     twilioVoiceHebrew,
     twilioGatherLanguage,
+    twilioAccountSid,
+    twilioFromNumber,
+    ownerPhoneNumber,
+    wakeUpCallDbPath,
     adminToken,
     webSearchEnabled,
     webSearchMaxUses,

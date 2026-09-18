@@ -532,6 +532,8 @@ export class JarvisWebSocketServer {
         return phoneGateway.handleIncomingCall(callSid);
       case "/voice/gather":
         return await phoneGateway.handleGather(callSid, params.SpeechResult ?? null);
+      case "/voice/wakeup-connected":
+        return await phoneGateway.handleWakeUpCallConnected(callSid);
       case "/voice/status":
         phoneGateway.handleCallEnded(callSid);
         return new Response(null, { status: 204 });
