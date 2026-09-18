@@ -1,3 +1,5 @@
+import { RateLimiter } from "@/communication/websocket/RateLimiter";
+
 export interface ConfirmationRequest {
   toolId: string;
   toolName: string;
@@ -16,6 +18,12 @@ export interface ConfirmationRequest {
 export type ConfirmationPrompter = (request: ConfirmationRequest) => Promise<boolean>;
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+// Generous for a real, occasional DANGEROUS/CONFIRM action, tight enough
+// to stop a compromised/misbehaving channel from hammering the human
+// with repeated confirmation prompts for the same tool (which, on a phone
+// call, means repeated live interruptions, not just log noise).
+const DEFAULT_MAX_ATTEMPTS = 5;
+const DEFAULT_WINDOW_MS = 5 * 60_000;
 
 /**
  * Gatekeeper for CONFIRM/DANGEROUS tools. A standing PermissionService
@@ -28,14 +36,29 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  * phone call, not at the terminal) would hang the whole conversation turn
  * forever. A silent, indefinite hang is worse than a denial the user can
  * just ask again for — so an unanswered confirmation times out to "no".
+ *
+ * Also rate-limited per tool+user (`RateLimiter`, same class used for
+ * pairing/login endpoints): a request past the limit is denied
+ * immediately, without even reaching the prompter — every attempt counts
+ * whether approved or denied, the same defense-in-depth reasoning as the
+ * HTTP rate limits elsewhere in this project.
  */
 export class ConfirmationService {
+  private readonly rateLimiter: RateLimiter;
+
   constructor(
     private readonly prompter: ConfirmationPrompter,
-    private readonly timeoutMs: number = DEFAULT_TIMEOUT_MS
-  ) {}
+    private readonly timeoutMs: number = DEFAULT_TIMEOUT_MS,
+    rateLimiter?: RateLimiter
+  ) {
+    this.rateLimiter = rateLimiter ?? new RateLimiter(DEFAULT_MAX_ATTEMPTS, DEFAULT_WINDOW_MS);
+  }
 
   async requestConfirmation(request: ConfirmationRequest): Promise<boolean> {
+    if (!this.rateLimiter.attempt(`${request.toolId}:${request.userId}`)) {
+      return false;
+    }
+
     return new Promise<boolean>((resolve) => {
       let settled = false;
       const timer = setTimeout(() => {

@@ -227,6 +227,15 @@ being unconditionally denied:
   misheard "yes," someone else picking up the phone), so denying
   outright and having Claude tell the caller to do it from the terminal/
   dashboard instead is the actually-correct behavior here.
+- **Rate-limited per tool+user** (5 attempts per 5 minutes, the same
+  `RateLimiter` class used for pairing/login endpoints): past the limit,
+  a request is denied immediately, without even reaching the prompter.
+  Every attempt counts whether approved or denied — the same
+  defense-in-depth reasoning as the HTTP rate limits elsewhere in this
+  project, aimed at a compromised/misbehaving channel hammering the
+  human with repeated confirmation prompts for the same tool (a real
+  problem on a phone call specifically, where each prompt is a live
+  interruption, not just a log line).
 
 ## Architecture
 
