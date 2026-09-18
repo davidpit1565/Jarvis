@@ -12,6 +12,7 @@ import { readOnlyFileInfoTool } from "@/tools/filesystem/ReadOnlyFileInfoTool";
 import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationTool";
 import { openApplicationTool } from "@/tools/system/OpenApplicationTool";
 import { quitApplicationTool } from "@/tools/system/QuitApplicationTool";
+import { openUrlTool } from "@/tools/system/OpenUrlTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
@@ -176,6 +177,7 @@ function main() {
   toolRegistry.registerTool(getActiveApplicationTool);
   toolRegistry.registerTool(openApplicationTool);
   toolRegistry.registerTool(quitApplicationTool);
+  toolRegistry.registerTool(openUrlTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
   toolRegistry.registerTool(createDeleteMemoryTool(memoryStore));
@@ -222,7 +224,7 @@ function main() {
   // (via "device.roleGranted") and, since PermissionService's grants are
   // in-memory only, re-derived at startup for any device that already
   // has the role persisted from before a restart.
-  const STANDARD_PRIMARY_DEVICE_TOOLS = ["OPEN_APPLICATION", "QUIT_APPLICATION"];
+  const STANDARD_PRIMARY_DEVICE_TOOLS = ["OPEN_APPLICATION", "QUIT_APPLICATION", "OPEN_URL"];
   function grantPrimaryDeviceTools(deviceId: string): void {
     for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {
       permissionService.grant(DEFAULT_USER_ID, toolId, deviceId);

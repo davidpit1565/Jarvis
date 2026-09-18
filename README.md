@@ -1336,8 +1336,9 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
 ## Current limitations
 
 - Local tools: `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION`/
-  `OPEN_APPLICATION`/`QUIT_APPLICATION` (device — app name/bundle ID only,
-  launching or quitting a named app), memory/reminder/conversation-history/calendar/wake-up-call/
+  `OPEN_APPLICATION`/`QUIT_APPLICATION`/`OPEN_URL` (device — app name/
+  bundle ID only, launching or quitting a named app, or opening an
+  http/https URL in the default browser), memory/reminder/conversation-history/calendar/wake-up-call/
   `SEARCH_EMAIL`/`GET_WEATHER`/`GET_NEWS`/`NOTIFY_USER` tools (see their own sections above). Real internet search/URL reading
   exist separately, as Anthropic's own server-side `web_search`/`web_fetch`
   tools (opt-in via `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not
@@ -1348,15 +1349,15 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   every capability the Agent can execute is a named, compiled-in Swift
   function (see `agents/imac/JarvisAgent/Sources/JarvisAgent/Tools/ToolRegistry.swift`'s
   own comment on this), not an interpreter for arbitrary instructions.
-  `OPEN_APPLICATION`/`QUIT_APPLICATION` only launch or quit a named app via
-  the OS's own public API — neither can run a command, a script, or
-  anything else. This is a
+  `OPEN_APPLICATION`/`QUIT_APPLICATION`/`OPEN_URL` only launch/quit a named
+  app or open an http/https URL via the OS's own public APIs — none of
+  them can run a command, a script, or anything else. This is a
   deliberate security boundary, not a missing feature: an assistant with
   unrestricted computer control and a compromised admin token/machine
   becomes a weapon against its own user, not just an inconvenience.
 - `PermissionService`'s grants are in-memory, not persisted — but
   device-scoped `SAFE_ACTION` tools (currently `OPEN_APPLICATION`/
-  `QUIT_APPLICATION`) are
+  `QUIT_APPLICATION`/`OPEN_URL`) are
   automatically re-granted for any device already holding the `primary`
   role at startup, and granted fresh the moment a device newly receives
   that role (`"device.roleGranted"` event) — so this has no practical
