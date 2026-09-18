@@ -263,6 +263,50 @@ describe("GoogleCalendarClient.getEvent", () => {
   });
 });
 
+describe("GoogleCalendarClient.listEventsInRange", () => {
+  test("throws when no account is linked", async () => {
+    const { client } = makeClient();
+    await expect(client.listEventsInRange("2026-01-15T09:00:00Z", "2026-01-15T10:00:00Z")).rejects.toThrow(
+      /no google account linked/i
+    );
+  });
+
+  test("sends timeMin/timeMax and maps overlapping events", async () => {
+    let capturedUrl: string | undefined;
+    global.fetch = (async (url: string) => {
+      capturedUrl = url;
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              id: "ev1",
+              summary: "Existing meeting",
+              start: { dateTime: "2026-01-15T09:00:00Z" },
+              end: { dateTime: "2026-01-15T09:30:00Z" },
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const events = await client.listEventsInRange("2026-01-15T09:00:00Z", "2026-01-15T10:00:00Z");
+
+    expect(new URL(capturedUrl!).searchParams.get("timeMin")).toBe("2026-01-15T09:00:00Z");
+    expect(new URL(capturedUrl!).searchParams.get("timeMax")).toBe("2026-01-15T10:00:00Z");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.summary).toBe("Existing meeting");
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.listEventsInRange("2026-01-15T09:00:00Z", "2026-01-15T10:00:00Z")).rejects.toThrow(/400/);
+  });
+});
+
 describe("GoogleCalendarClient.createEvent", () => {
   test("posts the event and returns the created event, mapped", async () => {
     let capturedBody: string | undefined;

@@ -80,6 +80,48 @@ describe("CREATE_CALENDAR_EVENT tool", () => {
     expect(undoStore.takeLast()).toEqual({ type: "calendar_event_created", eventId: "e1", summary: "Standup" });
   });
 
+  test("includes conflicts when an overlapping event already exists", async () => {
+    global.fetch = (async (url: string) => {
+      if (url.includes("timeMin") && url.includes("timeMax")) {
+        return new Response(
+          JSON.stringify({
+            items: [{ id: "existing", summary: "Existing meeting", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:30:00Z" } }],
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({ id: "e1", summary: "Standup", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:15:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const tool = createCreateCalendarEventTool(makeClient());
+    const result = await tool.execute({ summary: "Standup", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:15:00Z" }, context);
+
+    expect(result.success).toBe(true);
+    const conflicts = (result.data as { conflicts: unknown[] }).conflicts;
+    expect(conflicts).toHaveLength(1);
+  });
+
+  test("still creates the event when the conflict check itself fails", async () => {
+    global.fetch = (async (url: string) => {
+      if (url.includes("timeMin") && url.includes("timeMax")) {
+        return new Response("boom", { status: 500 });
+      }
+      return new Response(
+        JSON.stringify({ id: "e1", summary: "Standup", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:15:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const tool = createCreateCalendarEventTool(makeClient());
+    const result = await tool.execute({ summary: "Standup", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:15:00Z" }, context);
+
+    expect(result.success).toBe(true);
+    expect((result.data as { conflicts: unknown[] }).conflicts).toEqual([]);
+  });
+
   test("does not record anything in the undo store on failure", async () => {
     global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
 

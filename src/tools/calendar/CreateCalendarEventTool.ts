@@ -31,7 +31,9 @@ export function createCreateCalendarEventTool(
     name: "create_calendar_event",
     description:
       "Creates a new event on the user's Google Calendar. Resolve any relative time the user gave " +
-      '("tomorrow at 3pm", "next Monday morning") into actual ISO 8601 timestamps yourself before calling this.',
+      '("tomorrow at 3pm", "next Monday morning") into actual ISO 8601 timestamps yourself before calling ' +
+      "this. Always creates the event even if it overlaps an existing one — a non-empty `conflicts` field " +
+      "in the result means it does, so mention that to the user rather than silently double-booking them.",
     inputSchema: {
       type: "object",
       properties: {
@@ -63,6 +65,11 @@ export function createCreateCalendarEventTool(
       }
 
       try {
+        // Checked before creating so a conflict lookup failure never
+        // blocks the actual create — this is a nice-to-have warning, not
+        // a gate on the action itself.
+        const conflicts = await calendarClient.listEventsInRange(input.start, input.end).catch(() => []);
+
         const event = await calendarClient.createEvent({
           summary: input.summary,
           start: input.start,
@@ -70,7 +77,7 @@ export function createCreateCalendarEventTool(
           location: input.location ?? null,
         });
         undoStore?.record({ type: "calendar_event_created", eventId: event.id, summary: event.summary });
-        return { success: true, data: { event } };
+        return { success: true, data: { event, conflicts } };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }

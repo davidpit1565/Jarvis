@@ -692,6 +692,12 @@ automated from here):
   **`UNLINK_CALENDAR`** (`DANGEROUS`, like `CLEAR_CONVERSATION_HISTORY`)
   actually disconnects the linked account on request — before this, the
   only way to undo a link was manually deleting the SQLite file.
+  `CREATE_CALENDAR_EVENT` always creates the event even if it overlaps an
+  existing one — this is never a blocking gate — but checks first and
+  returns a non-empty `conflicts` field when it does, so Claude can
+  mention the double-booking instead of creating it silently; a failure
+  in that check (rather than the create itself) is swallowed, since it's
+  a nice-to-have warning, not something worth failing the whole request over.
 - **`UNDO_LAST_ACTION`** (`SAFE_ACTION`, standing-granted) — "undo that"
   right after JARVIS creates *or deletes* a calendar event actually
   reverses it, via a single-slot `UndoStore` (`src/core/undo/UndoStore.ts`)
