@@ -355,7 +355,7 @@ export class JarvisWebSocketServer {
           }
 
           if (req.method === "POST" && url.pathname === "/telegram/webhook") {
-            return await this.handleTelegramWebhook(req);
+            return await this.handleTelegramWebhook(req, server);
           }
 
           // A WebSocket handshake is itself an HTTP GET with an Upgrade
@@ -713,10 +713,18 @@ export class JarvisWebSocketServer {
    * handling failures are already turned into a spoken-style error reply
    * inside TelegramGateway itself, never a thrown error here.
    */
-  private async handleTelegramWebhook(req: Request): Promise<Response> {
+  private async handleTelegramWebhook(req: Request, server: BunServer): Promise<Response> {
     const { telegramGateway, telegramWebhookSecret } = this.deps;
     if (!telegramGateway || !telegramWebhookSecret) {
       return new Response("Not found", { status: 404 });
+    }
+
+    // Rate-limited per client IP, same defense-in-depth as the other
+    // secret-gated routes (pairing/backup/login): without this, an
+    // attacker could brute-force the webhook secret with unlimited
+    // attempts, only ever paying the cost of a 403.
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "telegram-webhook"))) {
+      return new Response("Too many attempts, try again later", { status: 429 });
     }
 
     const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token");

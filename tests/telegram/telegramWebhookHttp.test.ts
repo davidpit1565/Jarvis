@@ -102,6 +102,23 @@ describe("Telegram webhook HTTP routing", () => {
     expect(response.status).toBe(400);
   });
 
+  test("too many attempts from the same IP are rate-limited with 429", async () => {
+    const { handle, port } = setupServer(makeStubSessionFactory(async () => "unused"));
+    activeHandle = handle;
+
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const response = await fetch(`http://localhost:${port}/telegram/webhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Telegram-Bot-Api-Secret-Token": "wrong" },
+        body: JSON.stringify({ message: { chat: { id: 123 }, text: "hi" } }),
+      });
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
+  });
+
   test("/telegram/webhook 404s when the Telegram gateway isn't configured", async () => {
     const eventBus = new EventBus();
     const server = new JarvisWebSocketServer({
