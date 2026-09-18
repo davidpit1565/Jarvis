@@ -187,6 +187,27 @@
   #audio-ctl:hover { opacity: 1; }
   #audio-ctl.active { color: #8bffb0; border-color: rgba(139,255,176,0.5); opacity: 0.9; }
 
+  #face-ctl {
+    position: fixed; right: 4%; bottom: 6.6%; z-index: 6;
+    font-size: 9px; letter-spacing: 1.5px; color: #6fd8e8; opacity: 0.55;
+    background: rgba(10,18,20,0.4); border: 1px solid rgba(111,216,232,0.3);
+    padding: 6px 10px; border-radius: 3px; cursor: pointer; user-select: none;
+    transition: opacity 0.2s ease;
+  }
+  #face-ctl:hover { opacity: 1; }
+  #face-ctl.active { color: #8bffb0; border-color: rgba(139,255,176,0.5); opacity: 0.9; }
+  #face-ctl.loading { color: #ffcf7f; border-color: rgba(255,207,127,0.5); opacity: 0.9; }
+
+  /* WhatsApp-voice-message-style bars: a small canvas beside the plinth
+     that only ever draws real analyser data (mic today, TTS once Core
+     has it) — flat/idle when nothing is connected, never fake motion. */
+  #voice-bars {
+    position: fixed; left: 50%; bottom: 13.5%; transform: translateX(-50%);
+    z-index: 4; width: 220px; height: 34px; pointer-events: none;
+    opacity: 0.85;
+  }
+
+
   #voice-ring {
     position: fixed; left: 50%; top: 50%; z-index: 2; pointer-events: none;
     width: 340px; height: 340px; margin: -170px 0 0 -170px;
@@ -240,7 +261,10 @@
     <div id="activity-lines"></div>
   </div>
 
+  <canvas id="voice-bars"></canvas>
+  <video id="face-cam" playsinline muted style="display:none"></video>
   <div id="audio-ctl">🎙 CONNECT MIC</div>
+  <div id="face-ctl">👁 ENABLE FACE TRACKING</div>
 
   <div id="plinth-wrap">
     <div id="plinth-glow"></div>
@@ -658,6 +682,53 @@
   }
   const headWire = buildHeadWireframe();
 
+  /* ---------------------------------------------------------------
+   * 2b-ii. Mouth line — two thin curved lines (upper/lower lip) whose
+   *     vertical separation is driven every frame by the real audio
+   *     level (the same value that drives the particle pulse below),
+   *     so the mouth visibly opens while speech/mic input is loud and
+   *     closes to a flat line at silence — genuine lip movement tied to
+   *     sound, not a decorative loop.
+   * ------------------------------------------------------------- */
+  function buildMouth() {
+    const segs = 8;
+    const width = 0.34;
+    const baseY = -0.62;
+    const baseZ = 0.82;
+    function makeLine() {
+      const positions = new Float32Array((segs + 1) * 3);
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      return geo;
+    }
+    const upperGeo = makeLine();
+    const lowerGeo = makeLine();
+    const mouthMat = new THREE.LineBasicMaterial({
+      color: 0xdfffff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+    });
+    const group = new THREE.Group();
+    group.add(new THREE.Line(upperGeo, mouthMat), new THREE.Line(lowerGeo, mouthMat.clone()));
+    return { group, upperGeo, lowerGeo, baseY, baseZ, width, segs };
+  }
+  const mouth = buildMouth();
+  headWire.add(mouth.group);
+
+  function updateMouth(level) {
+    const open = level * 0.16;
+    const upPos = mouth.upperGeo.attributes.position;
+    const loPos = mouth.lowerGeo.attributes.position;
+    for (let i = 0; i <= mouth.segs; i++) {
+      const t = i / mouth.segs;
+      const x = (t - 0.5) * mouth.width;
+      const curve = Math.sin(t * Math.PI) * 0.02;
+      upPos.setXYZ(i, x, mouth.baseY + curve + open, mouth.baseZ);
+      loPos.setXYZ(i, x, mouth.baseY - curve - open, mouth.baseZ);
+    }
+    upPos.needsUpdate = true;
+    loPos.needsUpdate = true;
+  }
+  updateMouth(0);
+
   const faceGroup = new THREE.Group();
   faceGroup.add(points, headWire);
   scene.add(faceGroup);
@@ -718,6 +789,15 @@
   const clock = new THREE.Clock();
   let glitchUntil = 0;
   let nextGlitchAt = 6 + Math.random() * 6;
+  // Declared here (before animate() first runs) rather than down by the
+  // face-tracking button code, since `let` bindings referenced inside
+  // animate() would otherwise throw — animate() executes synchronously
+  // on its first call, before later `let` statements in this same
+  // function would have run.
+  let faceTrackingActive = false;
+  let targetYaw = 0;
+  let targetPitch = 0;
+  let lastFaceSeenAt = 0;
   const rgbSplit = document.getElementById("rgb-split");
   const banner = document.getElementById("glitch-banner");
   const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -753,8 +833,18 @@
     if (!inGlitch) rgbSplit.style.opacity = String(Math.max(0, parseFloat(rgbSplit.style.opacity || "0") - 0.06));
 
     if (!REDUCED_MOTION) {
-      faceGroup.rotation.y = Math.sin(t * 0.18) * 0.35;
-      faceGroup.rotation.x = Math.sin(t * 0.11) * 0.06;
+      // Face-tracking (webcam) overrides the idle drift while a real face
+      // was seen recently — smoothly turns toward the tracked position
+      // instead of the ambient sine-wave sway. Falls back to idle drift
+      // the instant tracking is off or the face has been lost for >1.5s,
+      // rather than freezing at the last tracked angle.
+      if (faceTrackingActive && performance.now() - lastFaceSeenAt < 1500) {
+        faceGroup.rotation.y += (targetYaw - faceGroup.rotation.y) * 0.08;
+        faceGroup.rotation.x += (targetPitch - faceGroup.rotation.x) * 0.08;
+      } else {
+        faceGroup.rotation.y = Math.sin(t * 0.18) * 0.35;
+        faceGroup.rotation.x = Math.sin(t * 0.11) * 0.06;
+      }
       orbitRings.forEach((r) => {
         r.satellites.forEach((s) => {
           const a = t * r.speed + s.offset;
@@ -1000,6 +1090,45 @@
   let audioData = null;
   const voiceRing = document.getElementById("voice-ring");
 
+  /* WhatsApp-voice-message-style bar meter — draws real analyser data
+     only (a flat idle line at 0 while nothing is connected, never a
+     fabricated waveform), scrolling like a live voice-note. */
+  const voiceBarsCanvas = document.getElementById("voice-bars");
+  const vbCtx = voiceBarsCanvas.getContext("2d");
+  const VB_COUNT = 28;
+  const vbHistory = new Array(VB_COUNT).fill(0);
+  function resizeVoiceBars() {
+    const rect = voiceBarsCanvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    voiceBarsCanvas.width = Math.max(1, rect.width * dpr);
+    voiceBarsCanvas.height = Math.max(1, rect.height * dpr);
+  }
+  resizeVoiceBars();
+  window.addEventListener("resize", resizeVoiceBars);
+
+  function drawVoiceBars(currentLevel) {
+    vbHistory.shift();
+    vbHistory.push(currentLevel);
+    const w = voiceBarsCanvas.width, h = voiceBarsCanvas.height;
+    vbCtx.clearRect(0, 0, w, h);
+    const barW = w / VB_COUNT;
+    for (let i = 0; i < VB_COUNT; i++) {
+      const level = vbHistory[i];
+      const barH = Math.max(h * 0.08, level * h * 0.92);
+      const x = i * barW;
+      const y = (h - barH) / 2;
+      vbCtx.fillStyle = analyser ? "rgba(139,255,208,0.9)" : "rgba(111,216,232,0.3)";
+      const bw = barW * 0.56;
+      if (vbCtx.roundRect) {
+        vbCtx.beginPath();
+        vbCtx.roundRect(x + barW * 0.22, y, bw, barH, Math.min(bw / 2, barH / 2));
+        vbCtx.fill();
+      } else {
+        vbCtx.fillRect(x + barW * 0.22, y, bw, barH); // older engines without roundRect support
+      }
+    }
+  }
+
   function ensureAudioGraph() {
     if (audioCtx) return;
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1025,6 +1154,8 @@
     voiceRing.style.borderColor = `rgba(111,216,232,${(glow * 0.8).toFixed(2)})`;
     voiceRing.style.transform = `scale(${1 + glow * 0.15})`;
     voiceRing.style.boxShadow = glow > 0.05 ? `0 0 ${20 + glow * 60}px rgba(111,216,232,${glow * 0.5})` : "none";
+    updateMouth(glow);
+    drawVoiceBars(analyser ? level : 0);
   })();
 
   window.JarvisHologram = {
@@ -1055,6 +1186,99 @@
       audioBtn.classList.add("active");
     } catch (e) {
       audioBtn.textContent = "🎙 MIC DENIED";
+    }
+  });
+
+  /* ---------------------------------------------------------------
+   * 6. Webcam face tracking — real detection (face-api.js, vendored
+   *    locally under ./facetrack/ same as three.min.js, no CDN
+   *    dependency), not a fake "always look at center" animation. While
+   *    a face is being seen, the head's rotation (section 3's animate()
+   *    loop, above) turns toward the tracked position instead of its
+   *    idle sine-wave sway, and falls back to idle the moment no face
+   *    has been seen for >1.5s. Lazy-loaded only on click: the model +
+   *    runtime is ~1.6MB, not worth loading for everyone who never
+   *    touches the button.
+   * ------------------------------------------------------------- */
+  const faceCtl = document.getElementById("face-ctl");
+  const faceCam = document.getElementById("face-cam");
+  let faceApiReady = false;
+
+  function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error(`failed to load ${src}`));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function detectLoop() {
+    if (!faceTrackingActive) return;
+    try {
+      const result = await faceapi
+        .detectSingleFace(faceCam, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+        .withFaceLandmarks(true);
+      if (result && faceCam.videoWidth) {
+        const box = result.detection.box;
+        const cx = (box.x + box.width / 2) / faceCam.videoWidth;
+        const cy = (box.y + box.height / 2) / faceCam.videoHeight;
+        // Raw (unmirrored) webcam stream: a face that moves to ITS OWN
+        // right appears on the LEFT of the frame. Inverting X here makes
+        // the head turn toward where the user actually is (mirror-style,
+        // like maintaining eye contact) instead of away from them.
+        const offsetX = (0.5 - cx) * 2; // -1..1
+        const offsetY = (cy - 0.5) * 2; // -1..1
+        targetYaw = Math.max(-0.55, Math.min(0.55, offsetX * 0.55));
+        targetPitch = Math.max(-0.3, Math.min(0.3, offsetY * 0.3));
+        lastFaceSeenAt = performance.now();
+      }
+    } catch (e) {
+      // One bad detection frame shouldn't kill the whole loop.
+    }
+    setTimeout(detectLoop, 120);
+  }
+
+  faceCtl.addEventListener("click", async () => {
+    if (faceTrackingActive) return;
+    faceCtl.textContent = "👁 LOADING…";
+    faceCtl.className = "loading";
+    try {
+      if (!faceApiReady) {
+        if (location.protocol === "file:") {
+          throw new Error(
+            "Face tracking needs the page served over http(s) — fetch() " +
+            "for the model files is blocked by the browser under file://" +
+            "(see README: 'python3 -m http.server' from this folder)."
+          );
+        }
+        await loadScriptOnce("./facetrack/face-api.min.js");
+        // The bundled tfjs registers a 'wasm' backend at higher priority
+        // than 'webgl', but no .wasm binary is vendored here (only the
+        // detector/landmark weights) — forcing 'webgl' explicitly avoids
+        // tfjs trying and failing to initialize the wasm backend first.
+        await faceapi.tf.setBackend("webgl");
+        await faceapi.tf.ready();
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri("./facetrack/weights"),
+          faceapi.nets.faceLandmark68TinyNet.loadFromUri("./facetrack/weights"),
+        ]);
+        faceApiReady = true;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+      faceCam.srcObject = stream;
+      await faceCam.play();
+      faceTrackingActive = true;
+      faceCtl.textContent = "👁 FACE TRACKING LIVE";
+      faceCtl.className = "active";
+      detectLoop();
+    } catch (e) {
+      console.error("[jarvis-hologram] face tracking failed to start:", e);
+      faceCtl.textContent = location.protocol === "file:"
+        ? "👁 NEEDS LOCAL SERVER (see README)"
+        : "👁 CAMERA/MODEL FAILED";
+      faceCtl.className = "";
     }
   });
 })();

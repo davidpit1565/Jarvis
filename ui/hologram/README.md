@@ -6,7 +6,8 @@ base plinth labeled JARVIS, and an occasional glitch/warning-banner effect.
 
 ## Running it
 
-No build step, no server required — it's a single self-contained page:
+No build step — it's a self-contained page. For the particle head, wireframe,
+panels, and audio reactivity, just open it directly:
 
 ```
 open ui/hologram/index.html
@@ -16,6 +17,21 @@ open ui/hologram/index.html
 folder on purpose, not loaded from a CDN, so the visualizer works offline —
 appropriate for a local personal-assistant UI that shouldn't depend on
 internet access just to render its own face.
+
+**Face tracking (👁 ENABLE FACE TRACKING) needs a local server, not `file://`.**
+Chromium blocks `fetch()` for local files under the `file://` origin (this
+is what loads the face-tracking model weights) even though `<script src>`
+tags — like the one that loads `three.min.js` — are exempt from that
+restriction. There's no way around this that isn't misleading, so: run any
+static server from this folder and open it over `http://` instead —
+
+```
+python3 -m http.server 8080   # from ui/hologram/
+# then open http://localhost:8080/
+```
+
+Clicking the button while on `file://` shows an explicit
+`NEEDS LOCAL SERVER` message instead of a silent/confusing failure.
 
 ## How the face is built
 
@@ -115,6 +131,48 @@ way to see the reactivity live right now — it feeds your actual
 microphone in, which is honest proof the mechanism works rather than a
 placeholder pretending to be voice output.
 
+## Webcam face tracking — the head turns to face you, for real
+
+Click **👁 ENABLE FACE TRACKING** (needs a local server — see "Running it"
+above) and grant camera access. This runs real face detection —
+[face-api.js](https://github.com/vladmandic/face-api) with the tiny-face
+detector + 68-point landmark model, vendored locally under
+`facetrack/` (~1.6MB total, no CDN) — not a scripted "always looks at
+center" loop. While a face has been seen in the last 1.5 seconds, the
+head's rotation is driven by the tracked face's position in frame (turning
+toward wherever you are, mirror-style, as if maintaining eye contact) and
+smoothly falls back to its idle sway the moment you step out of frame.
+Detection runs roughly every 120ms in a plain polling loop, independent of
+the render loop, so a slow detection frame never stalls the animation.
+
+**Honest limits**: this is 2D face-box tracking (yaw/pitch approximated
+from where the detected face sits in the frame), not full 3D head-pose
+estimation — a real, working head-follow, not a claim of anatomically
+precise gaze tracking. It also could not be verified against a real human
+face in this sandboxed dev environment (no physical camera; Playwright's
+fake-camera device produces a synthetic test pattern, not a face), so
+what's verified here is that model loading, camera permission, and the
+graceful "no face seen" fallback all work correctly against a real
+running pipeline — the actual tracking quality against your face needs
+checking once you run it yourself.
+
+## Lip movement + a WhatsApp-style voice meter — both real audio, not decoration
+
+- **Mouth line**: the wireframe head now has a distinct upper/lower lip
+  line that visibly opens while audio is loud and closes to flat at
+  silence — driven every frame by the same real analyser level as the
+  particle pulse, not a separate fake animation.
+- **Voice bars** (`#voice-bars`, above the plinth): a small bar-meter in
+  the exact style of a WhatsApp voice-message waveform, scrolling in real
+  time from the same `AnalyserNode`. It's a flat near-zero line whenever
+  nothing is connected — never a fabricated idle waveform — and lights up
+  green the moment the mic (or, later, TTS output) is connected.
+
+Both use the existing `window.JarvisHologram.connectAudioElement()` /
+`connectMediaStream()` hooks, so whenever Core gets real TTS output, both
+the mouth and the voice bars start reflecting Jarvis's actual speech with
+no code changes needed here.
+
 ## Visual fidelity vs. the reference video/images
 
 Frames were pulled from the actual reference video and compared directly
@@ -185,3 +243,10 @@ GPU, including an integrated one, comfortably clears 60fps here.
 - No automated visual-regression testing (a pixel/perceptual diff against
   a reference screenshot) — verification today is a manual
   render-and-look pass each time, described above.
+- Face tracking is 2D box-position tracking, not 3D head-pose estimation,
+  and needs a local HTTP server (not `file://`) — see the face-tracking
+  section above for both.
+- Face-tracking accuracy against a real human face hasn't been checked in
+  this dev environment (no physical camera available) — only the
+  pipeline's plumbing (model load, permissions, fallback behavior) was
+  verified against a real (synthetic-pattern) camera stream.
