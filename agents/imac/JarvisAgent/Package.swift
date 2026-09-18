@@ -24,12 +24,13 @@ let package = Package(
             // microphone/Speech-Recognition permission prompts at all,
             // so WakeWordListener silently never starts.
             linkerSettings: [
-                // CoreAudio (SetVolumeTool) and CoreWLAN (ToggleWifiTool) aren't
-                // auto-linked for a plain SwiftPM executable the way AppKit/
-                // Foundation are — an `import` alone compiles but fails to link
-                // without these.
+                // CoreAudio (SetVolumeTool), CoreWLAN (ToggleWifiTool), and
+                // EventKit (macOS Reminders tools) aren't auto-linked for a
+                // plain SwiftPM executable the way AppKit/Foundation are —
+                // an `import` alone compiles but fails to link without these.
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("CoreWLAN"),
+                .linkedFramework("EventKit"),
                 .unsafeFlags([
                     "-Xlinker", "-sectcreate",
                     "-Xlinker", "__TEXT",

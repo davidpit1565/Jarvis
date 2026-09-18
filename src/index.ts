@@ -24,6 +24,9 @@ import { setVolumeTool } from "@/tools/system/SetVolumeTool";
 import { toggleWifiTool } from "@/tools/system/ToggleWifiTool";
 import { createFolderTool } from "@/tools/system/CreateFolderTool";
 import { emptyTrashTool } from "@/tools/system/EmptyTrashTool";
+import { listMacRemindersTool } from "@/tools/system/ListMacRemindersTool";
+import { createMacReminderTool } from "@/tools/system/CreateMacReminderTool";
+import { completeMacReminderTool } from "@/tools/system/CompleteMacReminderTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
@@ -254,6 +257,9 @@ function main() {
   toolRegistry.registerTool(toggleWifiTool);
   toolRegistry.registerTool(createFolderTool);
   toolRegistry.registerTool(emptyTrashTool);
+  toolRegistry.registerTool(listMacRemindersTool);
+  toolRegistry.registerTool(createMacReminderTool);
+  toolRegistry.registerTool(completeMacReminderTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
   toolRegistry.registerTool(createDeleteMemoryTool(memoryStore, undoStore));
@@ -790,6 +796,9 @@ function main() {
       "TOGGLE_WIFI",
       "CREATE_FOLDER",
       "EMPTY_TRASH",
+      "LIST_MAC_REMINDERS",
+      "CREATE_MAC_REMINDER",
+      "COMPLETE_MAC_REMINDER",
     ],
   });
   const httpHandle = wsServer.start(config.port);
