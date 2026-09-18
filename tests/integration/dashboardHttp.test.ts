@@ -48,6 +48,30 @@ describe("Dashboard HTTP routes", () => {
     expect(body).toContain("/status");
   });
 
+  test("every response carries basic security headers", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const responses = await Promise.all([
+      fetch(`http://localhost:${handle.port}/`),
+      fetch(`http://localhost:${handle.port}/health`),
+      fetch(`http://localhost:${handle.port}/status`),
+    ]);
+
+    for (const response of responses) {
+      expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      expect(response.headers.get("X-Frame-Options")).toBe("DENY");
+      expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
+    }
+  });
+
   test("GET /health reports ok with an uptime, unauthenticated", async () => {
     const eventBus = new EventBus();
     const server = new JarvisWebSocketServer({

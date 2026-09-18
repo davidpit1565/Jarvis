@@ -704,6 +704,11 @@ contain no language-detection logic, by design.
 - Optional Face ID/Touch ID lock for the dashboard (see below): real
   WebAuthn, not a custom biometric integration; registering the first
   credential requires `JARVIS_ADMIN_TOKEN` so setup can't be hijacked.
+- Every HTTP response carries `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer`
+  (`withSecurityHeaders` in `JarvisWebSocketServer.ts`) — stops the
+  dashboard from being framed by another site (clickjacking) and keeps
+  this server's own URLs out of any Referer header sent onward.
 - The audio waveform's ingest endpoint (`/voice/audio-stream`) only
   exists at all when `JARVIS_AUDIO_WAVEFORM=true`, and — unlike the HTTP
   voice webhooks — is **not** Twilio-signature-verified (a WebSocket

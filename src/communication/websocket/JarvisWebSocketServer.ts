@@ -127,7 +127,50 @@ export class JarvisWebSocketServer {
     return Bun.serve<SocketData>({
       port,
       fetch: async (req, server) => {
-        try {
+        const response = await this.route(req, server);
+        // A WebSocket upgrade returns undefined by design (Bun owns the
+        // response in that case) — only an actual HTTP response gets the
+        // headers below.
+        return response ? withSecurityHeaders(response) : undefined;
+      },
+      websocket: {
+        open: (ws) => {
+          const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.kind === "audio-viewer") {
+            this.deps.audioLevelBroadcaster?.addViewer(socket);
+          }
+          // Device sockets: a no-op here — only meaningful once they register.
+        },
+        message: (ws, raw) => {
+          const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.kind === "audio-ingest") {
+            this.handleAudioStreamMessage(raw.toString());
+            return;
+          }
+          if (socket.data.kind === "audio-viewer") {
+            return; // viewers are receive-only; nothing to act on
+          }
+          this.handleMessage(socket as DeviceSocket, raw.toString());
+        },
+        close: (ws) => {
+          const socket = ws as ServerWebSocket<SocketData>;
+          if (socket.data.kind === "device") {
+            const deviceId = socket.data.deviceId;
+            if (deviceId) {
+              this.pendingConnections.delete(deviceId);
+              this.deps.deviceConnectionManager.handleDisconnect(deviceId, "socket_closed");
+              this.deps.deviceRegistry.updateStatus(deviceId, "offline");
+            }
+          } else if (socket.data.kind === "audio-viewer") {
+            this.deps.audioLevelBroadcaster?.removeViewer(socket);
+          }
+        },
+      },
+    });
+  }
+
+  private async route(req: Request, server: BunServer): Promise<Response | undefined> {
+    try {
           const url = new URL(req.url);
 
           if (req.method === "POST" && url.pathname === "/pairing/approve") {
@@ -196,49 +239,14 @@ export class JarvisWebSocketServer {
             return undefined;
           }
           return new Response("JARVIS Core WebSocket endpoint", { status: 200 });
-        } catch (error) {
-          // Guarantees every HTTP response is well-formed JSON or plain text
-          // (never a runtime's default error page), so an HTTP client never
-          // has to guess what came back.
-          const message = error instanceof Error ? error.message : "Unexpected server error";
-          console.error(`[jarvis] fetch handler error: ${message}`);
-          return Response.json({ success: false, error: message }, { status: 500 });
-        }
-      },
-      websocket: {
-        open: (ws) => {
-          const socket = ws as ServerWebSocket<SocketData>;
-          if (socket.data.kind === "audio-viewer") {
-            this.deps.audioLevelBroadcaster?.addViewer(socket);
-          }
-          // Device sockets: a no-op here — only meaningful once they register.
-        },
-        message: (ws, raw) => {
-          const socket = ws as ServerWebSocket<SocketData>;
-          if (socket.data.kind === "audio-ingest") {
-            this.handleAudioStreamMessage(raw.toString());
-            return;
-          }
-          if (socket.data.kind === "audio-viewer") {
-            return; // viewers are receive-only; nothing to act on
-          }
-          this.handleMessage(socket as DeviceSocket, raw.toString());
-        },
-        close: (ws) => {
-          const socket = ws as ServerWebSocket<SocketData>;
-          if (socket.data.kind === "device") {
-            const deviceId = socket.data.deviceId;
-            if (deviceId) {
-              this.pendingConnections.delete(deviceId);
-              this.deps.deviceConnectionManager.handleDisconnect(deviceId, "socket_closed");
-              this.deps.deviceRegistry.updateStatus(deviceId, "offline");
-            }
-          } else if (socket.data.kind === "audio-viewer") {
-            this.deps.audioLevelBroadcaster?.removeViewer(socket);
-          }
-        },
-      },
-    });
+    } catch (error) {
+      // Guarantees every HTTP response is well-formed JSON or plain text
+      // (never a runtime's default error page), so an HTTP client never
+      // has to guess what came back.
+      const message = error instanceof Error ? error.message : "Unexpected server error";
+      console.error(`[jarvis] fetch handler error: ${message}`);
+      return Response.json({ success: false, error: message }, { status: 500 });
+    }
   }
 
   private handleMessage(ws: DeviceSocket, raw: string): void {
@@ -669,6 +677,22 @@ export class JarvisWebSocketServer {
 function rateLimitKey(req: Request, server: BunServer, route: string): string {
   const ip = server.requestIP(req)?.address ?? "unknown";
   return `${route}:${ip}`;
+}
+
+/**
+ * Applied to every HTTP response this server sends. `nosniff` stops a
+ * browser from re-guessing a response's content type against its own
+ * heuristics (relevant since some routes serve user-influenced device
+ * names as plain text); `DENY` stops the dashboard from being framed by
+ * another site (clickjacking); `no-referrer` keeps this server's own URLs
+ * (including the pairing/admin routes) out of any Referer header sent to
+ * a third party a dashboard link might be clicked through to.
+ */
+function withSecurityHeaders(response: Response): Response {
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  response.headers.set("X-Frame-Options", "DENY");
+  response.headers.set("Referrer-Policy", "no-referrer");
+  return response;
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
