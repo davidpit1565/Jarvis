@@ -38,7 +38,12 @@ export class PollinationsImageClient {
   }
 }
 
+const MIN_DIMENSION = 64;
+
 function clampDimension(value: number | undefined, fallback: number): number {
   if (value === undefined || !Number.isFinite(value) || value <= 0) return fallback;
-  return Math.min(Math.round(value), MAX_DIMENSION);
+  // Rounding a small positive value (e.g. 0.4) before clamping could
+  // otherwise still produce 0 — found during a later review: only the
+  // upper bound was actually enforced, not a sane minimum.
+  return Math.min(Math.max(Math.round(value), MIN_DIMENSION), MAX_DIMENSION);
 }

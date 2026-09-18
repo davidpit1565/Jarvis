@@ -468,10 +468,14 @@ function main() {
 
   // An unset/empty TWILIO_ALLOWED_CALLERS used to only log a warning and
   // start the gateway anyway — anyone who called the number reached full
-  // JARVIS, including tools like SAVE_MEMORY, with nothing stopping them
-  // but a server log line nobody was watching. Now it refuses to start
-  // the gateway at all unless the caller explicitly opts into that via
-  // TWILIO_ALLOW_OPEN_ACCESS.
+  // JARVIS, including tools like SAVE_MEMORY and SEND_EMAIL (a caller can
+  // self-approve its own CONFIRM prompt in the same call/chat it's
+  // already talking to JARVIS through, so CONFIRM alone doesn't protect
+  // against a malicious caller directly asking for one — only against
+  // content the legitimate owner reads triggering one on their behalf),
+  // with nothing stopping them but a server log line nobody was
+  // watching. Now it refuses to start the gateway at all unless the
+  // caller explicitly opts into that via TWILIO_ALLOW_OPEN_ACCESS.
   const phoneGatewayAllowlistOk =
     (config.twilioAllowedCallers && config.twilioAllowedCallers.length > 0) || config.twilioAllowOpenAccess;
   if (config.twilioAuthToken && config.twilioPublicBaseUrl && !phoneGatewayAllowlistOk) {
@@ -873,6 +877,7 @@ function main() {
     // only means "may be asked," never "runs without asking."
     autoGrantToolIdsOnApproval: ["OPEN_URL", "OPEN_APPLICATION", "COMPOSE_EMAIL_DRAFT", "CLICK_ELEMENT", "TYPE_TEXT"],
   });
+  wsServerRef = wsServer;
   const httpHandle = wsServer.start(config.port);
 
   eventBus.on("brain.request", () => {
@@ -949,7 +954,7 @@ function main() {
     console.warn(
       "[jarvis] WARNING: phone gateway is running open (TWILIO_ALLOW_OPEN_ACCESS=true, no " +
         "TWILIO_ALLOWED_CALLERS) — anyone who calls the configured number reaches full JARVIS, " +
-        "including tools like SAVE_MEMORY."
+        "including tools like SAVE_MEMORY and SEND_EMAIL."
     );
   }
   console.log(
@@ -963,7 +968,7 @@ function main() {
     console.warn(
       "[jarvis] WARNING: Telegram gateway is running open (TELEGRAM_ALLOW_OPEN_ACCESS=true, no " +
         "TELEGRAM_ALLOWED_CHAT_IDS) — anyone who finds and messages the bot reaches full JARVIS, " +
-        "including tools like SAVE_MEMORY."
+        "including tools like SAVE_MEMORY and SEND_EMAIL."
     );
   }
 
@@ -1023,17 +1028,39 @@ function main() {
   };
 }
 
+// Set once wsServer exists, below — confirmViaChat is only ever actually
+// CALLED later, asynchronously, once a real CONFIRM/DANGEROUS tool call
+// happens well after startup finishes, the same forward-reference
+// reasoning already used for telegramGateway! elsewhere in this file.
+let wsServerRef: JarvisWebSocketServer | undefined;
+
 /**
- * Asks the human directly in the terminal whether a CONFIRM/DANGEROUS tool
- * call may proceed. This is today's only confirmation channel; a future
- * channel (push notification, phone call) would just be a different
- * ConfirmationPrompter passed to the same ConfirmationService.
+ * Asks the human for a CONFIRM/DANGEROUS tool call's approval, over
+ * whichever of the terminal/hologram-chat channels is actually live right
+ * now — the terminal and the browser share one Orchestrator/
+ * ConversationManager (see webChatOrchestrator below) precisely so
+ * talking to JARVIS from either feels like the same ongoing conversation,
+ * so the confirmation prompt has to follow that same "one conversation"
+ * model rather than being pinned to the terminal alone. Found and fixed
+ * during a later security review: SEND_EMAIL/REPLY_EMAIL (and the
+ * pre-existing CLICK_ELEMENT/TYPE_TEXT) are CONFIRM-level, but a browser
+ * user calling one of them via the hologram chat used to get this same
+ * prompt silently routed to the SERVER's own terminal stdin — invisible
+ * and unanswerable from the browser, so the request just timed out and
+ * denied itself 60 seconds later with no visible reason. Now: if a
+ * browser is actually connected to /chat, ask there instead (real
+ * yes/no over the socket, see JarvisWebSocketServer.requestWebChatConfirmation);
+ * otherwise fall back to the terminal, unchanged from before.
  */
 async function confirmViaChat(request: ConfirmationRequest): Promise<boolean> {
   const inputSummary = JSON.stringify(request.input);
-  const answer = await rl.question(
-    `\n⚠️  JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Approve? (yes/no): `
-  );
+  const questionText = `JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Approve? (yes/no)`;
+
+  if (wsServerRef?.hasWebChatConnection) {
+    return wsServerRef.requestWebChatConfirmation(questionText);
+  }
+
+  const answer = await rl.question(`\n⚠️  ${questionText}: `);
   return answer.trim().toLowerCase().startsWith("y");
 }
 

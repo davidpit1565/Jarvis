@@ -58,6 +58,13 @@ describe("fromOpenAIResponse", () => {
     });
   });
 
+  test("does not throw on a malformed response with no choices array", () => {
+    const result = fromOpenAIResponse({} as never);
+    expect(result.text).toBe("");
+    expect(result.toolCalls).toEqual([]);
+    expect(result.stopReason).toBe("unknown");
+  });
+
   test("leaves usage undefined when the provider omits it", () => {
     const result = fromOpenAIResponse({ choices: [{ message: { content: "hi" }, finish_reason: "stop" }] });
     expect(result.usage).toBeUndefined();

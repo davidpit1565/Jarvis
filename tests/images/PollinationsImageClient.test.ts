@@ -41,6 +41,13 @@ describe("PollinationsImageClient.buildImageUrl", () => {
     expect(url.searchParams.get("height")).toBe("1024");
   });
 
+  test("clamps a tiny positive value that would otherwise round to 0 up to a sane minimum", () => {
+    const client = new PollinationsImageClient();
+    const url = new URL(client.buildImageUrl("sunset", { width: 0.4 }));
+
+    expect(url.searchParams.get("width")).toBe("64");
+  });
+
   test("includes a seed when given, for reproducibility", () => {
     const client = new PollinationsImageClient();
     const url = new URL(client.buildImageUrl("sunset", { seed: 42 }));

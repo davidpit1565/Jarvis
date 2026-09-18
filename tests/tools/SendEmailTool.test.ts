@@ -18,9 +18,9 @@ function makeClient() {
 }
 
 describe("SEND_EMAIL tool", () => {
-  test("is SAFE_ACTION", () => {
+  test("is CONFIRM — a prompt-injected email body could otherwise trigger a silent send", () => {
     const tool = createSendEmailTool(makeClient());
-    expect(tool.requiredPermission).toBe(PermissionLevel.SAFE_ACTION);
+    expect(tool.requiredPermission).toBe(PermissionLevel.CONFIRM);
   });
 
   test("rejects an invalid recipient", async () => {

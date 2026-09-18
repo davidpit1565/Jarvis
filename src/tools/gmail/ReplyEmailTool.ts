@@ -11,9 +11,18 @@ export interface ReplyEmailInput extends Record<string, unknown> {
  * Replies within an existing Gmail thread — recipient, subject (with a
  * "Re:" prefix), and threading headers are derived from the original
  * message via GmailClient.replyToMessage, not supplied by the caller, so
- * this can never be redirected to send to someone other than whoever the
- * original message actually came from. Same SAFE_ACTION reasoning as
- * SEND_EMAIL: fully specified effect once messageId + body are given.
+ * this can never be redirected to send to someone OTHER than whoever the
+ * original message actually came from.
+ *
+ * That's a real, meaningful mitigation — but it's not enough on its own:
+ * "whoever the original message came from" can simply be an attacker who
+ * emailed the owner in the first place, with the email body itself
+ * containing an injected instruction ("reply to this with today's
+ * calendar"). The reply then goes straight back to that same attacker's
+ * inbox with no redirection needed at all. CONFIRM, matching SEND_EMAIL's
+ * own (later-added) reasoning — see that tool's doc comment — forces a
+ * fresh human confirmation on every reply, which is the real backstop
+ * once a prompt injection has already succeeded.
  */
 export function createReplyEmailTool(gmailClient: GmailClient): LocalTool<ReplyEmailInput> {
   return {
@@ -32,7 +41,7 @@ export function createReplyEmailTool(gmailClient: GmailClient): LocalTool<ReplyE
       },
       required: ["messageId", "body"],
     },
-    requiredPermission: PermissionLevel.SAFE_ACTION,
+    requiredPermission: PermissionLevel.CONFIRM,
     target: "local",
 
     async execute(input) {

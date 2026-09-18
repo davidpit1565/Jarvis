@@ -160,7 +160,12 @@ interface OpenAIChatCompletionResponse {
 
 /** Exported for unit testing without a network call — pure response-shaping logic. */
 export function fromOpenAIResponse(response: OpenAIChatCompletionResponse): BrainResponse {
-  const choice = response.choices[0];
+  // Defensive: a malformed/error-shaped body from Groq (or any other
+  // OpenAI-compatible endpoint someone points this at) with no `choices`
+  // array at all shouldn't throw an uncaught TypeError here — every
+  // caller already wraps handleUserMessage in try/catch, but failing
+  // gracefully at the source is still better than relying on that alone.
+  const choice = Array.isArray(response.choices) ? response.choices[0] : undefined;
   const text = choice?.message.content ?? "";
 
   const toolCalls: ToolCallRequest[] = (choice?.message.tool_calls ?? []).map((call) => {

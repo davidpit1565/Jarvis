@@ -20,7 +20,13 @@ enum ListRecentPhotosTool {
 
     static func make() -> AgentTool {
         AgentTool(name: "list_recent_photos") { input in
-            let requestedLimit = (input["limit"]?.value as? Int) ?? defaultLimit
+            // AnyCodable.init(from:) (see MessageProtocol.swift) decodes
+            // every JSON number as Double, never Int — `as? Int` here
+            // always failed and silently discarded any caller-supplied
+            // limit, always falling back to defaultLimit. Same fix
+            // ScheduleMacNotificationTool already uses for its own
+            // numeric input.
+            let requestedLimit = (input["limit"]?.value as? Double).map { Int($0) } ?? defaultLimit
             guard requestedLimit > 0 else {
                 return ToolResultPayload(success: false, data: nil, error: "limit must be a positive integer")
             }

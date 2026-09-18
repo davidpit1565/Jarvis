@@ -303,6 +303,20 @@ export class JarvisWebSocketServer {
    */
   private observers: Set<ServerWebSocket<SocketData>> = new Set();
 
+  /**
+   * The currently connected /chat browser socket, if any — single slot,
+   * not a Set, matching this project's "one owner" scale (same
+   * simplification `ownerPhoneNumber`/`telegramOwnerChatId` already
+   * make). Used by requestWebChatConfirmation() below so a CONFIRM/
+   * DANGEROUS tool called via the hologram chat gets a real in-band
+   * yes/no prompt instead of silently sharing the terminal's
+   * `confirmViaChat` (which the browser can never see or answer) — the
+   * same real gap Telegram's own `awaitConfirmation()` already closed
+   * for that channel; this is the web-chat equivalent.
+   */
+  private activeWebChatSocket: ServerWebSocket<Extract<SocketData, { kind: "web-chat" }>> | undefined;
+  private pendingWebChatConfirmation: ((answer: boolean) => void) | undefined;
+
   constructor(private readonly deps: JarvisWebSocketServerDependencies) {
     this.subscribeObserverBroadcast();
   }
@@ -350,6 +364,14 @@ export class JarvisWebSocketServer {
             this.observers.add(socket);
           } else if (socket.data.kind === "audio-viewer") {
             this.deps.audioLevelBroadcaster?.addViewer(socket);
+          } else if (socket.data.kind === "web-chat") {
+            // A new tab/reconnect replaces the previous one as "active" —
+            // any confirmation still pending against the old socket can
+            // never be answered now, so deny it rather than leave it
+            // hanging until its own 60s ConfirmationService timeout.
+            this.pendingWebChatConfirmation?.(false);
+            this.pendingWebChatConfirmation = undefined;
+            this.activeWebChatSocket = socket as ServerWebSocket<Extract<SocketData, { kind: "web-chat" }>>;
           }
           // Device sockets: a no-op here — only meaningful once they register.
         },
@@ -384,6 +406,14 @@ export class JarvisWebSocketServer {
             }
           } else if (socket.data.kind === "audio-viewer") {
             this.deps.audioLevelBroadcaster?.removeViewer(socket);
+          } else if (socket.data.kind === "web-chat") {
+            if (this.activeWebChatSocket === socket) {
+              this.activeWebChatSocket = undefined;
+              // Nobody left to answer — deny rather than leave it
+              // hanging until ConfirmationService's own timeout.
+              this.pendingWebChatConfirmation?.(false);
+              this.pendingWebChatConfirmation = undefined;
+            }
           }
         },
       },
@@ -665,6 +695,38 @@ export class JarvisWebSocketServer {
     const { webChatOrchestrator, defaultUserId } = this.deps;
     if (!webChatOrchestrator) return; // route already 404s before upgrade if absent — defensive only
 
+    // A CONFIRM/DANGEROUS tool call currently waiting on this exact
+    // socket takes priority over starting a new conversation turn — same
+    // "next message is the answer, not a new topic" UX as Telegram's own
+    // awaitConfirmation(). An unparseable/non-yes/no reply re-prompts
+    // rather than being silently treated as either an answer or a normal
+    // chat message.
+    if (this.pendingWebChatConfirmation) {
+      let candidateText = "";
+      try {
+        const parsed = JSON.parse(raw);
+        candidateText = typeof parsed?.text === "string" ? parsed.text.trim() : "";
+      } catch {
+        // fall through to the re-prompt below
+      }
+      if (WEB_CHAT_YES_PATTERN.test(candidateText)) {
+        const resolve = this.pendingWebChatConfirmation;
+        this.pendingWebChatConfirmation = undefined;
+        resolve(true);
+        ws.send(JSON.stringify({ type: "assistant", text: "Confirmed." }));
+        return;
+      }
+      if (WEB_CHAT_NO_PATTERN.test(candidateText)) {
+        const resolve = this.pendingWebChatConfirmation;
+        this.pendingWebChatConfirmation = undefined;
+        resolve(false);
+        ws.send(JSON.stringify({ type: "assistant", text: "Cancelled." }));
+        return;
+      }
+      ws.send(JSON.stringify({ type: "assistant", text: "Please reply yes or no." }));
+      return;
+    }
+
     let text: string;
     let images: UserMessageImage[] | undefined;
     try {
@@ -704,6 +766,30 @@ export class JarvisWebSocketServer {
         const message = error instanceof Error ? error.message : "Unexpected error";
         ws.send(JSON.stringify({ type: "error", message }));
       });
+  }
+
+  /**
+   * The web-chat `ConfirmationPrompter` (see `ConfirmationService`) —
+   * asks a real yes/no question over the live `/chat` connection and
+   * resolves once the browser answers, the same shape as
+   * `TelegramGateway.awaitConfirmation()`. Resolves `false` immediately
+   * if nobody is connected right now, rather than hanging until
+   * ConfirmationService's own 60s timeout — there's nobody who could
+   * possibly answer.
+   */
+  /** Whether a browser is actually connected to /chat right now — lets a shared confirmation prompter decide which channel to use. */
+  get hasWebChatConnection(): boolean {
+    return this.activeWebChatSocket !== undefined;
+  }
+
+  requestWebChatConfirmation(questionText: string): Promise<boolean> {
+    const socket = this.activeWebChatSocket;
+    if (!socket) return Promise.resolve(false);
+
+    return new Promise<boolean>((resolve) => {
+      this.pendingWebChatConfirmation = resolve;
+      socket.send(JSON.stringify({ type: "confirm", message: questionText }));
+    });
   }
 
   private handleMessage(ws: DeviceSocket, raw: string): void {
@@ -1672,6 +1758,11 @@ function withSecurityHeaders(response: Response): Response {
 }
 
 const VALID_WEB_CHAT_IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+// Same recognized words as TelegramGateway's own YES_PATTERN/NO_PATTERN —
+// kept deliberately identical rather than diverging per channel.
+const WEB_CHAT_YES_PATTERN = /^\s*(yes|y|כן|אישור|confirm)\s*$/i;
+const WEB_CHAT_NO_PATTERN = /^\s*(no|n|לא|ביטול|cancel)\s*$/i;
 
 /**
  * Structural validation only (right mediaType, non-empty base64 string) —

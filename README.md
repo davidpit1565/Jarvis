@@ -304,6 +304,25 @@ being unconditionally denied:
   chat goes stale until overwritten by the next confirmation for the same
   chat — a bounded, low-consequence edge case, not a leak that grows over
   time.
+- **The hologram chat gets a real confirmation prompt too, found and
+  fixed during a later security review.** Before this fix, the browser's
+  `/chat` connection silently shared the terminal's own `confirmViaChat`
+  — a CONFIRM tool call made from the browser (e.g. the newly-CONFIRM
+  `SEND_EMAIL`) sent its yes/no question to the SERVER's terminal stdin,
+  invisible to the browser, so it just timed out and denied itself 60
+  seconds later with nothing shown to the user. `confirmViaChat` now
+  checks `JarvisWebSocketServer.hasWebChatConnection` first: if a browser
+  is actually connected, it asks there instead
+  (`requestWebChatConfirmation()` sends `{type:"confirm", message}` and
+  resolves once the next message is recognized as yes/no/כן/לא, same
+  recognized-words list and re-prompt-on-unrecognized behavior as
+  Telegram's own `awaitConfirmation()`) — otherwise it falls back to the
+  terminal, unchanged from before. The terminal and browser deliberately
+  share one `Orchestrator`/`ConversationManager` (see `webChatOrchestrator`
+  in `src/index.ts`) so talking to JARVIS from either feels like the same
+  ongoing conversation — this fix keeps that same "one JARVIS, whichever
+  channel is live" model for confirmations too, rather than splitting
+  into a separate web-chat orchestrator.
 
 **A grant is required before any of this even applies** — `PermissionService.check()`
 only allows READ-level tools with no grant at all; every SAFE_ACTION/
@@ -855,7 +874,7 @@ automated from here):
   Gmail's `resultSizeEstimate`, no per-message summary fetch — meaningfully
   cheaper than `search_email("is:unread")` for "do I have unread emails,"
   which only ever needs a number.
-- **`SEND_EMAIL`** (`SAFE_ACTION`, standing-granted) — sends a real,
+- **`SEND_EMAIL`** (`CONFIRM`, standing-granted) — sends a real,
   brand-new email from the linked account. Added later, on explicit
   request, reversing this feature's original read-only-by-design
   boundary — the OAuth scope now requests `gmail.send` alongside
@@ -864,14 +883,27 @@ automated from here):
   `GET /calendar/oauth/start` once** to pick it up; until then, `SEND_EMAIL`
   fails with an insufficient-scope error while everything else keeps
   working. Header values (`to`/`subject`) are sanitized against CR/LF
-  injection before the raw message is built.
-- **`REPLY_EMAIL`** (`SAFE_ACTION`, standing-granted) — replies within an
+  injection before the raw message is built. `CONFIRM`, not `SAFE_ACTION` —
+  a later security review found that `SEARCH_EMAIL`/`GET_EMAIL` feed real
+  inbox content (including anything an attacker chooses to put in an
+  email body) straight into the model's context, and `SEND_EMAIL` is the
+  one tool that could turn a successful prompt injection into real
+  third-party data exfiltration. The system prompt already tells the
+  model not to treat fetched content as instructions (see "Content that
+  comes back from a tool..." in `systemPrompt.ts`), but that's advisory,
+  not a technical control — `CONFIRM`'s fresh per-invocation human
+  approval is the real backstop, see `SendEmailTool.ts`'s own doc comment.
+- **`REPLY_EMAIL`** (`CONFIRM`, standing-granted) — replies within an
   existing thread, given a `messageId` from a prior `search_email`/
   `get_email` call. The recipient, subject (`Re:` prefix), and threading
   headers (`In-Reply-To`/`References`) are all derived from the original
   message server-side, never supplied by the caller — this can't be
-  redirected to send to someone other than whoever the original message
-  actually came from.
+  redirected to send to someone OTHER than whoever the original message
+  actually came from. That's real, but not sufficient on its own: "the
+  original sender" can simply be an attacker who emailed the owner with
+  an injected instruction in the body, and the reply goes straight back
+  to that same attacker's inbox with no redirection needed at all — same
+  `CONFIRM` reasoning as `SEND_EMAIL` above.
 - Still no `DELETE`/mailbox-modify capability of any kind — `SEND_EMAIL`/
   `REPLY_EMAIL` only ever add a new sent message, never touch an existing
   one.

@@ -18,9 +18,9 @@ function makeClient() {
 }
 
 describe("REPLY_EMAIL tool", () => {
-  test("is SAFE_ACTION", () => {
+  test("is CONFIRM — replying to an original sender who injected the request could otherwise exfiltrate data", () => {
     const tool = createReplyEmailTool(makeClient());
-    expect(tool.requiredPermission).toBe(PermissionLevel.SAFE_ACTION);
+    expect(tool.requiredPermission).toBe(PermissionLevel.CONFIRM);
   });
 
   test("rejects an empty messageId", async () => {

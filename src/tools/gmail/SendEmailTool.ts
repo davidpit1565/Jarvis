@@ -13,13 +13,22 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /**
  * Actually sends a real email from the user's linked Gmail account — added
  * on the user's own explicit request, reversing this feature's original
- * read-only-by-design boundary (see GmailClient's doc comment). SAFE_ACTION
- * rather than CONFIRM/DANGEROUS: the effect is fully specified up front
- * (exact recipient, subject, body — nothing open-ended), matching
- * CREATE_CALENDAR_EVENT's reasoning, not CLICK_ELEMENT's. Still standing-
- * granted rather than confirmed per-call, same tradeoff as every other
- * SAFE_ACTION tool: asking every time would defeat the point of just
- * telling JARVIS to send it.
+ * read-only-by-design boundary (see GmailClient's doc comment).
+ *
+ * CONFIRM, not SAFE_ACTION — found during a later security review:
+ * SEND_EMAIL's blast radius isn't "fully specified and self-contained"
+ * the way CREATE_CALENDAR_EVENT's is. JARVIS also has read tools
+ * (search_email/get_email) that feed real inbox content — including
+ * anything an attacker chooses to put in an email body — straight into
+ * the model's own context. The system prompt already tells the model not
+ * to treat fetched content as instructions, but that's an instruction to
+ * a model, not a technical control; SEND_EMAIL is the one tool that can
+ * turn a successful prompt injection into real third-party data
+ * exfiltration (unlike SEND_SMS/SHARE_FILE_TO_PHONE, which are hardcoded
+ * to the owner's own number/chat and can't be redirected at all). CONFIRM
+ * forces a fresh human confirmation on every single send, the same
+ * treatment WRITE_FILE gets for its own no-undo risk — this is the real
+ * backstop when the prompt-level guardrail alone isn't enough.
  */
 export function createSendEmailTool(gmailClient: GmailClient): LocalTool<SendEmailInput> {
   return {
@@ -38,7 +47,7 @@ export function createSendEmailTool(gmailClient: GmailClient): LocalTool<SendEma
       },
       required: ["to", "subject", "body"],
     },
-    requiredPermission: PermissionLevel.SAFE_ACTION,
+    requiredPermission: PermissionLevel.CONFIRM,
     target: "local",
 
     async execute(input) {

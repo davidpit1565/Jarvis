@@ -2632,10 +2632,16 @@
 
     // Real vision, not a filename — an attached image travels to Claude
     // as an actual image content block (see ClaudeBrain.toAnthropicMessages
-    // and Orchestrator's MAX_IMAGE_BASE64_LENGTH). 8MB raw is comfortably
-    // under that base64 cap (~7M base64 chars ≈ 5.25MB raw) with headroom,
-    // and fails fast client-side rather than wasting a round trip.
-    const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+    // and Orchestrator's MAX_IMAGE_BASE64_LENGTH = 7,000,000 base64
+    // chars). Base64 inflates raw bytes by ~4/3, so the raw-byte cap here
+    // has to be the base64 cap divided by that factor, not a bigger
+    // number picked independently — an earlier version of this comment
+    // had the math backwards (claimed 8MB raw was "under" the cap, when
+    // 8MB raw actually base64-encodes to ~11.2M chars, well over it),
+    // which meant some images silently passed this check only to be
+    // rejected server-side anyway — exactly the wasted round trip this
+    // client-side check exists to prevent.
+    const MAX_IMAGE_BYTES = Math.floor((7_000_000 * 3) / 4);
     let pendingImage = null; // { mediaType, data (base64, no data: prefix), previewUrl }
 
     function clearPendingImage() {
@@ -2766,6 +2772,14 @@
           } else if (data.type === "error") {
             appendMessage("SYSTEM", data.message || "Error", "error");
             if (onAssistantMessage) onAssistantMessage(null);
+          } else if (data.type === "confirm") {
+            // A CONFIRM/DANGEROUS tool call (send_email, write_file, ...)
+            // is waiting on a real yes/no answer — see
+            // JarvisWebSocketServer.requestWebChatConfirmation(). Just
+            // type "yes"/"no" in the normal input; the server treats the
+            // next message as the answer, not a new topic, same as
+            // Telegram's own confirmation flow.
+            appendMessage("JARVIS", data.message, "jarvis");
           }
         } catch (e) { /* ignore a malformed frame rather than crash the socket */ }
       });
