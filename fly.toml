@@ -18,7 +18,7 @@
 #
 # See README.md "Phone gateway (call JARVIS)" for the full walkthrough.
 
-app = "jarvis-core"
+app = "jarvis-6b5jhg"
 primary_region = "iad"
 
 [build]
