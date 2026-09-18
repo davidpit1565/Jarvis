@@ -76,6 +76,34 @@ describe("PLAY_MUSIC tool", () => {
     expect((result.data as { track: { name: string } }).track.name).toBe("Song");
   });
 
+  test("surfaces other close matches as alternates when the search is ambiguous", async () => {
+    global.fetch = (async (url: string) => {
+      if (url.includes("/search")) {
+        return new Response(
+          JSON.stringify({
+            tracks: {
+              items: [
+                { name: "Yesterday", artists: [{ name: "The Beatles" }], album: { name: "Help!" }, uri: "spotify:track:1" },
+                { name: "Yesterday (Cover)", artists: [{ name: "Someone Else" }], album: { name: "Covers" }, uri: "spotify:track:2" },
+              ],
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    const tool = createPlayMusicTool(makeLinkedClient());
+    const result = await tool.execute({ query: "Yesterday" }, context);
+
+    expect(result.success).toBe(true);
+    const data = result.data as { track: { name: string }; alternates: { name: string }[] };
+    expect(data.track.name).toBe("Yesterday");
+    expect(data.alternates).toHaveLength(1);
+    expect(data.alternates[0]?.name).toBe("Yesterday (Cover)");
+  });
+
   test("fails clearly when no track matches the query", async () => {
     global.fetch = (async () => new Response(JSON.stringify({ tracks: { items: [] } }), { status: 200 })) as unknown as typeof fetch;
     const tool = createPlayMusicTool(makeLinkedClient());

@@ -957,7 +957,11 @@ to configure here.
   paused), and which device it's on.
 - **`PLAY_MUSIC`** (`SAFE_ACTION`, standing-granted) — resumes whatever
   was paused, or searches for and plays a specific song/artist when a
-  `query` is given ("play Bohemian Rhapsody").
+  `query` is given ("play Bohemian Rhapsody"). Spotify search is often
+  ambiguous (covers, the same title by a different artist), so it plays
+  the top match immediately but also returns the next few close matches
+  as `alternates`, letting JARVIS offer "did you mean X instead?" if the
+  one it played doesn't look like a confident match.
 - **`PAUSE_MUSIC`**/**`SKIP_TRACK`** (`SAFE_ACTION`, standing-granted) —
   pause playback, or skip to the next/previous track.
 - **`UNLINK_SPOTIFY`** (`DANGEROUS`, like `UNLINK_CALENDAR`) —
