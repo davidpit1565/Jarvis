@@ -43,21 +43,42 @@ const CALL_LIMIT_HE = "השיחה הזו נמשכת כבר זמן רב — נמ�
 const MAX_CALL_TURNS = 40;
 
 /**
- * Amazon Polly's Neural voice for <Say> — noticeably more natural than
- * Twilio's default "Basic" voice, and (unlike Twilio's newer Generative
- * voices) available on standard accounts with no beta opt-in required.
- * Overridable via the TWILIO_VOICE env var if a better voice becomes
- * available on the account this actually runs on.
+ * Amazon Polly's *Standard* (non-Neural) engine for <Say> — deliberately
+ * NOT the more natural-sounding Neural voice used previously. The user
+ * explicitly asked for JARVIS's phone voice to sound like a distinct
+ * machine/AI, quiet and deep, not a real person and not "cute" — never his
+ * own voice, and never mistakable for a human. The Standard engine's more
+ * synthetic cadence, combined with the pitch/rate SSML below, gets closer
+ * to that than any Neural voice can: AWS Neural voices only support
+ * `<prosody rate>` over SSML, not `<prosody pitch>`, so a Neural voice
+ * can be slowed down but never actually deepened. Overridable via the
+ * TWILIO_VOICE env var if a better voice becomes available on the account
+ * this actually runs on.
  */
-const DEFAULT_VOICE = "Polly.Matthew-Neural";
+const DEFAULT_VOICE = "Polly.Matthew";
 
 /**
- * Google's WaveNet Hebrew voice — Polly has no Hebrew voice at all, so
- * Hebrew speech always goes through Twilio's Google TTS integration
- * regardless of what English voice is configured. Overridable via
+ * Google's *Standard* (non-WaveNet) Hebrew voice — Polly has no Hebrew
+ * voice at all, so Hebrew speech always goes through Twilio's Google TTS
+ * integration regardless of what English voice is configured. Standard,
+ * not WaveNet, for the same "sound like a machine, not a person" reason
+ * DEFAULT_VOICE is Polly's Standard engine. Overridable via
  * TWILIO_VOICE_HEBREW for the same reason TWILIO_VOICE is overridable.
  */
-const DEFAULT_HEBREW_VOICE = "Google.he-IL-Wavenet-D";
+const DEFAULT_HEBREW_VOICE = "Google.he-IL-Standard-D";
+
+/**
+ * SSML <prosody> applied around every spoken line to make the voice sit
+ * lower and land more deliberately — quiet and deep, not a chirpy
+ * assistant. Pitch lowering only takes effect on Polly's Standard engine
+ * and on Twilio's Google voices (both used above); it's silently ignored
+ * by Neural voices, which is one more reason not to use one here.
+ * Overridable via TWILIO_VOICE_PITCH / TWILIO_VOICE_RATE if a different
+ * balance sounds better on a real call — never validated against a real
+ * Twilio account.
+ */
+const DEFAULT_VOICE_PITCH = "-15%";
+const DEFAULT_VOICE_RATE = "92%";
 
 /**
  * Twilio's <Gather> only recognizes one language per request UNLESS you opt
@@ -115,6 +136,8 @@ export class TwilioVoiceGateway {
   private readonly voice: string;
   private readonly hebrewVoice: string;
   private readonly gatherLanguage: string;
+  private readonly voicePitch: string;
+  private readonly voiceRate: string;
 
   constructor(
     private readonly createSession: PhoneSessionFactory,
@@ -136,18 +159,23 @@ export class TwilioVoiceGateway {
      * Falls back to `createSession` when omitted (the wake-up feature
      * still works, just without that extra framing).
      */
-    private readonly createWakeUpSession: PhoneSessionFactory = createSession
+    private readonly createWakeUpSession: PhoneSessionFactory = createSession,
+    voicePitch: string = DEFAULT_VOICE_PITCH,
+    voiceRate: string = DEFAULT_VOICE_RATE
   ) {
     this.voice = voice;
     this.hebrewVoice = hebrewVoice;
     this.gatherLanguage = gatherLanguage;
+    this.voicePitch = voicePitch;
+    this.voiceRate = voiceRate;
   }
 
-  /** One <Say>, in whichever voice fits the text's own language. */
+  /** One <Say>, in whichever voice fits the text's own language, pitched down for a machine-like tone. */
   private sayTag(text: string): string {
+    const prosody = `<prosody pitch="${escapeXml(this.voicePitch)}" rate="${escapeXml(this.voiceRate)}">${escapeXml(text)}</prosody>`;
     return HEBREW_CHARS.test(text)
-      ? `<Say language="he-IL" voice="${escapeXml(this.hebrewVoice)}">${escapeXml(text)}</Say>`
-      : `<Say voice="${escapeXml(this.voice)}">${escapeXml(text)}</Say>`;
+      ? `<Say language="he-IL" voice="${escapeXml(this.hebrewVoice)}">${prosody}</Say>`
+      : `<Say voice="${escapeXml(this.voice)}">${prosody}</Say>`;
   }
 
   /**

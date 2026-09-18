@@ -52,10 +52,10 @@ export interface JarvisConfig {
   ownerPhoneNumber?: string;
   /** Path to the SQLite database storing recurring wake-up/scheduled-call times. */
   wakeUpCallDbPath: string;
-  /** Twilio <Say> voice name (e.g. "Polly.Matthew-Neural"); unset uses the gateway's own default. */
+  /** Twilio <Say> voice name (e.g. "Polly.Matthew"); unset uses the gateway's own default. */
   twilioVoice?: string;
   /**
-   * Twilio <Say> voice for Hebrew replies (e.g. "Google.he-IL-Wavenet-D") —
+   * Twilio <Say> voice for Hebrew replies (e.g. "Google.he-IL-Standard-D") —
    * separate from twilioVoice because Amazon Polly has no Hebrew voice at
    * all, so Hebrew always goes through Twilio's Google TTS integration.
    * Unset uses the gateway's own default.
@@ -69,6 +69,14 @@ export interface JarvisConfig {
    * available on the Twilio account this runs on.
    */
   twilioGatherLanguage?: string;
+  /**
+   * SSML `<prosody pitch>`/`<prosody rate>` applied to every spoken line,
+   * for JARVIS's deliberately deep, machine-sounding phone voice (not a
+   * human, not "cute") — see TwilioVoiceGateway's DEFAULT_VOICE comment.
+   * Unset uses the gateway's own defaults.
+   */
+  twilioVoicePitch?: string;
+  twilioVoiceRate?: string;
   /**
    * Shared secret required on POST /pairing/approve. Mandatory once the
    * phone gateway is configured, since that makes this same server
@@ -182,6 +190,8 @@ export function loadConfig(): JarvisConfig {
   const twilioVoice = process.env.TWILIO_VOICE?.trim() || undefined;
   const twilioVoiceHebrew = process.env.TWILIO_VOICE_HEBREW?.trim() || undefined;
   const twilioGatherLanguage = process.env.TWILIO_GATHER_LANGUAGE?.trim() || undefined;
+  const twilioVoicePitch = process.env.TWILIO_VOICE_PITCH?.trim() || undefined;
+  const twilioVoiceRate = process.env.TWILIO_VOICE_RATE?.trim() || undefined;
   const adminToken = process.env.JARVIS_ADMIN_TOKEN?.trim() || undefined;
   const webSearchEnabled = process.env.JARVIS_WEB_SEARCH?.trim().toLowerCase() === "true";
   const webSearchMaxUses = Number(process.env.JARVIS_WEB_SEARCH_MAX_USES ?? "5");
@@ -260,6 +270,8 @@ export function loadConfig(): JarvisConfig {
     twilioVoice,
     twilioVoiceHebrew,
     twilioGatherLanguage,
+    twilioVoicePitch,
+    twilioVoiceRate,
     twilioAccountSid,
     twilioFromNumber,
     ownerPhoneNumber,

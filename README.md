@@ -477,13 +477,18 @@ ships credentials for either):
 5. Optionally set `TWILIO_ALLOWED_CALLERS` to a comma-separated allowlist
    of E.164 numbers (see "Security controls" above) — recommended before
    giving the number out.
-6. Optionally set `TWILIO_VOICE` to pick a different English `<Say>` voice.
-   The default, `Polly.Matthew-Neural`, is a natural-sounding neural voice
-   available on standard Twilio accounts (no beta opt-in) — a clear
-   step up from Twilio's robotic default "Basic" voice. If the account
-   has Twilio's newer Generative voices enabled (e.g.
-   `Google.en-US-Chirp3-HD-Charon`), that's an even more natural option;
-   see [Twilio's voice list](https://www.twilio.com/docs/voice/twiml/say/text-speech).
+6. Optionally set `TWILIO_VOICE` to pick a different English `<Say>` voice,
+   and `TWILIO_VOICE_PITCH`/`TWILIO_VOICE_RATE` to adjust how deep/slow it
+   sounds. The default, `Polly.Matthew` (Amazon's Standard, non-Neural
+   engine) lowered by `-15%` pitch and slowed to `92%` rate, is a
+   deliberate choice: it's meant to sound like a machine speaking, not a
+   real person — quiet, deep, distinct from a human voice, on purpose. If
+   you'd rather have the more natural-sounding option instead, set
+   `TWILIO_VOICE=Polly.Matthew-Neural` (note Neural voices only honor the
+   `rate` part of `TWILIO_VOICE_RATE`, not the pitch — see
+   [Twilio's voice list](https://www.twilio.com/docs/voice/twiml/say/text-speech)
+   for further options, including newer Generative voices like
+   `Google.en-US-Chirp3-HD-Charon` if enabled on the account).
 7. Call the number and speak in Hebrew or English (see "Hebrew + English on
    phone calls" below) — JARVIS answers, listens, replies, and keeps
    listening until the call ends.
@@ -510,8 +515,9 @@ speech-to-text and text-to-speech have to be told which language(s) to use:
   yet; the brain's actual replies are spoken in just the one language they
   were written in. Amazon Polly (the default English voice) has no Hebrew
   voice at all, so Hebrew always goes through Twilio's Google TTS
-  integration (`Google.he-IL-Wavenet-D` by default, overridable via
-  `TWILIO_VOICE_HEBREW`).
+  integration (`Google.he-IL-Standard-D` by default — Standard rather than
+  WaveNet, for the same "sound like a machine, not a person" reason as the
+  English voice above — overridable via `TWILIO_VOICE_HEBREW`).
 
 If `TWILIO_AUTH_TOKEN`/`TWILIO_PUBLIC_BASE_URL` aren't set, the `/voice/*`
 routes don't exist at all (`404`) and nothing else changes — the phone
@@ -544,8 +550,9 @@ end-to-end HTTP tests against the actual `Bun.serve` server
 (`tests/phone/`). What is **not** validated is an actual phone call
 through a real Twilio account — that requires the account/number setup
 above, which hasn't been done in this environment. In particular, the
-actual sound of `Polly.Matthew-Neural` (or any other voice) hasn't been
-heard — only that the TwiML correctly requests it.
+actual sound of `Polly.Matthew` with the pitch/rate SSML applied (or any
+other voice) hasn't been heard — only that the TwiML correctly requests
+it.
 
 ## Wake-up calls (JARVIS calls you)
 

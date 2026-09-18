@@ -283,7 +283,9 @@ function main() {
           audioStreamUrl,
           config.twilioVoiceHebrew,
           config.twilioGatherLanguage,
-          createWakeUpPhoneSession
+          createWakeUpPhoneSession,
+          config.twilioVoicePitch,
+          config.twilioVoiceRate
         )
       : undefined;
 
