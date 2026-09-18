@@ -170,7 +170,13 @@ describe("WebAuthn (Face ID / Touch ID) HTTP routes", () => {
     const { handle, port } = setupServer({ withAuth: true });
     activeHandle = handle;
 
-    const response = await fetch(`http://localhost:${port}/status`);
+    // /status now also requires the admin token (it used to be reachable
+    // by anyone once WebAuthn had no credential registered yet, even with
+    // an admin token configured) — this test isn't about that gate, so
+    // authenticate past it to isolate the webAuthnConfigured assertion.
+    const response = await fetch(`http://localhost:${port}/status`, {
+      headers: { "X-Jarvis-Admin-Token": ADMIN_TOKEN },
+    });
     const data = (await response.json()) as { webAuthnConfigured: boolean };
     expect(data.webAuthnConfigured).toBe(false);
   });

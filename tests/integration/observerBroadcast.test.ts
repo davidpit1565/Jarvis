@@ -12,12 +12,18 @@ import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocket
  * is the mechanism `ui/hologram/index.html`'s "CORE ACTIVITY" panel relies
  * on for its live (non-demo) feed.
  */
-function setupServer() {
+function setupServer(adminToken?: string) {
   const eventBus = new EventBus();
   const deviceRegistry = new DeviceRegistry();
   const pairingService = new PairingService();
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
-  const server = new JarvisWebSocketServer({ deviceRegistry, deviceConnectionManager, pairingService, eventBus });
+  const server = new JarvisWebSocketServer({
+    deviceRegistry,
+    deviceConnectionManager,
+    pairingService,
+    eventBus,
+    adminToken,
+  });
   const handle = server.start(0); // port 0: let the OS pick a free port
   return { handle, port: handle.port, eventBus };
 }
@@ -117,5 +123,38 @@ describe("Observer broadcast (/observer)", () => {
     expect(messages.length).toBe(0);
 
     deviceWs.close();
+  });
+
+  test("rejects an /observer upgrade with no token when an admin token is configured", async () => {
+    const { handle, port } = setupServer("secret-token");
+    activeHandle = handle;
+
+    const res = await fetch(`http://localhost:${port}/observer`, {
+      headers: { Upgrade: "websocket", Connection: "Upgrade" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("accepts an /observer upgrade with the correct token when one is configured", async () => {
+    const { handle, port, eventBus } = setupServer("secret-token");
+    activeHandle = handle;
+
+    const ws = new WebSocket(`ws://localhost:${port}/observer?token=secret-token`);
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("observer socket failed to open"));
+      setTimeout(() => reject(new Error("Timed out opening observer socket")), 2000);
+    });
+
+    const received = new Promise<{ type: string }>((resolve, reject) => {
+      ws.onmessage = (event) => resolve(JSON.parse(event.data as string));
+      setTimeout(() => reject(new Error("Timed out waiting for broadcast")), 2000);
+    });
+    eventBus.emit("device.connected", { deviceId: "authed-observer" });
+
+    const message = await received;
+    expect(message.type).toBe("device.connected");
+
+    ws.close();
   });
 });

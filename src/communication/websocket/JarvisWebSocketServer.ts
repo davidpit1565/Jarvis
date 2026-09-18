@@ -470,8 +470,22 @@ export class JarvisWebSocketServer {
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
-            const { webAuthnService } = this.deps;
-            if (webAuthnService?.hasCredentials() && !this.hasValidSession(req)) {
+            const { webAuthnService, adminToken } = this.deps;
+            // Previously only gated by WebAuthn — on a deploy where Face
+            // ID/Touch ID setup was never done but adminToken WAS
+            // configured, this endpoint stayed wide open on the public
+            // internet and leaked device lists, tool-usage, and the real
+            // text of JARVIS's spoken replies (activityLog). Now also
+            // accepts the same admin token /chat and the admin-gated
+            // routes use, via header or query param (a plain GET can't
+            // send a query param the way pollStatus() already does for
+            // /chat, so both are accepted). Still open when neither
+            // WebAuthn nor an admin token is configured at all (local dev).
+            const hasSession = this.hasValidSession(req);
+            const suppliedToken = req.headers.get("X-Jarvis-Admin-Token") ?? url.searchParams.get("token") ?? "";
+            const hasValidToken = !!adminToken && constantTimeEqual(suppliedToken, adminToken);
+            const authRequired = !!webAuthnService?.hasCredentials() || !!adminToken;
+            if (authRequired && !hasSession && !hasValidToken) {
               return Response.json({ error: "Locked" }, { status: 401 });
             }
             return this.handleStatusJson();
@@ -572,6 +586,22 @@ export class JarvisWebSocketServer {
           }
 
           if (isUpgradeRequest && url.pathname === "/observer") {
+            // Was completely unauthenticated: any client that opened this
+            // socket got a live mirror of every conversation — full
+            // user/assistant text, tool inputs/results — with no admin
+            // token, no session, no rate limit. On a public Fly.io deploy
+            // that's a full conversational-privacy bypass. Same admin-token
+            // gate as /chat now; still open for local dev with no
+            // adminToken configured at all.
+            const { adminToken } = this.deps;
+            if (adminToken) {
+              if (!this.rateLimiter.attempt(rateLimitKey(req, server, "observer"))) {
+                return new Response("Too many requests", { status: 429 });
+              }
+              if (!constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
+                return new Response("Unauthorized", { status: 401 });
+              }
+            }
             return server.upgrade(req, { data: { kind: "observer" } })
               ? undefined
               : new Response("Upgrade failed", { status: 400 });
@@ -584,9 +614,17 @@ export class JarvisWebSocketServer {
             // can't carry a custom header from a browser the way a normal
             // fetch() can, so the token travels as a query param instead.
             // Optional only for local dev with no adminToken set at all.
+            // Rate-limited (unlike before) so the token can't be brute
+            // forced via unlimited upgrade attempts — every other
+            // admin-token route already goes through the rate limiter.
             const { adminToken } = this.deps;
-            if (adminToken && !constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
-              return new Response("Unauthorized", { status: 401 });
+            if (adminToken) {
+              if (!this.rateLimiter.attempt(rateLimitKey(req, server, "chat"))) {
+                return new Response("Too many requests", { status: 429 });
+              }
+              if (!constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
+                return new Response("Unauthorized", { status: 401 });
+              }
             }
             return server.upgrade(req, { data: { kind: "web-chat" } })
               ? undefined
