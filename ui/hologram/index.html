@@ -846,15 +846,22 @@
   // prefers-reduced-motion, which freezes here rather than animating) and
   // animate()'s per-frame advection (which just calls this again with a
   // moving t) — one formula, not two copies that could quietly drift.
-  // Two octaves (a big low-frequency lobe shape, plus finer secondary
-  // bumps) is the standard technique for organic/blob shapes — a single
-  // frequency reads as either "bumpy sphere" (high freq) or just "a
-  // slightly squashed sphere" (low freq alone), not a real amoeba outline.
+  // Three octaves (a big low-frequency lobe shape, finer secondary bumps,
+  // and now a third, small-amplitude high-frequency ripple) is the
+  // standard technique for organic/blob shapes — a single frequency reads
+  // as either "bumpy sphere" (high freq) or just "a slightly squashed
+  // sphere" (low freq alone), not a real amoeba outline. The third octave
+  // (`lobe3`) is deliberately low-weight (0.09, vs. 0.85/0.25 for the
+  // other two) — it's a fine cortex-fold ripple riding on top of the main
+  // silhouette, not another visible lobe, since direct feedback on the
+  // two-octave version was that a clean rounded outline still read as
+  // "a smooth planet/cell" from a distance even with real lobes moving.
   function blobRadius(baseRadius, dx, dy, dz, t) {
     const blobT = t * 0.05;
     const lobe = simplex3(dx * 0.55 + blobT, dy * 0.55 - blobT * 0.6, dz * 0.55 + blobT * 0.8);
     const lobe2 = simplex3(dx * 1.3 - blobT * 1.4, dy * 1.3, dz * 1.3 + blobT * 1.1);
-    return baseRadius * (0.5 + (lobe * 0.5 + 0.5) * 0.85 + (lobe2 * 0.5 + 0.5) * 0.25);
+    const lobe3 = simplex3(dx * 2.7 + blobT * 2.0, dy * 2.7 - blobT * 0.5, dz * 2.7);
+    return baseRadius * (0.5 + (lobe * 0.5 + 0.5) * 0.85 + (lobe2 * 0.5 + 0.5) * 0.25 + (lobe3 * 0.5 + 0.5) * 0.09);
   }
 
   function buildFlowShell(baseRadius, count, color, lineColor) {
@@ -1037,7 +1044,34 @@
 
   // Inner shell — the "mind": brightens, grows, and spins faster while
   // actively thinking (real brain.request/brain.response activity).
-  const innerGeo = new THREE.SphereGeometry(1.0, 18, 14);
+  //
+  // This used to be a plain THREE.SphereGeometry wireframe — exactly the
+  // same "it's just a UV-sphere, so it has visible latitude/longitude
+  // lines and reads as a globe" problem the outer shell was rebuilt to
+  // fix (see buildFlowShell()/blobRadius() above), just left over on the
+  // INNER mesh: a regular lat/long grid sitting dead-center inside the
+  // Core, which is exactly what still reads as "Earth" even after the
+  // outer shell went organic. Fixed the same way, reusing the same
+  // simplex3() noise the outer shell/energy surface already use (not a
+  // second implementation): displace every icosahedron vertex outward
+  // along its own radial direction by a noise sample at that direction,
+  // so the wireframe itself folds unevenly like a real convoluted brain
+  // surface instead of tracing perfect circles of latitude.
+  function buildOrganicWire(baseRadius, detail, freq, warp) {
+    const geo = new THREE.IcosahedronGeometry(baseRadius, detail);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const len = Math.sqrt(x * x + y * y + z * z) || 1;
+      const nx = x / len, ny = y / len, nz = z / len;
+      const n = simplex3(nx * freq, ny * freq, nz * freq);
+      const r = len * (1 + n * warp);
+      pos.setXYZ(i, nx * r, ny * r, nz * r);
+    }
+    pos.needsUpdate = true;
+    return geo;
+  }
+  const innerGeo = buildOrganicWire(1.0, 3, 2.4, 0.18);
   const innerWire = new THREE.WireframeGeometry(innerGeo);
   const innerMat = new THREE.LineBasicMaterial({
     color: 0xffb15c, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending,
@@ -1221,7 +1255,16 @@
     // hooks that used to drive the old head's mouth-open animation, then
     // the old wireframe shell's rotation).
     {
-      const voiceScale = 1 + audioGlow * 0.35;
+      // Was voice-only (audioGlow) — the outer body pulsed when Jarvis
+      // spoke but stayed a fixed size while it thought, so "thinking"
+      // only ever showed up on the small inner mind shell. Per direct
+      // request (grow/shrink genuinely tied to real thinking activity,
+      // not just voice), brainPulse now grows the whole outer body too,
+      // at a smaller weight than voice so speaking still reads as the
+      // bigger, faster pulse — the outer envelope now visibly swells with
+      // a real brain.request/brain.response burst, not just the mind
+      // inside it.
+      const voiceScale = 1 + audioGlow * 0.35 + brainPulse * 0.16;
       flowShell.group.scale.setScalar(voiceScale);
       energySurface.scale.setScalar(voiceScale);
       energyMat.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
@@ -1343,9 +1386,23 @@
         faceGroup.rotation.x += (targetPitch - faceGroup.rotation.x) * 0.08;
         faceGroup.rotation.z += (0 - faceGroup.rotation.z) * 0.08;
       } else {
-        faceGroup.rotation.y = Math.sin(t * 0.24) * 0.4;
-        faceGroup.rotation.x = Math.sin(t * 0.15) * 0.07;
-        faceGroup.rotation.z = Math.sin(t * 0.09) * 0.025;
+        // Idle tumble — was a near-flat Y-axis sway (X/Z amplitude 0.07/
+        // 0.025 rad, ~4deg/1.4deg: barely visible), which is exactly why
+        // this kept reading as "a globe spinning on its axis" rather than
+        // a free-floating organism. Per direct request — free rotation in
+        // every direction, including up/down, not just side to side — X
+        // and Z now swing as widely as Y (all three ~0.3-0.55 rad), and Y
+        // carries a genuine unbounded drift term (`t * 0.05`) on top of
+        // its wobble so the Core keeps slowly turning through new facings
+        // over time instead of settling into a bounded side-to-side sway.
+        // Four different, deliberately non-harmonic frequencies (0.24,
+        // 0.17, 0.11, 0.07) and phase offsets per axis keep the three
+        // axes from ever lining back up into a repeating loop within any
+        // watchable timeframe, the same "never mechanically synchronized"
+        // principle already used for the per-dot size pulse.
+        faceGroup.rotation.y = t * 0.05 + Math.sin(t * 0.24) * 0.4 + Math.sin(t * 0.17 + 2.1) * 0.18;
+        faceGroup.rotation.x = Math.sin(t * 0.19 + 0.8) * 0.32 + Math.sin(t * 0.11 + 4.2) * 0.2;
+        faceGroup.rotation.z = Math.sin(t * 0.13 + 1.4) * 0.22 + Math.sin(t * 0.07 + 5.6) * 0.12;
       }
       // Subtle continuous "breathing" scale on the whole core, a little
       // stronger while actively thinking or speaking — reinforces that
