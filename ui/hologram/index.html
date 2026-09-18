@@ -2,8 +2,21 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>JARVIS</title>
+<!-- PWA/"Add to Home Screen" support — was a plain page with no way to
+     feel like an installed app on a phone, even once served from a real
+     public Core URL. Only meaningful under /hologram (manifest's
+     start_url/scope; relative here so it still resolves harmlessly from
+     a local file:// or python -m http.server open, where a browser
+     simply won't find anything installable — no functional change for
+     that dev flow). -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#03050a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="JARVIS" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
 <style>
   :root { color-scheme: dark; }
   html, body {
