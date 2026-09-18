@@ -218,6 +218,12 @@ export interface JarvisWebSocketServerDependencies {
    * it's on the public internet.
    */
   webChatOrchestrator?: Orchestrator;
+  /**
+   * Overrides the 45s default interval for the keepalive ping loop
+   * (covers both authenticated devices and devices still pending pairing
+   * approval). Test-only knob — real deployments should never set this.
+   */
+  pingIntervalMs?: number;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -390,7 +396,13 @@ export class JarvisWebSocketServer {
     // stops the server — never left running past the server's own
     // lifetime (this matters most in tests, which start/stop many
     // short-lived servers).
-    const pingInterval = setInterval(() => this.deps.deviceConnectionManager.pingAll(), 45_000);
+    const pingInterval = setInterval(
+      () => {
+        this.deps.deviceConnectionManager.pingAll();
+        this.pingPendingConnections();
+      },
+      this.deps.pingIntervalMs ?? 45_000
+    );
     const originalStop = server.stop.bind(server);
     server.stop = ((...args: Parameters<typeof originalStop>) => {
       clearInterval(pingInterval);
@@ -1491,6 +1503,23 @@ export class JarvisWebSocketServer {
     lockdownService.activate(reason);
     console.error(`[jarvis] EMERGENCY LOCKDOWN ACTIVATED${reason ? `: ${reason}` : ""}`);
     return Response.json({ success: true, status: lockdownService.status() });
+  }
+
+  /**
+   * Pings every device still waiting on a human to approve its pairing
+   * code — `deviceConnectionManager.pingAll()` only reaches *authenticated*
+   * connections, so without this, a pending socket got no keepalive at
+   * all and Bun's own `idleTimeout` (120s) silently closed it the moment
+   * approving took a human longer than that — observed live: the Agent's
+   * pairing code kept changing out from under a real approval attempt,
+   * with "Socket is not connected" in between. Same mechanism as
+   * `pingAll()`: the real "pong" reply is itself socket activity, which
+   * is what actually resets the idle timer.
+   */
+  private pingPendingConnections(): void {
+    for (const [deviceId, ws] of this.pendingConnections) {
+      ws.send(JSON.stringify(makeEnvelope("ping", {}, deviceId, randomUUID())));
+    }
   }
 
   private send(
