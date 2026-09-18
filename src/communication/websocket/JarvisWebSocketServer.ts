@@ -17,6 +17,7 @@ import type { MemoryStore } from "@/memory/MemoryStore";
 import type { ToolAuditLog } from "@/audit/ToolAuditLog";
 import type { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import type { SpotifyClient } from "@/spotify/SpotifyClient";
 import type { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
@@ -146,6 +147,12 @@ export interface JarvisWebSocketServerDependencies {
    * both routes 404.
    */
   calendarClient?: GoogleCalendarClient;
+  /**
+   * Optional: enables GET /spotify/oauth/start and /spotify/oauth/callback,
+   * which link a Spotify account for playback control. When unset, both
+   * routes 404.
+   */
+  spotifyClient?: SpotifyClient;
   /** Optional: enables the admin-gated GET /wakeup-calls read-only endpoint. */
   wakeUpCallStore?: WakeUpCallStore;
   /**
@@ -221,6 +228,8 @@ export class JarvisWebSocketServer {
    * deliberate, one-time action.
    */
   private readonly pendingOAuthStates: Map<string, number> = new Map();
+  /** Same purpose/lifecycle as `pendingOAuthStates`, kept separate so the Spotify and Calendar OAuth flows never share state. */
+  private readonly pendingSpotifyOAuthStates: Map<string, number> = new Map();
 
   /**
    * Read-only spectators connected on `/observer` (e.g. the hologram UI in
@@ -429,6 +438,14 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/calendar/oauth/callback") {
             return await this.handleCalendarOAuthCallback(url);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/spotify/oauth/start") {
+            return this.handleSpotifyOAuthStart(req, url, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/spotify/oauth/callback") {
+            return await this.handleSpotifyOAuthCallback(url);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
@@ -1048,6 +1065,71 @@ export class JarvisWebSocketServer {
     }
 
     return new Response("Google Calendar linked successfully. You can close this tab.", {
+      headers: { "Content-Type": "text/plain" },
+    });
+  }
+
+  /**
+   * GET /spotify/oauth/start — begins linking a Spotify account for
+   * playback control. Same admin-token-in-query-param gating and
+   * rate-limiting rationale as GET /calendar/oauth/start.
+   */
+  private handleSpotifyOAuthStart(req: Request, url: URL, server: BunServer): Response {
+    const { adminToken, spotifyClient } = this.deps;
+    if (!spotifyClient || !adminToken) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "spotify-oauth-start"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (!constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    this.purgeExpiredSpotifyOAuthStates();
+    const state = randomUUID();
+    this.pendingSpotifyOAuthStates.set(state, Date.now());
+    return Response.redirect(spotifyClient.buildAuthUrl(state), 302);
+  }
+
+  /** Same purpose as `purgeExpiredOAuthStates`, for the separate Spotify state map. */
+  private purgeExpiredSpotifyOAuthStates(): void {
+    const cutoff = Date.now() - OAUTH_STATE_TTL_MS;
+    for (const [state, issuedAt] of this.pendingSpotifyOAuthStates) {
+      if (issuedAt < cutoff) this.pendingSpotifyOAuthStates.delete(state);
+    }
+  }
+
+  /** GET /spotify/oauth/callback — Spotify redirects here once the user grants (or denies) access. */
+  private async handleSpotifyOAuthCallback(url: URL): Promise<Response> {
+    const { spotifyClient } = this.deps;
+    if (!spotifyClient) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    const error = url.searchParams.get("error");
+    if (error) {
+      return new Response(`Spotify linking was not completed: ${error}`, { status: 400 });
+    }
+
+    const state = url.searchParams.get("state");
+    const code = url.searchParams.get("code");
+    const issuedAt = state ? this.pendingSpotifyOAuthStates.get(state) : undefined;
+    if (!state || issuedAt === undefined || issuedAt < Date.now() - OAUTH_STATE_TTL_MS || !code) {
+      return new Response("Invalid or expired OAuth state", { status: 400 });
+    }
+    this.pendingSpotifyOAuthStates.delete(state);
+
+    try {
+      await spotifyClient.exchangeCodeForTokens(code);
+    } catch (err) {
+      console.error("[jarvis] Spotify OAuth exchange failed:", err instanceof Error ? err.message : String(err));
+      return new Response("Failed to complete Spotify linking. Check the server logs for details.", {
+        status: 500,
+      });
+    }
+
+    return new Response("Spotify linked successfully. You can close this tab.", {
       headers: { "Content-Type": "text/plain" },
     });
   }

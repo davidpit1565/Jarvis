@@ -201,6 +201,11 @@ export interface JarvisConfig {
   googleClientSecret?: string;
   /** Path to the SQLite database storing the linked Google account's OAuth tokens. */
   calendarTokenDbPath: string;
+  /** Spotify OAuth client credentials — both required together to enable Spotify integration. */
+  spotifyClientId?: string;
+  spotifyClientSecret?: string;
+  /** Path to the SQLite database storing the linked Spotify account's OAuth tokens. */
+  spotifyTokenDbPath: string;
 }
 
 class ConfigError extends Error {}
@@ -295,6 +300,26 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError(
       "JARVIS_ADMIN_TOKEN is required once Calendar integration is configured — GET /calendar/oauth/start starts " +
         "an OAuth flow linking a real Google account and must not be triggerable by an unauthenticated request."
+    );
+  }
+
+  const spotifyClientId = process.env.SPOTIFY_CLIENT_ID?.trim() || undefined;
+  const spotifyClientSecret = process.env.SPOTIFY_CLIENT_SECRET?.trim() || undefined;
+  const spotifyTokenDbPath = process.env.JARVIS_SPOTIFY_TOKEN_DB_PATH ?? "./data/jarvis-spotify-tokens.sqlite";
+
+  if (Boolean(spotifyClientId) !== Boolean(spotifyClientSecret)) {
+    throw new ConfigError("SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set together (or neither) to enable Spotify integration");
+  }
+  if (spotifyClientId && spotifyClientSecret && !publicBaseUrl) {
+    throw new ConfigError(
+      "JARVIS_PUBLIC_BASE_URL is required once Spotify integration is configured (SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET) — " +
+        "Spotify needs a real, fixed redirect URI for the OAuth flow."
+    );
+  }
+  if (spotifyClientId && spotifyClientSecret && !adminToken) {
+    throw new ConfigError(
+      "JARVIS_ADMIN_TOKEN is required once Spotify integration is configured — GET /spotify/oauth/start starts " +
+        "an OAuth flow linking a real Spotify account and must not be triggerable by an unauthenticated request."
     );
   }
 
@@ -427,6 +452,9 @@ export function loadConfig(): JarvisConfig {
     googleClientId,
     googleClientSecret,
     calendarTokenDbPath,
+    spotifyClientId,
+    spotifyClientSecret,
+    spotifyTokenDbPath,
     telegramBotToken,
     telegramWebhookSecret,
     telegramAllowedChatIds,

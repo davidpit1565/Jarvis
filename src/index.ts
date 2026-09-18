@@ -54,6 +54,13 @@ import { createDeleteCalendarEventTool } from "@/tools/calendar/DeleteCalendarEv
 import { UndoStore } from "@/core/undo/UndoStore";
 import { createUndoLastActionTool } from "@/tools/undo/UndoLastActionTool";
 import { GmailClient } from "@/gmail/GmailClient";
+import { SpotifyClient } from "@/spotify/SpotifyClient";
+import { SpotifyTokenStore } from "@/spotify/SpotifyTokenStore";
+import { createGetCurrentlyPlayingTool } from "@/tools/spotify/GetCurrentlyPlayingTool";
+import { createPlayMusicTool } from "@/tools/spotify/PlayMusicTool";
+import { createPauseMusicTool } from "@/tools/spotify/PauseMusicTool";
+import { createSkipTrackTool } from "@/tools/spotify/SkipTrackTool";
+import { createUnlinkSpotifyTool } from "@/tools/spotify/UnlinkSpotifyTool";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
 import { createGetEmailTool } from "@/tools/gmail/GetEmailTool";
 import { createGetUnreadEmailCountTool } from "@/tools/gmail/GetUnreadEmailCountTool";
@@ -178,6 +185,24 @@ function main() {
     toolRegistry.registerTool(createSearchEmailTool(gmailClient));
     toolRegistry.registerTool(createGetEmailTool(gmailClient));
     toolRegistry.registerTool(createGetUnreadEmailCountTool(gmailClient));
+  }
+
+  const spotifyEnabled = Boolean(config.spotifyClientId && config.spotifyClientSecret && config.publicBaseUrl);
+  const spotifyTokenStore = new SpotifyTokenStore(config.spotifyTokenDbPath);
+  const spotifyClient = spotifyEnabled
+    ? new SpotifyClient(
+        config.spotifyClientId!,
+        config.spotifyClientSecret!,
+        new URL("/spotify/oauth/callback", config.publicBaseUrl).toString(),
+        spotifyTokenStore
+      )
+    : undefined;
+  if (spotifyClient) {
+    toolRegistry.registerTool(createGetCurrentlyPlayingTool(spotifyClient));
+    toolRegistry.registerTool(createPlayMusicTool(spotifyClient));
+    toolRegistry.registerTool(createPauseMusicTool(spotifyClient));
+    toolRegistry.registerTool(createSkipTrackTool(spotifyClient));
+    toolRegistry.registerTool(createUnlinkSpotifyTool(spotifyTokenStore));
   }
 
   const weatherEnabled = config.weatherLatitude !== undefined && config.weatherLongitude !== undefined;
@@ -614,6 +639,7 @@ function main() {
     toolAuditLog,
     conversationHistoryStore,
     calendarClient,
+    spotifyClient,
     wakeUpCallStore,
     dataDirectory: config.memoryDbPath === ":memory:" ? undefined : dirname(config.memoryDbPath),
     backupDbPaths: [
@@ -747,6 +773,7 @@ function main() {
     if (checkinInterval) clearInterval(checkinInterval);
     if (morningBriefingInterval) clearInterval(morningBriefingInterval);
     calendarTokenStore.close();
+    spotifyTokenStore.close();
     rl.close();
     process.exit(0);
   }

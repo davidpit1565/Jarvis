@@ -926,6 +926,51 @@ cached for 5 minutes and shared between both tools, so calling either in
 quick succession doesn't re-fetch and re-parse the whole feed; a failed
 request is never cached.
 
+## Spotify integration
+
+Lets JARVIS control Spotify playback on request — "play some music,"
+"pause it," "skip this," "what song is this." Controls whichever device
+currently has Spotify open and active (Spotify Connect's own device
+routing handles that), so the same account link works whether Spotify is
+open on the Mac, the phone, or a speaker — there's nothing device-specific
+to configure here.
+
+**Setup** (Spotify, one-time, done manually):
+
+1. Create an app at the [Spotify Developer
+   Dashboard](https://developer.spotify.com/dashboard) — any name/
+   description works. Set its Redirect URI to exactly
+   `<JARVIS_PUBLIC_BASE_URL>/spotify/oauth/callback`.
+2. Set `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` (from that app's
+   settings) as environment variables/secrets on wherever JARVIS runs —
+   both required together, alongside the already-required
+   `JARVIS_PUBLIC_BASE_URL` and `JARVIS_ADMIN_TOKEN`.
+3. Visit `GET /spotify/oauth/start?token=<your admin token>` in a browser
+   to link your Spotify account (must have Spotify open somewhere to
+   control afterward — the OAuth link itself doesn't require it).
+
+**What's implemented:**
+
+- **`GET_CURRENTLY_PLAYING`** (`READ`) — what's currently playing (or
+  paused), and which device it's on.
+- **`PLAY_MUSIC`** (`SAFE_ACTION`, standing-granted) — resumes whatever
+  was paused, or searches for and plays a specific song/artist when a
+  `query` is given ("play Bohemian Rhapsody").
+- **`PAUSE_MUSIC`**/**`SKIP_TRACK`** (`SAFE_ACTION`, standing-granted) —
+  pause playback, or skip to the next/previous track.
+- **`UNLINK_SPOTIFY`** (`DANGEROUS`, like `UNLINK_CALENDAR`) —
+  disconnects the linked account on request.
+- `GET /spotify/oauth/start` (admin-token-gated via a `?token=` query
+  param, since it's a route the browser navigates to directly) and
+  `GET /spotify/oauth/callback` follow the exact same CSRF-protected
+  state, rate-limiting, and error-handling pattern as the Calendar OAuth
+  flow (see "Security controls" below) — a separate token store
+  (`src/spotify/SpotifyTokenStore.ts`) so unlinking Spotify never touches
+  the Google account's tokens.
+- Requests only `user-read-playback-state`, `user-modify-playback-state`,
+  and `user-read-currently-playing` — playback control only, never
+  library or playlist management.
+
 ## Live audio waveform (see JARVIS's voice on a call)
 
 Setting `JARVIS_AUDIO_WAVEFORM=true` adds a live waveform to the
@@ -1490,7 +1535,8 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   `READ_TEXT_FILE` (device — read-only, allowlisted-folder file access;
   see "File access on your Mac" above), `LIST_DEVICES` (which paired
   devices exist and whether they're online), memory/reminder/conversation-history/calendar/wake-up-call/
-  `SEARCH_EMAIL`/`GET_WEATHER`/`GET_NEWS`/`NOTIFY_USER` tools (see their own sections above). Real internet search/URL reading
+  `SEARCH_EMAIL`/`GET_WEATHER`/`GET_NEWS`/`NOTIFY_USER`/Spotify (`GET_CURRENTLY_PLAYING`/`PLAY_MUSIC`/
+  `PAUSE_MUSIC`/`SKIP_TRACK`/`UNLINK_SPOTIFY`) tools (see their own sections above). Real internet search/URL reading
   exist separately, as Anthropic's own server-side `web_search`/`web_fetch`
   tools (opt-in via `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not
   through this registry — see "Real internet search" / "Real URL reading"

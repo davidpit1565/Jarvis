@@ -30,6 +30,9 @@ const ENV_KEYS = [
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
   "JARVIS_CALENDAR_TOKEN_DB_PATH",
+  "SPOTIFY_CLIENT_ID",
+  "SPOTIFY_CLIENT_SECRET",
+  "JARVIS_SPOTIFY_TOKEN_DB_PATH",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_WEBHOOK_SECRET",
   "TELEGRAM_ALLOWED_CHAT_IDS",
@@ -187,6 +190,40 @@ describe("loadConfig", () => {
   test("defaults JARVIS_CALENDAR_TOKEN_DB_PATH", () => {
     const config = loadConfig();
     expect(config.calendarTokenDbPath).toBe("./data/jarvis-calendar-tokens.sqlite");
+  });
+
+  test("loads Spotify settings when fully configured", () => {
+    process.env.SPOTIFY_CLIENT_ID = "spotify-client-id";
+    process.env.SPOTIFY_CLIENT_SECRET = "spotify-client-secret";
+    process.env.JARVIS_PUBLIC_BASE_URL = "https://example.fly.dev";
+    process.env.JARVIS_ADMIN_TOKEN = "admin-secret";
+
+    const config = loadConfig();
+    expect(config.spotifyClientId).toBe("spotify-client-id");
+    expect(config.spotifyClientSecret).toBe("spotify-client-secret");
+  });
+
+  test("throws when only SPOTIFY_CLIENT_ID is set", () => {
+    process.env.SPOTIFY_CLIENT_ID = "spotify-client-id";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("throws when Spotify is configured without JARVIS_PUBLIC_BASE_URL", () => {
+    process.env.SPOTIFY_CLIENT_ID = "spotify-client-id";
+    process.env.SPOTIFY_CLIENT_SECRET = "spotify-client-secret";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("throws when Spotify is configured without JARVIS_ADMIN_TOKEN", () => {
+    process.env.SPOTIFY_CLIENT_ID = "spotify-client-id";
+    process.env.SPOTIFY_CLIENT_SECRET = "spotify-client-secret";
+    process.env.JARVIS_PUBLIC_BASE_URL = "https://example.fly.dev";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults JARVIS_SPOTIFY_TOKEN_DB_PATH", () => {
+    const config = loadConfig();
+    expect(config.spotifyTokenDbPath).toBe("./data/jarvis-spotify-tokens.sqlite");
   });
 
   test("defaults JARVIS_WAKEUP_CALL_DB_PATH", () => {
