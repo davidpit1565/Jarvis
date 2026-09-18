@@ -40,22 +40,49 @@ are combined:
 
 1. **A wireframe grid head** — a procedurally-displaced low-poly sphere
    (squashed into a head/oval shape, tapered to a rounded jaw/chin, with a
-   brow ridge and nose bump pushed out on the front-facing vertices only),
+   brow ridge and nose bump pushed out on the front-facing vertices only,
+   and two small bright eye spheres seated on the same surface curve),
    rendered as glowing `THREE.LineSegments` edges plus a bright dot at
    every vertex. This is the structural layer that reads as "digital face"
    at a glance, matching the reference video's dominant visual — a
    triangulated mesh grid, not a photo-like cloud of noise.
-2. **A particle shimmer layer behind it** — `index.html` separately draws a
-   stylized face mask (head silhouette, eye sockets, nose/mouth shading,
-   a procedural circuit-trace overlay) onto an offscreen 2D canvas, then
-   samples that canvas's pixel alpha to place several thousand
-   `THREE.Points` particles. This gives the hologram a soft, organic halo
-   of texture/glow around the crisp wireframe instead of the wireframe
-   floating in flat empty space.
+2. **A particle shimmer layer wrapped onto that same surface** — `index.html`
+   separately draws a stylized face mask (head silhouette, eye sockets,
+   nose/mouth shading, a procedural circuit-trace overlay) onto an
+   offscreen 2D canvas, then samples that canvas's pixel alpha to place
+   several thousand `THREE.Points` particles. Each particle is projected
+   onto the front surface of the *same* ellipsoid the wireframe head is
+   built from (not a flat plane with random depth jitter, which is what
+   the first version of this did) — so it actually follows the head's
+   curvature and looks correct from an angle instead of reading as a flat
+   card floating in front of the wireframe.
 
 Two `THREE.LineLoop` orbit rings (cyan + amber) with small satellite
 spheres animate around the head, echoing the reference's "orbiting data
 node" motif — plain geometry, no extra assets.
+
+## Viewing it from any angle — drag to orbit
+
+Click-and-drag anywhere on the page to rotate the camera freely around the
+head (mouse wheel to zoom); it's real 3D geometry with a genuine back and
+sides, not a flat front-only sprite. This is separate from webcam face
+tracking below: **orbiting moves the camera** around a head that stays
+put, so you can inspect it from any side; **face tracking rotates the
+head itself** to face wherever your tracked face is. Both can be in play
+at once — dragging the camera to the side while face-tracking is on still
+lets the head turn toward your actual face, which is a different thing
+from the camera's current viewing angle. There's no way to make the head
+*both* always face the viewer *and* be freely orbitable to see its back
+at the same time — that's a contradiction, not an engineering gap — so
+this splits them into two honest, separate controls instead of faking one.
+
+Fixed along the way: the particle mask's silhouette used to be
+noticeably taller than the wireframe head's own proportions, so at the
+very top/bottom it stuck out past the head as a stray particle "spike"
+once you could see it from the side (invisible from the fixed front-only
+view before orbit existed). Both the mask's proportions and the
+projection itself (skip a particle outside the head's footprint at that
+height, instead of collapsing it onto a flat plane) were fixed.
 
 ## Background depth
 
