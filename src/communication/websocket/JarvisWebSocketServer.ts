@@ -22,6 +22,7 @@ import type { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import type { TelegramGateway } from "@/communication/telegram/TelegramGateway";
+import type { DeviceVoiceGateway } from "@/communication/voice/DeviceVoiceGateway";
 import type { LockdownService } from "@/core/lockdown/LockdownService";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
 import { DASHBOARD_HTML, LOCK_HTML } from "./dashboard";
@@ -164,6 +165,14 @@ export interface JarvisWebSocketServerDependencies {
    */
   telegramGateway?: TelegramGateway;
   telegramWebhookSecret?: string;
+  /**
+   * Optional: enables the "Hey JARVIS" wake-word voice channel. When set,
+   * a `voice.transcript` message from a paired device is routed through
+   * it and any spoken-back reply is sent as `voice.reply`. Without it,
+   * `voice.transcript` messages are silently ignored (same shape as
+   * `event`'s current no-op handling).
+   */
+  deviceVoiceGateway?: DeviceVoiceGateway;
   /**
    * Optional break-glass kill switch. When set, enables POST
    * /emergency/lockdown and POST /emergency/lockdown/lift (both admin-token
@@ -527,6 +536,15 @@ export class JarvisWebSocketServer {
       case "event":
         // Generic device events aren't acted on in Phase 2.
         return;
+      case "voice.transcript": {
+        const { deviceVoiceGateway } = this.deps;
+        if (deviceVoiceGateway && message.deviceId) {
+          deviceVoiceGateway.handleTranscript(message.deviceId, message.payload.text).catch((error) => {
+            console.error(`[jarvis] voice.transcript handling threw for device ${message.deviceId}:`, error);
+          });
+        }
+        return;
+      }
     }
   }
 

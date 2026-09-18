@@ -85,6 +85,7 @@ import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnect
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/TwilioVoiceGateway";
 import { TelegramGateway, type TelegramSession } from "@/communication/telegram/TelegramGateway";
+import { DeviceVoiceGateway, type DeviceVoiceSession } from "@/communication/voice/DeviceVoiceGateway";
 import { createNotifyUserTool } from "@/tools/telegram/NotifyUserTool";
 import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ActivityLog } from "@/core/activity/ActivityLog";
@@ -484,6 +485,44 @@ function main() {
     permissionService.grant(DEFAULT_USER_ID, "NOTIFY_USER");
   }
 
+  // A paired device's "Hey JARVIS" wake-word channel gets its own
+  // conversation thread, exactly like Telegram — kept for the life of the
+  // process, not tied to any one utterance. Always available (no separate
+  // opt-in config): it rides on the same pairing/device-trust model every
+  // other device capability already requires, so there's nothing new to
+  // configure here beyond the Agent actually sending voice.transcript.
+  function createDeviceVoiceSession(deviceId: string): DeviceVoiceSession {
+    const voiceConversation = new ConversationManager(eventBus);
+    const voiceConfirmationService = new ConfirmationService(createDeviceVoiceConfirmationPrompter(deviceId));
+    const voiceOrchestrator = new Orchestrator({
+      brain,
+      conversation: voiceConversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService: voiceConfirmationService,
+      channelContext: "This conversation is happening by voice, right now, on the user's Mac.",
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      lockdownService,
+    });
+    return { orchestrator: voiceOrchestrator, userId: DEFAULT_USER_ID };
+  }
+
+  /** Same reasoning as createTelegramConfirmationPrompter: a paired device is a reliable bidirectional channel. */
+  function createDeviceVoiceConfirmationPrompter(deviceId: string) {
+    return async (request: ConfirmationRequest): Promise<boolean> => {
+      const inputSummary = JSON.stringify(request.input);
+      return deviceVoiceGateway!.awaitConfirmation(
+        deviceId,
+        `JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Say yes or no.`
+      );
+    };
+  }
+
+  const deviceVoiceGateway = new DeviceVoiceGateway(deviceConnectionManager, createDeviceVoiceSession);
+
   let wakeUpInterval: ReturnType<typeof setInterval> | undefined;
   if (wakeUpCallsEnabled) {
     toolRegistry.registerTool(createCreateWakeUpCallTool(wakeUpCallStore));
@@ -653,6 +692,7 @@ function main() {
     twilioPublicBaseUrl: config.twilioPublicBaseUrl,
     twilioAllowedCallers: config.twilioAllowedCallers,
     telegramGateway,
+    deviceVoiceGateway,
     telegramWebhookSecret: config.telegramWebhookSecret,
     lockdownService,
     adminToken: config.adminToken,

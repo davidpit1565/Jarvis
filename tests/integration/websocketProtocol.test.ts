@@ -89,6 +89,37 @@ describe("WebSocket protocol: device -> core", () => {
     expect(result.ok).toBe(true);
   });
 
+  test("parses a valid voice.transcript message", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ type: "voice.transcript", payload: { text: "what's on my calendar today" } }))
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok && result.message.type === "voice.transcript") {
+      expect(result.message.payload.text).toBe("what's on my calendar today");
+    }
+  });
+
+  test("parses a valid voice.transcript message with an optional wakeWord", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ type: "voice.transcript", payload: { text: "pause the music", wakeWord: "hey jarvis" } }))
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  test("rejects a voice.transcript message with an empty text", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ type: "voice.transcript", payload: { text: "" } }))
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a voice.transcript message with deviceId null", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ deviceId: null, type: "voice.transcript", payload: { text: "hello" } }))
+    );
+    expect(result.ok).toBe(false);
+  });
+
   test("rejects invalid JSON", () => {
     const result = parseDeviceToCoreMessage("not json");
     expect(result.ok).toBe(false);
@@ -160,6 +191,23 @@ describe("WebSocket protocol: core -> device", () => {
   test("parses a valid ping message", () => {
     const result = parseCoreToDeviceMessage(JSON.stringify(baseEnvelope({ type: "ping", payload: {} })));
     expect(result.ok).toBe(true);
+  });
+
+  test("parses a valid voice.reply message", () => {
+    const result = parseCoreToDeviceMessage(
+      JSON.stringify(baseEnvelope({ type: "voice.reply", payload: { text: "You have three meetings today." } }))
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok && result.message.type === "voice.reply") {
+      expect(result.message.payload.text).toBe("You have three meetings today.");
+    }
+  });
+
+  test("rejects a voice.reply with a null deviceId", () => {
+    const result = parseCoreToDeviceMessage(
+      JSON.stringify(baseEnvelope({ deviceId: null, type: "voice.reply", payload: { text: "hi" } }))
+    );
+    expect(result.ok).toBe(false);
   });
 
   test("rejects a tool.request with a null deviceId", () => {
