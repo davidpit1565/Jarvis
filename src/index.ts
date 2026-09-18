@@ -729,6 +729,12 @@ function main() {
     ],
     permissionService,
     defaultUserId: DEFAULT_USER_ID,
+    // The hologram UI's real chat box (ws(s)://.../chat) shares this same
+    // primary orchestrator/conversation — the exact one the CLI loop below
+    // drives — rather than a separate instance, so "talk to Jarvis from
+    // the browser" and "talk to Jarvis from this terminal" are the same
+    // ongoing conversation, not two Jarvises with separate memory of it.
+    webChatOrchestrator: orchestrator,
     // Approving a device's pairing is the one explicit, deliberate human
     // decision this system already has to trust a specific device with —
     // these are the SAFE_ACTION/CONFIRM device tools that would otherwise
