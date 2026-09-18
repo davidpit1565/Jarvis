@@ -107,6 +107,13 @@ export interface JarvisConfig {
   /** Enables GET_NEWS — free RSS headlines from this one configured feed. Unset means the tool doesn't exist. */
   newsRssUrl?: string;
   /**
+   * Both required together to enable the weekly usage/cost digest, pushed
+   * via NOTIFY_USER's own Telegram delivery (so it also needs
+   * telegramGateway + telegramOwnerChatId configured). Day 0=Sunday..6=Saturday.
+   */
+  weeklyDigestDayOfWeek?: number;
+  weeklyDigestTime?: string;
+  /**
    * Optional all-time estimated-cost threshold (USD). When set, JARVIS
    * warns (console + activity log) once cumulative estimated spend
    * crosses 75%, 90%, and 100% of it — each stage fires once, not on
@@ -331,6 +338,27 @@ export function loadConfig(): JarvisConfig {
 
   const newsRssUrl = process.env.JARVIS_NEWS_RSS_URL?.trim() || undefined;
 
+  const weeklyDigestDayRaw = process.env.JARVIS_WEEKLY_DIGEST_DAY?.trim();
+  const weeklyDigestTime = process.env.JARVIS_WEEKLY_DIGEST_TIME?.trim() || undefined;
+  const weeklyDigestDayOfWeek = weeklyDigestDayRaw ? Number(weeklyDigestDayRaw) : undefined;
+
+  if (
+    weeklyDigestDayRaw &&
+    (Number.isNaN(weeklyDigestDayOfWeek) || weeklyDigestDayOfWeek! < 0 || weeklyDigestDayOfWeek! > 6)
+  ) {
+    throw new ConfigError("JARVIS_WEEKLY_DIGEST_DAY must be an integer from 0 (Sunday) to 6 (Saturday)");
+  }
+  if (weeklyDigestTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(weeklyDigestTime)) {
+    throw new ConfigError("JARVIS_WEEKLY_DIGEST_TIME must be in HH:MM 24-hour format");
+  }
+
+  const weeklyDigestFieldsSet = [weeklyDigestDayOfWeek, weeklyDigestTime].filter((v) => v !== undefined).length;
+  if (weeklyDigestFieldsSet > 0 && weeklyDigestFieldsSet < 2) {
+    throw new ConfigError(
+      "JARVIS_WEEKLY_DIGEST_DAY and JARVIS_WEEKLY_DIGEST_TIME must both be set together (or neither)"
+    );
+  }
+
   const costAlertThresholdRaw = process.env.JARVIS_COST_ALERT_THRESHOLD_USD?.trim();
   const costAlertThresholdUsd = costAlertThresholdRaw ? Number(costAlertThresholdRaw) : undefined;
   if (costAlertThresholdRaw && (Number.isNaN(costAlertThresholdUsd) || costAlertThresholdUsd! <= 0)) {
@@ -381,6 +409,8 @@ export function loadConfig(): JarvisConfig {
     weatherLatitude,
     weatherLongitude,
     newsRssUrl,
+    weeklyDigestDayOfWeek,
+    weeklyDigestTime,
     costAlertThresholdUsd,
   };
 }

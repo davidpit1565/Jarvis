@@ -37,6 +37,8 @@ const ENV_KEYS = [
   "JARVIS_WEATHER_LATITUDE",
   "JARVIS_WEATHER_LONGITUDE",
   "JARVIS_NEWS_RSS_URL",
+  "JARVIS_WEEKLY_DIGEST_DAY",
+  "JARVIS_WEEKLY_DIGEST_TIME",
   "JARVIS_COST_ALERT_THRESHOLD_USD",
 ];
 let saved: Record<string, string | undefined> = {};
@@ -389,6 +391,37 @@ describe("loadConfig", () => {
   test("leaves newsRssUrl undefined when unset", () => {
     const config = loadConfig();
     expect(config.newsRssUrl).toBeUndefined();
+  });
+
+  test("loads weekly digest settings when both are set", () => {
+    process.env.JARVIS_WEEKLY_DIGEST_DAY = "1";
+    process.env.JARVIS_WEEKLY_DIGEST_TIME = "09:00";
+    const config = loadConfig();
+    expect(config.weeklyDigestDayOfWeek).toBe(1);
+    expect(config.weeklyDigestTime).toBe("09:00");
+  });
+
+  test("leaves weekly digest settings undefined when neither is set", () => {
+    const config = loadConfig();
+    expect(config.weeklyDigestDayOfWeek).toBeUndefined();
+    expect(config.weeklyDigestTime).toBeUndefined();
+  });
+
+  test("throws when only weekly digest day is set, without time", () => {
+    process.env.JARVIS_WEEKLY_DIGEST_DAY = "1";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("rejects an out-of-range weekly digest day", () => {
+    process.env.JARVIS_WEEKLY_DIGEST_DAY = "7";
+    process.env.JARVIS_WEEKLY_DIGEST_TIME = "09:00";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("rejects an invalid weekly digest time", () => {
+    process.env.JARVIS_WEEKLY_DIGEST_DAY = "1";
+    process.env.JARVIS_WEEKLY_DIGEST_TIME = "25:99";
+    expect(() => loadConfig()).toThrow(ConfigError);
   });
 
   test("reads JARVIS_COST_ALERT_THRESHOLD_USD when set", () => {

@@ -1158,6 +1158,14 @@ conversation-history turns — a quick "how is JARVIS actually being used
 and how much does it remember" glance without paging through raw logs or
 querying SQLite directly.
 
+Setting `JARVIS_WEEKLY_DIGEST_DAY`/`JARVIS_WEEKLY_DIGEST_TIME` (both
+required together, plus a working Telegram/`NOTIFY_USER` setup — see
+"Telegram integration" above) pushes this same `toolUsage`/`tokenUsage`
+data as a plain-text weekly digest, so "how has JARVIS been doing" shows
+up on its own instead of only ever being answerable if you ask
+(`src/digest/`). All-time totals, not a per-week reset — labeled as such
+in the message itself, matching the underlying stores.
+
 ## Inspecting what JARVIS remembers
 
 `GET /reminders`, `GET /memory`, and `GET /wakeup-calls` are read-only

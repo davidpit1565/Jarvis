@@ -48,6 +48,8 @@ import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
 import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
 import { RssNewsClient } from "@/news/RssNewsClient";
 import { createGetNewsTool } from "@/tools/news/GetNewsTool";
+import { isWeeklyDigestDue } from "@/digest/isWeeklyDigestDue";
+import { formatWeeklyDigest } from "@/digest/formatWeeklyDigest";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -418,6 +420,43 @@ function main() {
     }, 30_000);
   }
 
+  let weeklyDigestInterval: ReturnType<typeof setInterval> | undefined;
+  const weeklyDigestEnabled = Boolean(
+    config.weeklyDigestDayOfWeek !== undefined &&
+      config.weeklyDigestTime &&
+      telegramGateway &&
+      config.telegramOwnerChatId
+  );
+  if (weeklyDigestEnabled) {
+    let lastWeeklyDigestDateKey: string | null = null;
+    weeklyDigestInterval = setInterval(() => {
+      const now = new Date();
+      const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
+      const todayDateKey = formatDateKey(now, config.timezone);
+
+      if (
+        !isWeeklyDigestDue(
+          now,
+          config.timezone,
+          config.weeklyDigestDayOfWeek!,
+          config.weeklyDigestTime!,
+          nowTimeOfDay,
+          todayDateKey,
+          lastWeeklyDigestDateKey
+        )
+      ) {
+        return;
+      }
+
+      lastWeeklyDigestDateKey = todayDateKey;
+      const cost = estimateCostUsd(tokenUsageStore.totals(), DEFAULT_MODEL);
+      const message = formatWeeklyDigest(toolAuditLog.summary(), tokenUsageStore.totals(), cost);
+      telegramGateway!.sendMessage(config.telegramOwnerChatId!, message).catch((error) => {
+        console.error("[jarvis] failed to send weekly digest:", error instanceof Error ? error.message : String(error));
+      });
+    }, 30_000);
+  }
+
   const wsServer = new JarvisWebSocketServer({
     deviceRegistry,
     deviceConnectionManager,
@@ -571,6 +610,7 @@ function main() {
     webAuthnStore.close();
     wakeUpCallStore.close();
     if (wakeUpInterval) clearInterval(wakeUpInterval);
+    if (weeklyDigestInterval) clearInterval(weeklyDigestInterval);
     calendarTokenStore.close();
     rl.close();
     process.exit(0);
