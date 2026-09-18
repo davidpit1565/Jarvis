@@ -475,6 +475,44 @@ their own, so this ensures a revoked device that somehow reconnected
 anyway (a bug elsewhere in the pairing/auth path) can't silently keep
 acting on its old standing trust.
 
+## File access on your Mac (scoped, not "everything")
+
+JARVIS does **not** have raw access to your whole computer, your phone,
+or your photo library — and it deliberately never will in one shot. What
+it has is two new device tools, `LIST_DIRECTORY` and `READ_TEXT_FILE`
+(`src/tools/system/ListDirectoryTool.ts` / `ReadTextFileTool.ts`,
+dispatched to `agents/imac/.../Tools/ListDirectoryTool.swift` /
+`ReadTextFileTool.swift`), that let it look inside a **short, explicit
+allowlist** of folders on your Mac: `~/Desktop`, `~/Documents`,
+`~/Downloads`, and a dedicated `~/Jarvis` folder you can put things into
+on purpose. Every path is resolved (symlinks included) and checked
+against that allowlist before anything touches disk
+(`FileAccessPolicy.swift`) — a path outside it, or a null byte, is
+rejected outright, the same defense-in-depth spirit as Core's own
+`pathValidation.ts`.
+
+Both tools are `READ`-level (no side effects, so no standing grant is
+needed — same as `SEARCH_MEMORY`) and are read-only:
+
+- `LIST_DIRECTORY` returns each entry's name, type (file/directory), and
+  size — "what's on my Desktop", "what's in my Downloads folder."
+- `READ_TEXT_FILE` returns a text file's contents, capped at 200KB with
+  a truncation trailer past that (same "cap unbounded results" pattern
+  as Gmail message bodies) — "read that notes file on my Desktop." It's
+  text-only on purpose: a photo, video, or other binary is rejected
+  rather than dumped as base64 into the conversation.
+
+**Why not just give it everything?** Because "everything" includes
+`~/Library` (app data, keychains, browser profiles), SSH keys, and every
+other app's private files — and because the whole point of this
+project's security model (permission levels, the audit log, rate
+limiting, the confirmation flow) is that JARVIS only ever gets exactly
+the access it's been deliberately scoped to, nothing implicit. A
+photo-library integration is a separate, larger piece of work (it needs
+its own macOS permission prompt and a dedicated Photos-framework
+integration, not just a file read) and is intentionally not bundled into
+this change.
+
 ## Phone gateway (call JARVIS)
 
 JARVIS can be reached as an actual phone call, via
@@ -1428,13 +1466,18 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   `OPEN_APPLICATION`/`QUIT_APPLICATION`/`OPEN_URL` (device — app name/
   bundle ID only, launching or quitting a named app, or opening an
   http/https URL in the default browser), `LIST_RUNNING_APPLICATIONS`
-  (device — names of currently open apps), `LIST_DEVICES` (which paired
+  (device — names of currently open apps), `LIST_DIRECTORY`/
+  `READ_TEXT_FILE` (device — read-only, allowlisted-folder file access;
+  see "File access on your Mac" above), `LIST_DEVICES` (which paired
   devices exist and whether they're online), memory/reminder/conversation-history/calendar/wake-up-call/
   `SEARCH_EMAIL`/`GET_WEATHER`/`GET_NEWS`/`NOTIFY_USER` tools (see their own sections above). Real internet search/URL reading
   exist separately, as Anthropic's own server-side `web_search`/`web_fetch`
   tools (opt-in via `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not
   through this registry — see "Real internet search" / "Real URL reading"
   above.
+- No Photos library access, no iPhone file access, and no write/delete
+  file access on the Mac at all — file access is Mac-only, read-only,
+  and scoped to `~/Desktop`/`~/Documents`/`~/Downloads`/`~/Jarvis`.
 - **No arbitrary automation, by design.** There is no generic "run this
   shell command"/AppleScript/settings-change tool, and never will be —
   every capability the Agent can execute is a named, compiled-in Swift

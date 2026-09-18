@@ -40,6 +40,8 @@ final class AgentToolRegistry {
         registry.register(OpenApplicationTool.make())
         registry.register(QuitApplicationTool.make())
         registry.register(OpenUrlTool.make())
+        registry.register(ListDirectoryTool.make())
+        registry.register(ReadTextFileTool.make())
         return registry
     }
 }

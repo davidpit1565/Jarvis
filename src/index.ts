@@ -14,6 +14,8 @@ import { listRunningApplicationsTool } from "@/tools/system/ListRunningApplicati
 import { openApplicationTool } from "@/tools/system/OpenApplicationTool";
 import { quitApplicationTool } from "@/tools/system/QuitApplicationTool";
 import { openUrlTool } from "@/tools/system/OpenUrlTool";
+import { listDirectoryTool } from "@/tools/system/ListDirectoryTool";
+import { readTextFileTool } from "@/tools/system/ReadTextFileTool";
 import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
@@ -197,6 +199,8 @@ function main() {
   toolRegistry.registerTool(openApplicationTool);
   toolRegistry.registerTool(quitApplicationTool);
   toolRegistry.registerTool(openUrlTool);
+  toolRegistry.registerTool(listDirectoryTool);
+  toolRegistry.registerTool(readTextFileTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
   toolRegistry.registerTool(createDeleteMemoryTool(memoryStore, undoStore));
