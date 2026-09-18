@@ -1083,7 +1083,8 @@ conversations too, not just the current one.
   and fixed during this session's own review, once the new `Dockerfile`/
   `fly.toml` made this endpoint publicly reachable for the first time.
 - `POST /pairing/approve`, `POST /pairing/revoke`, `POST /auth/login`,
-  `POST /auth/register-options`, `POST /auth/register`, and
+  `POST /auth/register-options`, `POST /auth/register`,
+  `GET /reminders`, `GET /memory`, `GET /wakeup-calls`, `GET /audit-log`, and
   the WebSocket `device.register` message are all rate-limited (10
   attempts per 5 minutes, per client IP — `src/communication/websocket/RateLimiter.ts`):
   every attempt counts against the limit whether it succeeds or fails, so

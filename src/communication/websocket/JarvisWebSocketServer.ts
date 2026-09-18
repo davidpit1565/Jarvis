@@ -400,19 +400,19 @@ export class JarvisWebSocketServer {
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/reminders") {
-            return this.handleRemindersHttp(req);
+            return this.handleRemindersHttp(req, server);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/wakeup-calls") {
-            return this.handleWakeUpCallsHttp(req);
+            return this.handleWakeUpCallsHttp(req, server);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/memory") {
-            return this.handleMemoryHttp(req);
+            return this.handleMemoryHttp(req, server);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/audit-log") {
-            return this.handleAuditLogHttp(req, url);
+            return this.handleAuditLogHttp(req, url, server);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/assets/hologram.jpg") {
@@ -906,10 +906,13 @@ export class JarvisWebSocketServer {
    * token as pairing approval — optional only for local development,
    * mandatory once this server is reachable from the public internet.
    */
-  private handleRemindersHttp(req: Request): Response {
+  private handleRemindersHttp(req: Request, server: BunServer): Response {
     const { adminToken, reminderStore } = this.deps;
     if (!reminderStore) {
       return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "reminders"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
     }
     if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
@@ -921,10 +924,13 @@ export class JarvisWebSocketServer {
    * GET /wakeup-calls — read-only admin view of the recurring wake-up
    * call schedule. Same admin-token gating rationale as GET /reminders.
    */
-  private handleWakeUpCallsHttp(req: Request): Response {
+  private handleWakeUpCallsHttp(req: Request, server: BunServer): Response {
     const { adminToken, wakeUpCallStore } = this.deps;
     if (!wakeUpCallStore) {
       return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "wakeup-calls"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
     }
     if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
@@ -936,10 +942,13 @@ export class JarvisWebSocketServer {
    * GET /memory — read-only admin view of every saved memory fact. Same
    * admin-token gating rationale as GET /reminders above.
    */
-  private handleMemoryHttp(req: Request): Response {
+  private handleMemoryHttp(req: Request, server: BunServer): Response {
     const { adminToken, memoryStore } = this.deps;
     if (!memoryStore) {
       return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "memory"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
     }
     if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
@@ -954,10 +963,13 @@ export class JarvisWebSocketServer {
    * GET /reminders/etc. Optional `?tool=TOOL_ID` and `?limit=N` query
    * params, mirroring ToolAuditLog.list()'s own options.
    */
-  private handleAuditLogHttp(req: Request, url: URL): Response {
+  private handleAuditLogHttp(req: Request, url: URL, server: BunServer): Response {
     const { adminToken, toolAuditLog } = this.deps;
     if (!toolAuditLog) {
       return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "audit-log"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
     }
     if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });

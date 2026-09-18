@@ -83,6 +83,20 @@ describe("GET /reminders", () => {
     expect(response.status).toBe(200);
     reminderStore.close();
   });
+
+  test("too many attempts from the same IP are rate-limited with 429", async () => {
+    const reminderStore = new ReminderStore(":memory:");
+    const handle = setupServer({ adminToken: "secret-token", reminderStore });
+
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const response = await fetch(`http://localhost:${handle.port}/reminders`);
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
+    reminderStore.close();
+  });
 });
 
 describe("GET /memory", () => {
@@ -117,6 +131,20 @@ describe("GET /memory", () => {
     const data = (await response.json()) as { memory: { key: string; value: string }[] };
     expect(data.memory).toHaveLength(2);
     expect(data.memory.some((m) => m.key === "user.name" && m.value === "David")).toBe(true);
+    memoryStore.close();
+  });
+
+  test("too many attempts from the same IP are rate-limited with 429", async () => {
+    const memoryStore = new MemoryStore(":memory:");
+    const handle = setupServer({ adminToken: "secret-token", memoryStore });
+
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const response = await fetch(`http://localhost:${handle.port}/memory`);
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
     memoryStore.close();
   });
 });
@@ -158,6 +186,20 @@ describe("GET /wakeup-calls", () => {
     const handle = setupServer({ wakeUpCallStore });
     const response = await fetch(`http://localhost:${handle.port}/wakeup-calls`);
     expect(response.status).toBe(200);
+    wakeUpCallStore.close();
+  });
+
+  test("too many attempts from the same IP are rate-limited with 429", async () => {
+    const wakeUpCallStore = new WakeUpCallStore(":memory:");
+    const handle = setupServer({ adminToken: "secret-token", wakeUpCallStore });
+
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const response = await fetch(`http://localhost:${handle.port}/wakeup-calls`);
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
     wakeUpCallStore.close();
   });
 });
@@ -231,6 +273,20 @@ describe("GET /audit-log", () => {
     const handle = setupServer({ toolAuditLog });
     const response = await fetch(`http://localhost:${handle.port}/audit-log`);
     expect(response.status).toBe(200);
+    toolAuditLog.close();
+  });
+
+  test("too many attempts from the same IP are rate-limited with 429", async () => {
+    const toolAuditLog = new ToolAuditLog(":memory:");
+    const handle = setupServer({ adminToken: "secret-token", toolAuditLog });
+
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const response = await fetch(`http://localhost:${handle.port}/audit-log`);
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
     toolAuditLog.close();
   });
 });
