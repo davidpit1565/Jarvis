@@ -7,6 +7,9 @@ import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { PairingService } from "@/devices/pairing/PairingService";
 import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import type { ActivityLog } from "@/core/activity/ActivityLog";
+import type { TokenUsageStore } from "@/audit/TokenUsageStore";
+import { estimateCostUsd } from "@/audit/estimateCostUsd";
+import { DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
@@ -82,6 +85,8 @@ export interface JarvisWebSocketServerDependencies {
    * cost (~$0.004/min on top of call minutes), so it's opt-in.
    */
   audioLevelBroadcaster?: AudioLevelBroadcaster;
+  /** Optional: exposes real token usage + estimated cost in GET /status. */
+  tokenUsageStore?: TokenUsageStore;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -521,8 +526,15 @@ export class JarvisWebSocketServer {
 
   /** GET /status — read-only JSON feed the dashboard polls; no auth today, matching the rest of Core. */
   private handleStatusJson(): Response {
-    const { deviceRegistry, toolRegistry, phoneGateway, activityLog, webAuthnService, audioLevelBroadcaster } =
-      this.deps;
+    const {
+      deviceRegistry,
+      toolRegistry,
+      phoneGateway,
+      activityLog,
+      webAuthnService,
+      audioLevelBroadcaster,
+      tokenUsageStore,
+    } = this.deps;
 
     const devices = deviceRegistry.listDevices().map((device) => ({
       id: device.id,
@@ -538,6 +550,8 @@ export class JarvisWebSocketServer {
       target: tool.target,
     }));
 
+    const tokenUsage = tokenUsageStore?.totals();
+
     return Response.json({
       devices,
       tools,
@@ -545,6 +559,9 @@ export class JarvisWebSocketServer {
       activity: activityLog?.list() ?? [],
       webAuthnConfigured: webAuthnService?.hasCredentials() ?? true,
       audioWaveformEnabled: Boolean(audioLevelBroadcaster),
+      tokenUsage: tokenUsage
+        ? { ...tokenUsage, estimatedCostUsd: estimateCostUsd(tokenUsage, DEFAULT_MODEL) ?? null }
+        : undefined,
     });
   }
 

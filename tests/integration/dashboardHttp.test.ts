@@ -6,6 +6,7 @@ import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnect
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { ActivityLog } from "@/core/activity/ActivityLog";
+import { TokenUsageStore } from "@/audit/TokenUsageStore";
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 
@@ -208,6 +209,49 @@ describe("Dashboard HTTP routes", () => {
     const response = await fetch(`http://localhost:${handle.port}/status`);
     const data = (await response.json()) as { phoneGatewayEnabled: boolean };
     expect(data.phoneGatewayEnabled).toBe(true);
+  });
+
+  test("GET /status omits tokenUsage when no TokenUsageStore is configured", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/status`);
+    const data = (await response.json()) as { tokenUsage?: unknown };
+    expect(data.tokenUsage).toBeUndefined();
+  });
+
+  test("GET /status reports token usage totals and an estimated cost", async () => {
+    const eventBus = new EventBus();
+    const tokenUsageStore = new TokenUsageStore(":memory:");
+    tokenUsageStore.record({ inputTokens: 1000, outputTokens: 500, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 });
+
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      tokenUsageStore,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/status`);
+    const data = (await response.json()) as {
+      tokenUsage: { inputTokens: number; outputTokens: number; calls: number; estimatedCostUsd: number | null };
+    };
+
+    expect(data.tokenUsage.inputTokens).toBe(1000);
+    expect(data.tokenUsage.outputTokens).toBe(500);
+    expect(data.tokenUsage.calls).toBe(1);
+    expect(data.tokenUsage.estimatedCostUsd).not.toBeNull();
+    tokenUsageStore.close();
   });
 
   test("GET /status includes recent activity log entries, newest first", async () => {

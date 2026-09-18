@@ -759,6 +759,23 @@ the actual accountability record — "what did JARVIS do, exactly, and
 when" — for a `SAFE_ACTION`/`CONFIRM`/`DANGEROUS` tool, in a form that
 could genuinely be audited later, not just skimmed live.
 
+## Real cost visibility
+
+Every Claude API call's token usage (input, output, cache write, cache
+read) is recorded to SQLite (`src/audit/TokenUsageStore.ts`,
+`JARVIS_TOKEN_USAGE_DB_PATH`) and summed into `GET /status` as a
+`tokenUsage` field — cumulative tokens plus an `estimatedCostUsd`. Before
+this, "how much is JARVIS actually costing me" had no real answer short of
+checking the Anthropic console days later.
+
+The cost estimate is a **rough list-price estimate, not an invoice**: it's
+computed from Anthropic's published per-model pricing
+(`src/audit/estimateCostUsd.ts`) using the standard prompt-caching
+multipliers, and only for models this project has explicitly confirmed
+pricing for — an unlisted model reports cost as unavailable (`null`)
+rather than guessing, since a wrong number is worse than none for
+something you're explicitly watching to keep near-free.
+
 ## Reliability
 
 A handful of additions aimed specifically at "survives a real cloud

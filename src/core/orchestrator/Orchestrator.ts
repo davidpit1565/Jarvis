@@ -92,6 +92,7 @@ export class Orchestrator {
         text: response.text,
         toolCallCount: response.toolCalls.length,
         serverToolUses: response.serverToolUses,
+        usage: response.usage,
       });
 
       if (response.toolCalls.length === 0) {

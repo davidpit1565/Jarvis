@@ -20,6 +20,8 @@ export interface JarvisConfig {
   deviceRegistryDbPath: string;
   /** Path to the SQLite database storing the structured tool-execution audit trail. */
   toolAuditLogDbPath: string;
+  /** Path to the SQLite database storing per-call token usage, for real cost visibility. */
+  tokenUsageDbPath: string;
   /**
    * IANA timezone (e.g. "Asia/Jerusalem") used to tell Claude the user's
    * local time every turn, so relative times ("tomorrow at 9am") resolve
@@ -115,6 +117,7 @@ export function loadConfig(): JarvisConfig {
   const pairingDbPath = process.env.JARVIS_PAIRING_DB_PATH ?? "./data/jarvis-pairing.sqlite";
   const deviceRegistryDbPath = process.env.JARVIS_DEVICE_REGISTRY_DB_PATH ?? "./data/jarvis-devices.sqlite";
   const toolAuditLogDbPath = process.env.JARVIS_TOOL_AUDIT_LOG_DB_PATH ?? "./data/jarvis-tool-audit.sqlite";
+  const tokenUsageDbPath = process.env.JARVIS_TOKEN_USAGE_DB_PATH ?? "./data/jarvis-token-usage.sqlite";
 
   const timezone = process.env.JARVIS_TIMEZONE?.trim() || "UTC";
   try {
@@ -178,6 +181,7 @@ export function loadConfig(): JarvisConfig {
     pairingDbPath,
     deviceRegistryDbPath,
     toolAuditLogDbPath,
+    tokenUsageDbPath,
     timezone,
     twilioAuthToken,
     twilioPublicBaseUrl,

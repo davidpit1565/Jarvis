@@ -55,8 +55,12 @@ describe("buildAnthropicTools", () => {
   });
 });
 
-function makeResponse(content: unknown[]): Anthropic.Message {
-  return { content, stop_reason: "end_turn" } as unknown as Anthropic.Message;
+function makeResponse(content: unknown[], usage: Partial<Anthropic.Usage> = {}): Anthropic.Message {
+  return {
+    content,
+    stop_reason: "end_turn",
+    usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...usage },
+  } as unknown as Anthropic.Message;
 }
 
 describe("fromAnthropicResponse", () => {
@@ -82,6 +86,36 @@ describe("fromAnthropicResponse", () => {
     const result = fromAnthropicResponse(response);
     expect(result.serverToolUses).toEqual(["web_search"]);
     expect(result.text).toBe("It's sunny.");
+  });
+
+  test("carries token usage from the provider's response", () => {
+    const response = makeResponse([{ type: "text", text: "hi" }], {
+      input_tokens: 123,
+      output_tokens: 45,
+      cache_creation_input_tokens: 6,
+      cache_read_input_tokens: 78,
+    });
+
+    const result = fromAnthropicResponse(response);
+    expect(result.usage).toEqual({
+      inputTokens: 123,
+      outputTokens: 45,
+      cacheCreationInputTokens: 6,
+      cacheReadInputTokens: 78,
+    });
+  });
+
+  test("defaults cache token fields to 0 when the provider omits them", () => {
+    const response = makeResponse([{ type: "text", text: "hi" }], {
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+    });
+
+    const result = fromAnthropicResponse(response);
+    expect(result.usage?.cacheCreationInputTokens).toBe(0);
+    expect(result.usage?.cacheReadInputTokens).toBe(0);
   });
 
   test("leaves serverToolUses undefined when no server tool ran", () => {

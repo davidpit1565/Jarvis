@@ -5,7 +5,7 @@ import type { ToolDefinition } from "@/types/tools";
 
 type ContentBlockParam = Anthropic.TextBlockParam | Anthropic.ToolUseBlockParam | Anthropic.ToolResultBlockParam;
 
-const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
+export const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TOKENS = 1024;
 const ANTHROPIC_API_BASE_URL = "https://api.anthropic.com";
 
@@ -191,5 +191,11 @@ export function fromAnthropicResponse(response: Anthropic.Message): BrainRespons
     toolCalls,
     stopReason: response.stop_reason ?? "unknown",
     serverToolUses: serverToolUses.length > 0 ? serverToolUses : undefined,
+    usage: {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? 0,
+      cacheReadInputTokens: response.usage.cache_read_input_tokens ?? 0,
+    },
   };
 }

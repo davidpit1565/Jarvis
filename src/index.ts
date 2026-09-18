@@ -2,7 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { loadConfig } from "@/config";
 import { EventBus } from "@/core/events/EventBus";
 import { ConversationManager } from "@/core/conversation/ConversationManager";
-import { ClaudeBrain } from "@/core/brain/ClaudeBrain";
+import { ClaudeBrain, DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
@@ -16,6 +16,7 @@ import { MemoryStore } from "@/memory/MemoryStore";
 import { ReminderStore } from "@/reminders/ReminderStore";
 import { buildContextNote } from "@/core/buildContextNote";
 import { ToolAuditLog } from "@/audit/ToolAuditLog";
+import { TokenUsageStore } from "@/audit/TokenUsageStore";
 import { createCreateReminderTool } from "@/tools/reminders/CreateReminderTool";
 import { createListRemindersTool } from "@/tools/reminders/ListRemindersTool";
 import { createCompleteReminderTool } from "@/tools/reminders/CompleteReminderTool";
@@ -77,6 +78,7 @@ function main() {
   const conversationHistoryStore = new ConversationHistoryStore(config.conversationHistoryDbPath);
   const activityLog = new ActivityLog(config.activityLogDbPath);
   const toolAuditLog = new ToolAuditLog(config.toolAuditLogDbPath);
+  const tokenUsageStore = new TokenUsageStore(config.tokenUsageDbPath);
   const webAuthnStore = new WebAuthnStore(config.webauthnDbPath);
   const webAuthnService = new WebAuthnService(webAuthnStore);
   const sessionStore = new SessionStore();
@@ -184,6 +186,7 @@ function main() {
     webAuthnService,
     sessionStore,
     audioLevelBroadcaster,
+    tokenUsageStore,
   });
   const httpHandle = wsServer.start(config.port);
 
@@ -191,8 +194,9 @@ function main() {
     activityLog.record("JARVIS is thinking…", "thinking");
   });
 
-  eventBus.on("brain.response", ({ text, toolCallCount, serverToolUses }) => {
+  eventBus.on("brain.response", ({ text, toolCallCount, serverToolUses, usage }) => {
     console.log(`[jarvis] brain responded (toolCalls=${toolCallCount}): ${text.slice(0, 120)}`);
+    if (usage) tokenUsageStore.record(usage);
     if (serverToolUses?.includes("web_search")) {
       activityLog.record("Searching the web…", "thinking");
     }
@@ -273,6 +277,7 @@ function main() {
     conversationHistoryStore.close();
     activityLog.close();
     toolAuditLog.close();
+    tokenUsageStore.close();
     deviceRegistry.close();
     pairingService.close();
     webAuthnStore.close();

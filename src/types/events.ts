@@ -2,11 +2,12 @@ import type { ToolCallRequest, ConversationMessage } from "./conversation";
 import type { PermissionCheckResult } from "./permissions";
 import type { Device } from "./devices";
 import type { ToolResult } from "./tools";
+import type { TokenUsage } from "./brain";
 
 export interface JarvisEventMap {
   "conversation.message": { message: ConversationMessage };
   "brain.request": { messageCount: number };
-  "brain.response": { text: string; toolCallCount: number; serverToolUses?: string[] };
+  "brain.response": { text: string; toolCallCount: number; serverToolUses?: string[]; usage?: TokenUsage };
   "tool.requested": { toolCall: ToolCallRequest };
   "tool.executed": {
     toolName: string;
