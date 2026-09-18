@@ -717,6 +717,10 @@ automated from here):
   email actually says rather than just whether it exists. Same
   `gmail.readonly` boundary as search; walks a multipart message's parts
   preferring `text/plain` over `text/html`.
+- **`GET_UNREAD_EMAIL_COUNT`** (`READ`) — just the unread count via
+  Gmail's `resultSizeEstimate`, no per-message summary fetch — meaningfully
+  cheaper than `search_email("is:unread")` for "do I have unread emails,"
+  which only ever needs a number.
 - OAuth tokens (the refresh token and current access token) are persisted
   to their own SQLite database (`src/calendar/CalendarTokenStore.ts`,
   `JARVIS_CALENDAR_TOKEN_DB_PATH`) — access tokens are refreshed

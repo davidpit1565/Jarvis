@@ -191,4 +191,30 @@ export class GmailClient {
     }
     return summaries;
   }
+
+  /**
+   * Just the count of messages matching a query, via Gmail's own
+   * `resultSizeEstimate` — no per-message summary fetch, unlike
+   * searchMessages(). Meaningfully cheaper for "how many unread emails
+   * do I have," which only ever needs a number, not each message's
+   * subject/sender/date.
+   */
+  async getMessageCount(query: string): Promise<number> {
+    const accessToken = await this.getValidAccessToken();
+
+    const url = new URL(GMAIL_MESSAGES_URL);
+    url.searchParams.set("q", query);
+    url.searchParams.set("maxResults", "1");
+
+    const response = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gmail search failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+
+    const data = (await response.json()) as { resultSizeEstimate?: number };
+    return data.resultSizeEstimate ?? 0;
+  }
 }

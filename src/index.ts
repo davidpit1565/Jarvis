@@ -53,6 +53,7 @@ import { createUndoLastActionTool } from "@/tools/undo/UndoLastActionTool";
 import { GmailClient } from "@/gmail/GmailClient";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
 import { createGetEmailTool } from "@/tools/gmail/GetEmailTool";
+import { createGetUnreadEmailCountTool } from "@/tools/gmail/GetUnreadEmailCountTool";
 import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
 import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
 import { createGetWeatherForecastTool } from "@/tools/weather/GetWeatherForecastTool";
@@ -168,6 +169,7 @@ function main() {
   if (gmailClient) {
     toolRegistry.registerTool(createSearchEmailTool(gmailClient));
     toolRegistry.registerTool(createGetEmailTool(gmailClient));
+    toolRegistry.registerTool(createGetUnreadEmailCountTool(gmailClient));
   }
 
   const weatherEnabled = config.weatherLatitude !== undefined && config.weatherLongitude !== undefined;

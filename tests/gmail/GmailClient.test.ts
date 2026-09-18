@@ -182,3 +182,39 @@ describe("GmailClient.getMessageBody", () => {
     await expect(client.getMessageBody("missing")).rejects.toThrow(/404/);
   });
 });
+
+describe("GmailClient.getMessageCount", () => {
+  test("throws when no account is linked", async () => {
+    const { client } = makeClient();
+    await expect(client.getMessageCount("is:unread")).rejects.toThrow(/no google account linked/i);
+  });
+
+  test("returns resultSizeEstimate without fetching per-message summaries", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async (url: string) => {
+      fetchCalls++;
+      expect(new URL(url).searchParams.get("q")).toBe("is:unread");
+      return new Response(JSON.stringify({ resultSizeEstimate: 7 }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const count = await client.getMessageCount("is:unread");
+
+    expect(count).toBe(7);
+    expect(fetchCalls).toBe(1);
+  });
+
+  test("defaults to 0 when resultSizeEstimate is absent", async () => {
+    global.fetch = (async () => new Response(JSON.stringify({}), { status: 200 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    expect(await client.getMessageCount("is:unread")).toBe(0);
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.getMessageCount("is:unread")).rejects.toThrow(/400/);
+  });
+});
