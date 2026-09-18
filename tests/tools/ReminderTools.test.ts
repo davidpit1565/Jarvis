@@ -5,6 +5,7 @@ import { createListRemindersTool } from "@/tools/reminders/ListRemindersTool";
 import { createCompleteReminderTool } from "@/tools/reminders/CompleteReminderTool";
 import { createDeleteReminderTool } from "@/tools/reminders/DeleteReminderTool";
 import { createUpdateReminderTool } from "@/tools/reminders/UpdateReminderTool";
+import { UndoStore } from "@/core/undo/UndoStore";
 import { PermissionLevel } from "@/types/permissions";
 
 const context = { userId: "user-1", requestId: "req-1" };
@@ -194,6 +195,30 @@ describe("DELETE_REMINDER tool", () => {
     const tool = createDeleteReminderTool(store);
     const result = await tool.execute({ id: "missing" }, context);
     expect(result.success).toBe(false);
+  });
+
+  test("records the deleted reminder's fields to the undo store, when given one", async () => {
+    const record = store.create({ text: "Buy milk", dueAt: "2026-09-19T18:00:00.000Z", recurrence: "daily" });
+    const undoStore = new UndoStore();
+    const tool = createDeleteReminderTool(store, undoStore);
+
+    await tool.execute({ id: record.id }, context);
+
+    expect(undoStore.takeLast()).toEqual({
+      type: "reminder_deleted",
+      text: "Buy milk",
+      dueAt: "2026-09-19T18:00:00.000Z",
+      recurrence: "daily",
+    });
+  });
+
+  test("does not record anything in the undo store on failure", async () => {
+    const undoStore = new UndoStore();
+    const tool = createDeleteReminderTool(store, undoStore);
+
+    await tool.execute({ id: "missing" }, context);
+
+    expect(undoStore.takeLast()).toBeUndefined();
   });
 });
 

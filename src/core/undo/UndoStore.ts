@@ -1,3 +1,5 @@
+import type { ReminderRecurrence } from "@/types/reminders";
+
 export interface UndoableCalendarEventCreation {
   type: "calendar_event_created";
   eventId: string;
@@ -19,7 +21,18 @@ export interface UndoableCalendarEventUpdate {
   previous: { summary: string; start: string; end: string; location: string | null };
 }
 
-export type UndoableAction = UndoableCalendarEventCreation | UndoableCalendarEventDeletion | UndoableCalendarEventUpdate;
+export interface UndoableReminderDeletion {
+  type: "reminder_deleted";
+  text: string;
+  dueAt: string | null;
+  recurrence: ReminderRecurrence | null;
+}
+
+export type UndoableAction =
+  | UndoableCalendarEventCreation
+  | UndoableCalendarEventDeletion
+  | UndoableCalendarEventUpdate
+  | UndoableReminderDeletion;
 
 /**
  * Tracks exactly one undoable action — the most recent one — so "undo

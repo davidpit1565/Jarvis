@@ -160,8 +160,12 @@ function main() {
     toolRegistry.registerTool(createCreateCalendarEventTool(calendarClient, undoStore));
     toolRegistry.registerTool(createDeleteCalendarEventTool(calendarClient, undoStore));
     toolRegistry.registerTool(createUnlinkCalendarTool(calendarTokenStore));
-    toolRegistry.registerTool(createUndoLastActionTool(undoStore, calendarClient));
   }
+  // Registered unconditionally: reminders are always available (no
+  // calendar link required), and reminder_deleted is one of the
+  // undoable action types UNDO_LAST_ACTION itself already knows how to
+  // reverse.
+  toolRegistry.registerTool(createUndoLastActionTool(undoStore, calendarClient, reminderStore));
 
   // Shares the same Google account link as Calendar (one OAuth consent
   // screen, two scopes) rather than a second separate account link.
@@ -199,7 +203,7 @@ function main() {
   toolRegistry.registerTool(createCreateReminderTool(reminderStore));
   toolRegistry.registerTool(createListRemindersTool(reminderStore));
   toolRegistry.registerTool(createCompleteReminderTool(reminderStore));
-  toolRegistry.registerTool(createDeleteReminderTool(reminderStore));
+  toolRegistry.registerTool(createDeleteReminderTool(reminderStore, undoStore));
   toolRegistry.registerTool(createUpdateReminderTool(reminderStore));
   toolRegistry.registerTool(createSearchConversationHistoryTool(conversationHistoryStore));
   toolRegistry.registerTool(createClearConversationHistoryTool(conversationHistoryStore));

@@ -159,7 +159,9 @@ reminder has a lifecycle (pending, then completed), a memory doesn't:
 - **`DELETE_REMINDER`** (`SAFE_ACTION`, standing-granted) — permanently
   removes a reminder created by mistake or no longer relevant. Distinct
   from `COMPLETE_REMINDER`: this is for one that should never have
-  existed, not one the user actually did.
+  existed, not one the user actually did. Undoable via `UNDO_LAST_ACTION`
+  (see below) — its text/dueAt/recurrence are fetched right before the
+  delete so "undo that" can recreate it.
 
 **Proactive, not just reactive**: `Orchestrator` accepts an optional
 `contextProvider` callback, called fresh on every turn to add extra
@@ -708,17 +710,17 @@ automated from here):
   mention the double-booking instead of creating it silently; a failure
   in that check (rather than the create itself) is swallowed, since it's
   a nice-to-have warning, not something worth failing the whole request over.
-- **`UNDO_LAST_ACTION`** (`SAFE_ACTION`, standing-granted) — "undo that"
-  right after JARVIS creates, updates, *or deletes* a calendar event
-  actually reverses it, via a single-slot `UndoStore`
+- **`UNDO_LAST_ACTION`** (`SAFE_ACTION`, standing-granted, registered
+  unconditionally — reminders don't require a calendar link) — "undo
+  that" right after JARVIS creates/updates/deletes a calendar event, or
+  deletes a reminder, actually reverses it, via a single-slot `UndoStore`
   (`src/core/undo/UndoStore.ts`) that tracks only the one most recent
-  reversible action, not a full history to walk back through. Undoing a
-  deletion recreates the event, and undoing an update restores it, both
-  from details `DELETE_CALENDAR_EVENT`/`UPDATE_CALENDAR_EVENT` fetch
-  right before acting (summary/start/end/location) — an action is only
-  actually reversible if something remembered what it changed. In-memory
-  only, like `PermissionService`'s grants; recording a new action always
-  replaces whatever was there.
+  reversible action, not a full history to walk back through. Each
+  action is only actually reversible because something remembered what
+  it changed right before acting — `DELETE_CALENDAR_EVENT`/
+  `UPDATE_CALENDAR_EVENT`/`DELETE_REMINDER` all fetch first, act second.
+  In-memory only, like `PermissionService`'s grants; recording a new
+  action always replaces whatever was there.
 - **`SEARCH_EMAIL`** (`READ`) — searches the linked Gmail inbox using
   Gmail's own search syntax (`from:x`, `is:unread`, `subject:invoice`,
   `newer_than:2d`, ...) and returns matching messages' subject, sender,

@@ -1,6 +1,7 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 import type { ReminderStore } from "@/reminders/ReminderStore";
+import type { UndoStore } from "@/core/undo/UndoStore";
 
 export interface DeleteReminderInput extends Record<string, unknown> {
   id: string;
@@ -12,8 +13,12 @@ export interface DeleteReminderInput extends Record<string, unknown> {
  * rather than one that was actually done. Without this, the only way to
  * get rid of a bad reminder was to mark it "completed", which is
  * misleading in list_reminders(includeCompleted: true) history.
+ *
+ * When an `undoStore` is provided, fetches the reminder's fields before
+ * deleting it and records them so "undo that" can recreate it — same
+ * fetch-then-act pattern as DELETE_CALENDAR_EVENT's own undo support.
  */
-export function createDeleteReminderTool(reminderStore: ReminderStore): LocalTool<DeleteReminderInput> {
+export function createDeleteReminderTool(reminderStore: ReminderStore, undoStore?: UndoStore): LocalTool<DeleteReminderInput> {
   return {
     id: "DELETE_REMINDER",
     name: "delete_reminder",
@@ -36,9 +41,18 @@ export function createDeleteReminderTool(reminderStore: ReminderStore): LocalToo
         return { success: false, error: "id must be a non-empty string" };
       }
 
+      const reminderBeforeDelete = reminderStore.get(input.id);
       const deleted = reminderStore.delete(input.id);
       if (!deleted) {
         return { success: false, error: `No reminder found with id: ${input.id}` };
+      }
+      if (reminderBeforeDelete) {
+        undoStore?.record({
+          type: "reminder_deleted",
+          text: reminderBeforeDelete.text,
+          dueAt: reminderBeforeDelete.dueAt,
+          recurrence: reminderBeforeDelete.recurrence,
+        });
       }
       return { success: true, data: { id: input.id } };
     },

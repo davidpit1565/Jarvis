@@ -2,6 +2,7 @@ import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 import type { UndoStore } from "@/core/undo/UndoStore";
 import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import type { ReminderStore } from "@/reminders/ReminderStore";
 
 /**
  * Lets the user say "undo that" right after JARVIS did something, instead
@@ -9,8 +10,17 @@ import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
  * the single most recent undoable action (see UndoStore) — this is
  * deliberately not a general history/rollback system, just the one thing
  * "undo" naturally refers to right after doing it.
+ *
+ * `calendarClient`/`reminderStore` are each only needed to undo their
+ * own action types (calendar_event_* / reminder_deleted respectively) —
+ * omit whichever isn't configured, and undoing an action of that type
+ * simply reports it can't be undone rather than throwing.
  */
-export function createUndoLastActionTool(undoStore: UndoStore, calendarClient: GoogleCalendarClient): LocalTool {
+export function createUndoLastActionTool(
+  undoStore: UndoStore,
+  calendarClient?: GoogleCalendarClient,
+  reminderStore?: ReminderStore
+): LocalTool {
   return {
     id: "UNDO_LAST_ACTION",
     name: "undo_last_action",
@@ -28,10 +38,12 @@ export function createUndoLastActionTool(undoStore: UndoStore, calendarClient: G
 
       try {
         if (action.type === "calendar_event_created") {
+          if (!calendarClient) return { success: false, error: "Calendar isn't linked; can't undo this" };
           await calendarClient.deleteEvent(action.eventId);
           return { success: true, data: { undone: action.type, summary: action.summary } };
         }
         if (action.type === "calendar_event_deleted") {
+          if (!calendarClient) return { success: false, error: "Calendar isn't linked; can't undo this" };
           await calendarClient.createEvent({
             summary: action.summary,
             start: action.start,
@@ -41,8 +53,14 @@ export function createUndoLastActionTool(undoStore: UndoStore, calendarClient: G
           return { success: true, data: { undone: action.type, summary: action.summary } };
         }
         if (action.type === "calendar_event_updated") {
+          if (!calendarClient) return { success: false, error: "Calendar isn't linked; can't undo this" };
           await calendarClient.updateEvent(action.eventId, action.previous);
           return { success: true, data: { undone: action.type, summary: action.previous.summary } };
+        }
+        if (action.type === "reminder_deleted") {
+          if (!reminderStore) return { success: false, error: "Reminders aren't available; can't undo this" };
+          reminderStore.create({ text: action.text, dueAt: action.dueAt, recurrence: action.recurrence });
+          return { success: true, data: { undone: action.type, text: action.text } };
         }
         return { success: false, error: `Don't know how to undo action type: ${(action as { type: string }).type}` };
       } catch (error) {

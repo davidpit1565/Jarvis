@@ -1,6 +1,7 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import { ReminderStore } from "@/reminders/ReminderStore";
 import { UndoStore } from "@/core/undo/UndoStore";
 import { createUndoLastActionTool } from "@/tools/undo/UndoLastActionTool";
 import { PermissionLevel } from "@/types/permissions";
@@ -122,5 +123,45 @@ describe("UNDO_LAST_ACTION tool", () => {
     const body = JSON.parse(capturedBody!);
     expect(body.summary).toBe("Dentist");
     expect(body.location).toBe("Clinic");
+  });
+
+  test("recreates a just-deleted reminder", async () => {
+    const reminderStore = new ReminderStore(":memory:");
+    const undoStore = new UndoStore();
+    undoStore.record({
+      type: "reminder_deleted",
+      text: "Buy milk",
+      dueAt: "2026-09-19T18:00:00.000Z",
+      recurrence: "daily",
+    });
+    const tool = createUndoLastActionTool(undoStore, undefined, reminderStore);
+
+    const result = await tool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const [recreated] = reminderStore.list();
+    expect(recreated?.text).toBe("Buy milk");
+    expect(recreated?.recurrence).toBe("daily");
+    reminderStore.close();
+  });
+
+  test("fails to undo a reminder deletion when no reminderStore was given", async () => {
+    const undoStore = new UndoStore();
+    undoStore.record({ type: "reminder_deleted", text: "Buy milk", dueAt: null, recurrence: null });
+    const tool = createUndoLastActionTool(undoStore, makeClient());
+
+    const result = await tool.execute({}, context);
+    expect(result.success).toBe(false);
+  });
+
+  test("fails to undo a calendar action when no calendarClient was given", async () => {
+    const reminderStore = new ReminderStore(":memory:");
+    const undoStore = new UndoStore();
+    undoStore.record({ type: "calendar_event_created", eventId: "e1", summary: "Dentist" });
+    const tool = createUndoLastActionTool(undoStore, undefined, reminderStore);
+
+    const result = await tool.execute({}, context);
+    expect(result.success).toBe(false);
+    reminderStore.close();
   });
 });
