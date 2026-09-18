@@ -251,7 +251,7 @@ export class JarvisWebSocketServer {
   }
 
   start(port: number) {
-    return Bun.serve<SocketData>({
+    const server = Bun.serve<SocketData>({
       port,
       fetch: async (req, server) => {
         const response = await this.route(req, server);
@@ -261,6 +261,16 @@ export class JarvisWebSocketServer {
         return response ? withSecurityHeaders(response) : undefined;
       },
       websocket: {
+        // Without this, a connection whose TCP session died without a
+        // clean close (network drop, laptop sleep, a Wi-Fi handoff) stays
+        // "connected" from this server's point of view forever — the
+        // device would show as online on the dashboard and JARVIS would
+        // keep trying to dispatch device tools to it, with every one of
+        // those calls only failing after its own separate timeout. Bun
+        // closes an idle socket after this many seconds of no messages in
+        // either direction, which fires the same `close` handler below
+        // that already marks a device offline on a clean disconnect.
+        idleTimeout: 120,
         open: (ws) => {
           const socket = ws as ServerWebSocket<SocketData>;
           if (socket.data.kind === "observer") {
@@ -301,6 +311,23 @@ export class JarvisWebSocketServer {
         },
       },
     });
+
+    // Keeps a genuinely healthy but quiet device connection (no tool
+    // calls in a while) from being closed by the idleTimeout above: each
+    // ping's real "pong" reply is itself socket activity. Well under
+    // idleTimeout so a pong has time to arrive before the connection
+    // would otherwise be considered idle. Cleared whenever the caller
+    // stops the server — never left running past the server's own
+    // lifetime (this matters most in tests, which start/stop many
+    // short-lived servers).
+    const pingInterval = setInterval(() => this.deps.deviceConnectionManager.pingAll(), 45_000);
+    const originalStop = server.stop.bind(server);
+    server.stop = ((...args: Parameters<typeof originalStop>) => {
+      clearInterval(pingInterval);
+      return originalStop(...args);
+    }) as typeof server.stop;
+
+    return server;
   }
 
   private async route(req: Request, server: BunServer): Promise<Response | undefined> {
@@ -471,8 +498,13 @@ export class JarvisWebSocketServer {
         }
         return;
       case "pong":
+        if (message.deviceId) {
+          const device = this.deps.deviceRegistry.getDevice(message.deviceId);
+          if (device) this.deps.deviceRegistry.updateStatus(message.deviceId, device.status);
+        }
+        return;
       case "event":
-        // Heartbeats and generic device events aren't acted on in Phase 2.
+        // Generic device events aren't acted on in Phase 2.
         return;
     }
   }

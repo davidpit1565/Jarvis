@@ -58,6 +58,28 @@ describe("DeviceConnectionManager", () => {
     expect(manager.hasConnection("imac-1")).toBe(false);
   });
 
+  test("pingAll sends a ping envelope to every connected device", () => {
+    const eventBus = new EventBus();
+    const manager = new DeviceConnectionManager(eventBus);
+    const imac = new MockDeviceConnection();
+    const iphone = new MockDeviceConnection();
+    manager.registerConnection("imac-1", imac);
+    manager.registerConnection("iphone-1", iphone);
+
+    manager.pingAll();
+
+    expect(imac.sent).toHaveLength(1);
+    expect(iphone.sent).toHaveLength(1);
+    const imacPing = JSON.parse(imac.sent[0]!) as { type: string; deviceId: string };
+    expect(imacPing.type).toBe("ping");
+    expect(imacPing.deviceId).toBe("imac-1");
+  });
+
+  test("pingAll does nothing when there are no connections", () => {
+    const manager = new DeviceConnectionManager(new EventBus());
+    expect(() => manager.pingAll()).not.toThrow();
+  });
+
   test("removeConnection closes the underlying transport when it supports it", () => {
     const eventBus = new EventBus();
     const manager = new DeviceConnectionManager(eventBus);

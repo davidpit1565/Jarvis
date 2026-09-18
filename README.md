@@ -1221,6 +1221,19 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   in `ClaudeBrain`) rather than left at the SDK's own defaults, so a
   transient 429/5xx gets more chances to recover before a phone call or
   chat turn gives up.
+- **Device WebSocket connections now have a real heartbeat.** A 2-minute
+  idle timeout on the server's WebSocket config closes a connection whose
+  underlying TCP session died without a clean close (network drop,
+  laptop sleep, a Wi-Fi handoff) — without this, that device would show
+  as online on the dashboard, and every tool dispatched to it would only
+  fail after its own separate timeout, forever. Paired with a "ping" Core
+  sends every connected device every 45 seconds
+  (`DeviceConnectionManager.pingAll()`) so a genuinely healthy but quiet
+  connection doesn't get closed just for having no tool calls in a
+  while — the Agent already replies "pong" to a ping (`main.swift`'s
+  existing handler for it, previously unused from Core's side), and that
+  reply is itself socket activity that resets the idle timeout. A "pong"
+  also bumps the device's `lastSeen` in `DeviceRegistry`.
 - Optional one-shot fallback model (`JARVIS_FALLBACK_MODEL`): if the
   primary model call still fails with a 429/503/529 after all of the
   SDK's own retries, `ClaudeBrain` retries once against a configured

@@ -53,6 +53,21 @@ export class DeviceConnectionManager {
     return this.connections.has(deviceId);
   }
 
+  /**
+   * Sends a "ping" to every connected device — paired with the server's
+   * own WebSocket `idleTimeout`, this is what keeps a genuinely healthy
+   * but quiet connection (no tool calls in a while) from being closed as
+   * idle: the Agent's real "pong" reply (see `main.swift`'s existing
+   * handler for it) is itself socket activity, resetting the timeout.
+   * A connection that's actually dead just never replies and gets
+   * cleaned up by the idle timeout as intended.
+   */
+  pingAll(): void {
+    for (const [deviceId, connection] of this.connections) {
+      connection.send(JSON.stringify(makeEnvelope("ping", {}, deviceId, randomUUID())));
+    }
+  }
+
   /** Sends a raw envelope to a device without expecting a correlated response. */
   send(deviceId: string, raw: string): void {
     const connection = this.connections.get(deviceId);
