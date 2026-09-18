@@ -11,6 +11,8 @@ import type { TokenUsageStore } from "@/audit/TokenUsageStore";
 import { estimateCostUsd } from "@/audit/estimateCostUsd";
 import { DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { createBackupArchive } from "@/backup/createBackupArchive";
+import type { ReminderStore } from "@/reminders/ReminderStore";
+import type { MemoryStore } from "@/memory/MemoryStore";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
@@ -97,6 +99,10 @@ export interface JarvisWebSocketServerDependencies {
    * credentials, so it must never be reachable without one.
    */
   backupDbPaths?: string[];
+  /** Optional: enables the admin-gated GET /reminders read-only endpoint. */
+  reminderStore?: ReminderStore;
+  /** Optional: enables the admin-gated GET /memory read-only endpoint. */
+  memoryStore?: MemoryStore;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -231,6 +237,14 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/backup") {
             return this.handleBackupHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/reminders") {
+            return this.handleRemindersHttp(req);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/memory") {
+            return this.handleMemoryHttp(req);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/assets/hologram.jpg") {
@@ -603,6 +617,39 @@ export class JarvisWebSocketServer {
     }
 
     return createBackupArchive(backupDbPaths ?? []);
+  }
+
+  /**
+   * GET /reminders — read-only admin view of every stored reminder
+   * (including completed ones), so you can actually see what JARVIS
+   * thinks it's tracking without asking it in conversation. Same admin
+   * token as pairing approval — optional only for local development,
+   * mandatory once this server is reachable from the public internet.
+   */
+  private handleRemindersHttp(req: Request): Response {
+    const { adminToken, reminderStore } = this.deps;
+    if (!reminderStore) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ reminders: reminderStore.list(true) });
+  }
+
+  /**
+   * GET /memory — read-only admin view of every saved memory fact. Same
+   * admin-token gating rationale as GET /reminders above.
+   */
+  private handleMemoryHttp(req: Request): Response {
+    const { adminToken, memoryStore } = this.deps;
+    if (!memoryStore) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ memory: memoryStore.search("") });
   }
 
   private hasValidSession(req: Request): boolean {

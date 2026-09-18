@@ -187,6 +187,8 @@ function main() {
     sessionStore,
     audioLevelBroadcaster,
     tokenUsageStore,
+    reminderStore,
+    memoryStore,
     backupDbPaths: [
       config.memoryDbPath,
       config.webauthnDbPath,

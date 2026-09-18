@@ -799,6 +799,15 @@ This is a best-effort file copy, not a hot/transactional backup — fine
 for a single-writer assistant triggered manually, not meant for point-in-
 time recovery under heavy concurrent writes.
 
+## Inspecting what JARVIS remembers
+
+`GET /reminders` and `GET /memory` are read-only JSON views of everything
+stored in `ReminderStore` (including completed reminders) and
+`MemoryStore` — for actually seeing what JARVIS is tracking without
+having to ask it in conversation. Same `X-Jarvis-Admin-Token` gating as
+`POST /pairing/approve`: required whenever an admin token is configured,
+optional only for local development with none set.
+
 ## Reliability
 
 A handful of additions aimed specifically at "survives a real cloud
