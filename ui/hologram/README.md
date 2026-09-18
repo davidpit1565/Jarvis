@@ -204,6 +204,59 @@ attribute — chosen over writing a full custom `ShaderMaterial` from scratch
 so Three's existing perspective size-attenuation math keeps working for
 free. Frozen (not ticking `uTime`) under `prefers-reduced-motion`.
 
+### The inner "mind" shell was still a literal globe grid — fixed
+
+The outer flow-field shell was rebuilt to escape "reads as a globe" (see
+above), but the inner "mind" shell directly underneath it — the shape
+you actually stare at in the center of the Core — was left over as a
+plain `THREE.SphereGeometry(1.0, 18, 14)` wireframe: a real
+latitude/longitude grid, the exact same problem, just smaller and dead
+center. That's a real contributor to "still looks like Earth" surviving
+the outer-shell rebuild. Fixed with `buildOrganicWire()` in `index.html`:
+an `IcosahedronGeometry` (detail 3) with every vertex pushed outward
+along its own radial direction by a `simplex3()` sample at that
+direction (the same noise function the outer shell/energy surface
+already use — not a second implementation) before building the
+wireframe from it. The result is a genuinely irregular, folded mesh —
+no two "latitude lines," no visible poles — closer to a real convoluted
+brain surface than a sphere.
+
+### Free multi-axis idle tumble, not a Y-axis sway
+
+Idle rotation used to be `sin(t)` sway on all three axes, but X and Z's
+amplitude (0.07 / 0.025 rad, a few degrees) was small enough to be
+functionally invisible — in practice the Core only ever visibly rotated
+around Y, which is exactly what makes something read as "a globe/planet
+spinning on its axis" rather than a free-floating organism. Per direct
+request (rotation should be free in every direction, including up/down,
+the way something alive tumbles, not a fixed spin), X and Z now swing as
+widely as Y, and Y additionally carries a slow unbounded drift term on
+top of its wobble so the Core keeps turning through new facings forever
+instead of settling into a bounded left-right sway. Four non-harmonic
+frequencies/phases across the three axes keep them from ever
+resynchronizing into an obviously looping cycle.
+
+### Real thinking now grows the outer body too, not just the inner mind
+
+`brainPulse` already grew/brightened the inner mind shell on real
+`brain.request`/`brain.response` activity; the outer flow-field
+body/energy surface only ever responded to voice (`audioGlow`), so a
+real "thought" with no accompanying audio never visibly grew the Core's
+outer envelope — only its center. The outer body's scale now also takes
+a (smaller-weight) contribution from `brainPulse`, so a real thinking
+burst swells the whole Core, not just the mind inside it, while voice
+still reads as the bigger, faster pulse.
+
+### A third, fine noise octave on the body's silhouette
+
+`blobRadius()`'s two lobes (a big base shape, plus secondary bumps) still
+read as a smooth-ish amoeba/cell outline from a normal viewing distance,
+even while genuinely swirling — direct feedback was still "smooth blob,"
+not "brain." A third, low-amplitude, higher-frequency octave (`lobe3`,
+weight 0.09 vs. 0.85/0.25 for the other two — a fine ripple, not another
+visible lobe) adds cortex-fold-like surface detail on top of the main
+silhouette without changing its overall shape language.
+
 ### Reactivity — three real signals, no fake state
 
 - **Thinking** (`brainPulse`/`brainIntensity` in `index.html`) — real
