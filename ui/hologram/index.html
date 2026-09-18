@@ -369,11 +369,12 @@
       ctx.translate(sx * size * 0.115, -size * 0.05);
       ctx.rotate(sx * -0.12);
       ctx.beginPath();
-      // Smaller and only partially erased (not a full alpha=1 cutout) —
-      // a full-black almond hole this size read as huge blank alien eyes
-      // once combined with the small bright eye spheres sitting in it.
-      ctx.ellipse(0, 0, size * 0.055, size * 0.024, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(0,0,0,0.7)";
+      // Smaller still and lightly erased — this is now just a soft
+      // under-brow shadow, not a socket outline. The actual "eye" is the
+      // small bright 3D sphere sitting on the wireframe surface; a dark
+      // almond patch here on top of that read as huge blank alien eyes.
+      ctx.ellipse(0, 0, size * 0.04, size * 0.016, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
       ctx.fill();
       ctx.restore();
     }
@@ -814,7 +815,12 @@
     const centerY = ry * 0.1;
     const centerZ = -rz * 0.05;
     const n = 900;
-    const positions = new Float32Array(n * 3);
+    // Base (resting) position per particle, plus a random phase/speed so
+    // each one drifts on its own sine cycle — this is what gives the
+    // "always thinking, never static" look asked for, rather than a
+    // structure that only moves when a real event bumps brainPulse.
+    const basePositions = new Float32Array(n * 3);
+    const phases = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       let x, y, z;
       do {
@@ -822,10 +828,12 @@
         y = Math.random() * 2 - 1;
         z = Math.random() * 2 - 1;
       } while (x * x + y * y + z * z > 1);
-      positions[i * 3] = x * bx;
-      positions[i * 3 + 1] = y * by + centerY;
-      positions[i * 3 + 2] = z * bz + centerZ;
+      basePositions[i * 3] = x * bx;
+      basePositions[i * 3 + 1] = y * by + centerY;
+      basePositions[i * 3 + 2] = z * bz + centerZ;
+      phases[i] = Math.random() * Math.PI * 2;
     }
+    const positions = basePositions.slice();
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     const mat = new THREE.PointsMaterial({
@@ -835,17 +843,14 @@
     const points = new THREE.Points(geo, mat);
 
     const lineCount = 46;
+    const lineEndpoints = new Array(lineCount);
     const linePositions = new Float32Array(lineCount * 2 * 3);
-    for (let i = 0; i < lineCount; i++) {
+    function rewire(i) {
       const ia = Math.floor(Math.random() * n);
       const ib = Math.floor(Math.random() * n);
-      linePositions[i * 6] = positions[ia * 3];
-      linePositions[i * 6 + 1] = positions[ia * 3 + 1];
-      linePositions[i * 6 + 2] = positions[ia * 3 + 2];
-      linePositions[i * 6 + 3] = positions[ib * 3];
-      linePositions[i * 6 + 4] = positions[ib * 3 + 1];
-      linePositions[i * 6 + 5] = positions[ib * 3 + 2];
+      lineEndpoints[i] = [ia, ib];
     }
+    for (let i = 0; i < lineCount; i++) rewire(i);
     const lineGeo = new THREE.BufferGeometry();
     lineGeo.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
     const lineMat = new THREE.LineBasicMaterial({
@@ -855,7 +860,11 @@
 
     const group = new THREE.Group();
     group.add(points, lines);
-    return { group, pointsMat: points.material, lineMat };
+    return {
+      group, pointsMat: points.material, lineMat,
+      n, basePositions, phases, posAttr: geo.attributes.position,
+      lineEndpoints, lineGeo, rewire,
+    };
   }
   const brain = buildBrain();
   headWire.add(brain.group);
@@ -985,6 +994,7 @@
   // every frame in animate() to brighten the brain visualization while
   // Jarvis is actually "thinking" instead of a fixed idle pulse.
   let brainPulse = 0;
+  let nextBrainRewireAt = 0;
   const rgbSplit = document.getElementById("rgb-split");
   const banner = document.getElementById("glitch-banner");
   const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1027,6 +1037,37 @@
     brain.pointsMat.opacity = Math.min(1, brainGlow);
     brain.lineMat.opacity = Math.min(0.55, 0.15 + brainPulse * 0.4);
 
+    // Continuous per-particle drift — "always thinking", not a structure
+    // that only moves when a real event bumps brainPulse. Amplitude grows
+    // a little further while brainPulse is high, so real activity still
+    // reads as "moving more," but it's never fully static at rest.
+    if (!REDUCED_MOTION) {
+      const jitterAmp = 0.05 + brainPulse * 0.05;
+      const bp = brain.posAttr.array;
+      for (let i = 0; i < brain.n; i++) {
+        const ph = brain.phases[i];
+        bp[i * 3] = brain.basePositions[i * 3] + Math.sin(t * 0.9 + ph) * jitterAmp;
+        bp[i * 3 + 1] = brain.basePositions[i * 3 + 1] + Math.cos(t * 0.7 + ph * 1.3) * jitterAmp;
+        bp[i * 3 + 2] = brain.basePositions[i * 3 + 2] + Math.sin(t * 0.8 + ph * 0.6) * jitterAmp;
+      }
+      brain.posAttr.needsUpdate = true;
+
+      // Re-wire a few synapse lines every ~1.1s so the connections
+      // visibly re-form over time, like real firing, instead of a fixed
+      // static network.
+      if (t > nextBrainRewireAt) {
+        for (let k = 0; k < 4; k++) brain.rewire(Math.floor(Math.random() * brain.lineEndpoints.length));
+        nextBrainRewireAt = t + 1.1;
+      }
+      const lp = brain.lineGeo.attributes.position.array;
+      for (let i = 0; i < brain.lineEndpoints.length; i++) {
+        const [ia, ib] = brain.lineEndpoints[i];
+        lp[i * 6] = bp[ia * 3]; lp[i * 6 + 1] = bp[ia * 3 + 1]; lp[i * 6 + 2] = bp[ia * 3 + 2];
+        lp[i * 6 + 3] = bp[ib * 3]; lp[i * 6 + 4] = bp[ib * 3 + 1]; lp[i * 6 + 5] = bp[ib * 3 + 2];
+      }
+      brain.lineGeo.attributes.position.needsUpdate = true;
+    }
+
     if (!REDUCED_MOTION) {
       // Face-tracking (webcam) overrides the idle drift while a real face
       // was seen recently — smoothly turns toward the tracked position
@@ -1036,10 +1077,17 @@
       if (faceTrackingActive && performance.now() - lastFaceSeenAt < 1500) {
         faceGroup.rotation.y += (targetYaw - faceGroup.rotation.y) * 0.08;
         faceGroup.rotation.x += (targetPitch - faceGroup.rotation.x) * 0.08;
+        faceGroup.rotation.z += (0 - faceGroup.rotation.z) * 0.08;
       } else {
-        faceGroup.rotation.y = Math.sin(t * 0.18) * 0.35;
-        faceGroup.rotation.x = Math.sin(t * 0.11) * 0.06;
+        faceGroup.rotation.y = Math.sin(t * 0.24) * 0.4;
+        faceGroup.rotation.x = Math.sin(t * 0.15) * 0.07;
+        faceGroup.rotation.z = Math.sin(t * 0.09) * 0.025;
       }
+      // Subtle continuous "breathing" scale, a little stronger while the
+      // brain is actively pulsing — reinforces that this is alive and
+      // thinking, not a static prop, even when facing straight ahead.
+      const breathe = 1 + Math.sin(t * 0.7) * 0.012 + brainPulse * 0.01;
+      faceGroup.scale.setScalar(breathe);
       orbitRings.forEach((r) => {
         r.satellites.forEach((s) => {
           const a = t * r.speed + s.offset;

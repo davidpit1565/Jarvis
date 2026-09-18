@@ -73,6 +73,15 @@ instead of reading as a hollow dome. Its glow isn't a fixed animation:
 feed when Core is offline) and decays back to a gentle idle breathing
 glow — so it's visibly "thinking harder" exactly when Jarvis actually is.
 
+**Never fully static, even at rest**: every brain particle continuously
+drifts on its own sine cycle (not a fixed structure that only moves on
+real events), and ~4 of the 46 synapse lines re-wire to new random points
+every ~1.1s, so the connections visibly re-form over time like real
+firing. The whole head also has a subtle continuous idle sway (rotation)
+and a faint "breathing" scale pulse, a little stronger while brainPulse
+is high — all gated off under `prefers-reduced-motion`, same as every
+other continuous motion source on this page.
+
 ## Viewing it from any angle — drag to orbit
 
 Click-and-drag anywhere on the page to rotate the camera freely around the
