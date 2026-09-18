@@ -1,5 +1,12 @@
 export interface JarvisConfig {
-  anthropicApiKey: string;
+  /** "anthropic" (default) or "groq" — which Brain implementation src/index.ts constructs. */
+  brainProvider: "anthropic" | "groq";
+  /** Required when brainProvider is "anthropic"; undefined for a Groq-only setup. */
+  anthropicApiKey?: string;
+  /** Required when brainProvider is "groq"; may also be set alongside "anthropic" for no reason today, but unused unless brainProvider is "groq". */
+  groqApiKey?: string;
+  /** Groq model id; unset uses GroqBrain's own default (a real tool-calling-capable free-tier model). */
+  groqModel?: string;
   port: number;
   memoryDbPath: string;
   /** Path to the SQLite database storing registered Face ID/Touch ID (WebAuthn) credentials. */
@@ -240,7 +247,19 @@ function requireEnv(name: string): string {
  * Never logs the actual values of secrets.
  */
 export function loadConfig(): JarvisConfig {
-  const anthropicApiKey = requireEnv("ANTHROPIC_API_KEY");
+  // "anthropic" (default, unchanged) or "groq" — a genuine $0 option
+  // (Groq's free tier: no credit card, real tool-calling support) added
+  // on explicit request. Only ANTHROPIC_API_KEY OR GROQ_API_KEY is
+  // required, never both — a Groq-only setup never needs an Anthropic
+  // account at all, which is the whole point of it being genuinely free.
+  const brainProviderRaw = process.env.JARVIS_BRAIN_PROVIDER?.trim().toLowerCase() || "anthropic";
+  if (brainProviderRaw !== "anthropic" && brainProviderRaw !== "groq") {
+    throw new ConfigError(`Invalid JARVIS_BRAIN_PROVIDER: "${brainProviderRaw}" — must be "anthropic" or "groq"`);
+  }
+  const brainProvider = brainProviderRaw as "anthropic" | "groq";
+  const anthropicApiKey = brainProvider === "anthropic" ? requireEnv("ANTHROPIC_API_KEY") : undefined;
+  const groqApiKey = brainProvider === "groq" ? requireEnv("GROQ_API_KEY") : process.env.GROQ_API_KEY?.trim() || undefined;
+  const groqModel = process.env.JARVIS_GROQ_MODEL?.trim() || undefined;
   const port = Number(process.env.JARVIS_PORT ?? "4770");
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
   const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
@@ -461,7 +480,10 @@ export function loadConfig(): JarvisConfig {
   }
 
   return {
+    brainProvider,
     anthropicApiKey,
+    groqApiKey,
+    groqModel,
     port,
     memoryDbPath,
     webauthnDbPath,

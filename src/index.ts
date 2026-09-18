@@ -4,6 +4,8 @@ import { loadConfig } from "@/config";
 import { EventBus } from "@/core/events/EventBus";
 import { ConversationManager } from "@/core/conversation/ConversationManager";
 import { ClaudeBrain, DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
+import { GroqBrain } from "@/core/brain/GroqBrain";
+import type { Brain } from "@/types/brain";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
@@ -361,14 +363,22 @@ function main() {
   const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const conversation = new ConversationManager(eventBus);
-  const brain = new ClaudeBrain(config.anthropicApiKey, {
-    webSearchEnabled: config.webSearchEnabled,
-    webSearchMaxUses: config.webSearchMaxUses,
-    webFetchEnabled: config.webFetchEnabled,
-    webFetchMaxUses: config.webFetchMaxUses,
-    baseUrl: config.anthropicBaseUrl,
-    fallbackModel: config.fallbackModel,
-  });
+  // "groq" is a genuine $0 alternative (no credit card, real tool-calling
+  // support on the free tier) — see GroqBrain's own doc comment and
+  // README's "Free ($0) brain: Groq" section for the honest quality
+  // tradeoff. loadConfig() already guarantees the matching API key is
+  // set for whichever provider is selected.
+  const brain: Brain =
+    config.brainProvider === "groq"
+      ? new GroqBrain(config.groqApiKey!, { model: config.groqModel })
+      : new ClaudeBrain(config.anthropicApiKey!, {
+          webSearchEnabled: config.webSearchEnabled,
+          webSearchMaxUses: config.webSearchMaxUses,
+          webFetchEnabled: config.webFetchEnabled,
+          webFetchMaxUses: config.webFetchMaxUses,
+          baseUrl: config.anthropicBaseUrl,
+          fallbackModel: config.fallbackModel,
+        });
   const confirmationService = new ConfirmationService(confirmViaChat);
   const phoneConfirmationService = new ConfirmationService(denyPhoneConfirmation);
 

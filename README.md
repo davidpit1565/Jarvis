@@ -1547,6 +1547,46 @@ monthly reset — `TokenUsageStore` only tracks a running total, so a real
 recurring budget period would need time-windowed queries this doesn't
 have yet.
 
+## Free ($0) brain: Groq
+
+`JARVIS_BRAIN_PROVIDER=groq` (with `GROQ_API_KEY` set) switches `src/index.ts`
+to construct a `GroqBrain` (`src/core/brain/GroqBrain.ts`) instead of
+`ClaudeBrain` — a genuine $0 option, added on explicit request, not a
+trial that quietly turns into billing. `Brain` is deliberately
+provider-agnostic (see its own doc comment in `src/types/brain.ts`) —
+that's the whole reason this was possible without touching
+`Orchestrator`/`ConversationManager` at all.
+
+- **Get a free key**: [console.groq.com/keys](https://console.groq.com/keys) —
+  no credit card. Groq's free tier (verified live during development,
+  not just from docs) gives real tool-calling support and enough
+  requests/day for a personal assistant's actual usage.
+- **`ANTHROPIC_API_KEY` becomes fully optional** when
+  `JARVIS_BRAIN_PROVIDER=groq` — a Groq-only setup never touches
+  Anthropic's API at all, so nothing about running JARVIS costs money
+  (self-hosting compute aside). `loadConfig()` requires whichever key
+  matches the selected provider, never both.
+- Talks to Groq's OpenAI-compatible `chat/completions` endpoint via raw
+  `fetch` (same style as `GmailClient`/`TwilioOutboundCaller` — no new
+  SDK dependency), translating `ConversationMessage[]` to/from OpenAI's
+  message and tool-call shapes (`toOpenAIMessages`/`fromOpenAIResponse`).
+  Retries once on 429 (free-tier rate limit) or 503; anything else (401,
+  400) fails immediately since retrying would just fail identically.
+  Vision works too — an attached image becomes an OpenAI `image_url`
+  content block, same feature as the Anthropic path, model permitting.
+- **The real tradeoff, stated honestly**: JARVIS's tool-calling
+  reliability, personality, and Hebrew/English handling are tuned against
+  actual Claude models. Groq's free-tier Llama models are genuinely
+  capable but will noticeably follow the system prompt and use tools
+  less reliably in practice — this is not presented as equivalent to
+  Claude, just as a real free alternative worth trying. `GET /status`'s
+  `estimatedCostUsd` also stops meaning anything on Groq (it's computed
+  against Anthropic's own pricing) — same caveat as the local-gateway
+  path below.
+- Default remains `anthropic` unless `JARVIS_BRAIN_PROVIDER` is
+  explicitly set — this never silently changes behavior for an existing
+  deployment.
+
 ## Running the brain through a local model gateway instead of Anthropic's API
 
 `JARVIS_ANTHROPIC_BASE_URL` points `ClaudeBrain` at any Anthropic-compatible
