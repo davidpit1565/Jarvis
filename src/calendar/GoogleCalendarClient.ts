@@ -1,5 +1,5 @@
 import type { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
-import type { CalendarEvent, CreateCalendarEventInput } from "@/types/calendar";
+import type { CalendarEvent, CalendarEventDetail, CreateCalendarEventInput } from "@/types/calendar";
 
 const GOOGLE_OAUTH_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -197,6 +197,39 @@ export class GoogleCalendarClient {
       end: item.end.dateTime ?? item.end.date ?? "",
       location: item.location ?? null,
     }));
+  }
+
+  /** One event's full detail by id, including description and attendees — not returned by list/search. */
+  async getEvent(eventId: string): Promise<CalendarEventDetail> {
+    const accessToken = await this.getValidAccessToken();
+
+    const response = await fetch(`${GOOGLE_CALENDAR_EVENTS_URL}/${encodeURIComponent(eventId)}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Google Calendar API request failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+
+    const item = (await response.json()) as {
+      id: string;
+      summary?: string;
+      description?: string;
+      location?: string;
+      start: { dateTime?: string; date?: string };
+      end: { dateTime?: string; date?: string };
+      attendees?: Array<{ email: string }>;
+    };
+
+    return {
+      id: item.id,
+      summary: item.summary ?? "(no title)",
+      start: item.start.dateTime ?? item.start.date ?? "",
+      end: item.end.dateTime ?? item.end.date ?? "",
+      location: item.location ?? null,
+      description: item.description ?? null,
+      attendees: (item.attendees ?? []).map((a) => a.email),
+    };
   }
 
   /** Creates a new event on the user's primary calendar. Returns the created event. */

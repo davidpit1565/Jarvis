@@ -180,6 +180,63 @@ describe("GoogleCalendarClient.searchEvents", () => {
   });
 });
 
+describe("GoogleCalendarClient.getEvent", () => {
+  test("throws when no account is linked", async () => {
+    const { client } = makeClient();
+    await expect(client.getEvent("ev1")).rejects.toThrow(/no google account linked/i);
+  });
+
+  test("maps the full event including description and attendees", async () => {
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          id: "ev1",
+          summary: "Team sync",
+          description: "Weekly sync",
+          location: "Zoom",
+          start: { dateTime: "2026-01-15T09:00:00Z" },
+          end: { dateTime: "2026-01-15T09:30:00Z" },
+          attendees: [{ email: "alice@example.com" }, { email: "bob@example.com" }],
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const event = await client.getEvent("ev1");
+
+    expect(event).toEqual({
+      id: "ev1",
+      summary: "Team sync",
+      start: "2026-01-15T09:00:00Z",
+      end: "2026-01-15T09:30:00Z",
+      location: "Zoom",
+      description: "Weekly sync",
+      attendees: ["alice@example.com", "bob@example.com"],
+    });
+  });
+
+  test("defaults description to null and attendees to an empty array when absent", async () => {
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({ id: "ev2", start: { date: "2026-01-16" }, end: { date: "2026-01-17" } }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const event = await client.getEvent("ev2");
+
+    expect(event.description).toBeNull();
+    expect(event.attendees).toEqual([]);
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.getEvent("missing")).rejects.toThrow(/404/);
+  });
+});
+
 describe("GoogleCalendarClient.createEvent", () => {
   test("posts the event and returns the created event, mapped", async () => {
     let capturedBody: string | undefined;

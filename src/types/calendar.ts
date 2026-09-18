@@ -7,6 +7,11 @@ export interface CalendarEvent {
   location: string | null;
 }
 
+export interface CalendarEventDetail extends CalendarEvent {
+  description: string | null;
+  attendees: string[];
+}
+
 export interface CreateCalendarEventInput {
   summary: string;
   /** ISO 8601 timestamp the event starts at. */

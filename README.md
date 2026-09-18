@@ -666,6 +666,10 @@ automated from here):
   Google's own `q` search parameter — for "when was my dentist
   appointment" or "find the event with Sarah," which `LIST_CALENDAR_EVENTS`
   (upcoming-only) can't answer.
+- **`GET_CALENDAR_EVENT`** (`READ`) — fetches one event's full detail by
+  id (from a prior list/search result), including its description and
+  attendee emails, which listing/searching don't return — for "what's
+  that meeting about" or "who's invited."
 - **`CREATE_CALENDAR_EVENT`** and **`DELETE_CALENDAR_EVENT`** (both
   `SAFE_ACTION`, standing-granted, matching `create_reminder`/
   `delete_reminder`) — real write access: JARVIS can actually put
