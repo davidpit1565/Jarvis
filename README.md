@@ -812,6 +812,49 @@ another reminder notification.
   configured — pushed there too, since that's the one notification
   channel that doesn't depend on the phone call that just failed.
 
+## Proactive automation (JARVIS acting on its own by a schedule)
+
+The wake-up-call/morning-briefing/check-in features above are all real
+proactive behavior, but each one is a fixed, developer-written rule. This
+feature generalizes that: the user defines the rule, in plain conversation,
+and JARVIS runs it — genuinely "JARVIS acts on its own," not just JARVIS
+answering faster.
+
+- **`CREATE_AUTOMATION_RULE`** (`SAFE_ACTION`, standing-granted) — e.g.
+  "every morning at 8, check the weather and text me if I need an umbrella"
+  or "every day at 9pm, tell me what's due tomorrow." Takes a `timeOfDay`
+  ("HH:MM" in `JARVIS_TIMEZONE`) and an `instruction` — exactly what JARVIS
+  should do when it fires, written as if the user typed it themselves
+  (`src/automation/AutomationRuleStore.ts`, `JARVIS_AUTOMATION_RULES_DB_PATH`).
+  **`LIST_AUTOMATION_RULES`** (`READ`), **`UPDATE_AUTOMATION_RULE`**
+  (`SAFE_ACTION`, standing-granted — edits the time/instruction/enabled
+  state in place, e.g. "actually do that at 7 instead" or "pause my
+  morning automation for now" without losing the schedule), and
+  **`DELETE_AUTOMATION_RULE`** (`SAFE_ACTION`, standing-granted) round out
+  managing rules entirely through conversation.
+- A scheduler tick every 30 seconds (`src/index.ts`) checks the schedule
+  against the current time in `JARVIS_TIMEZONE` and, for any due rule,
+  runs its `instruction` through the exact same shared `Orchestrator` a
+  real typed message goes through — same tool registry, same
+  `PermissionService`/`ConfirmationService` checks, same everything. A
+  rule is a way to *start* a turn on a timer, never a way to skip what
+  that turn is allowed to do: a rule whose instruction tries to do
+  something `CONFIRM`/`DANGEROUS` still needs a real confirmation — it
+  goes through the shared `confirmViaChat` prompter the CLI terminal
+  itself uses, and if nobody is there to answer it, `ConfirmationService`'s
+  own 60-second timeout denies it automatically rather than hanging
+  forever; it never runs unconfirmed just because a rule triggered it
+  instead of a typed message — the same "no standing grant skips a fresh
+  confirmation" guarantee documented under "Confirmation flow" above.
+  Guarded against
+  double-firing the same way wake-up calls are: `lastTriggeredDate` per
+  rule, plus an in-memory in-flight set (`getDueAutomationRules`'s
+  `excludeIds`) for a turn still running when the next tick fires within
+  the same matching minute.
+- The reply is always logged to the activity feed, and — when Telegram is
+  configured — pushed there too, so a rule that runs while you're away
+  from the dashboard still reaches you.
+
 ## Calendar & Gmail integration (Google account)
 
 Lets JARVIS answer "what's on my calendar" / "am I free at 3pm" with your
