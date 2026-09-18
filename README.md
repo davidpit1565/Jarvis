@@ -1196,6 +1196,12 @@ up on its own instead of only ever being answerable if you ask
 (`src/digest/`). All-time totals, not a per-week reset — labeled as such
 in the message itself, matching the underlying stores.
 
+Setting `JARVIS_CHECKIN_AFTER_HOURS` (plus the same Telegram/`NOTIFY_USER`
+setup) adds a wellness check-in: once that many hours pass with no
+interaction on any channel (terminal, phone, Telegram), JARVIS sends a
+"haven't heard from you" message — fires at most once per gap (a new
+interaction resets it), not on every tick past the threshold.
+
 ## Inspecting what JARVIS remembers
 
 `GET /reminders`, `GET /memory`, and `GET /wakeup-calls` are read-only

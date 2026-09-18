@@ -39,6 +39,7 @@ const ENV_KEYS = [
   "JARVIS_NEWS_RSS_URL",
   "JARVIS_WEEKLY_DIGEST_DAY",
   "JARVIS_WEEKLY_DIGEST_TIME",
+  "JARVIS_CHECKIN_AFTER_HOURS",
   "JARVIS_COST_ALERT_THRESHOLD_USD",
 ];
 let saved: Record<string, string | undefined> = {};
@@ -421,6 +422,22 @@ describe("loadConfig", () => {
   test("rejects an invalid weekly digest time", () => {
     process.env.JARVIS_WEEKLY_DIGEST_DAY = "1";
     process.env.JARVIS_WEEKLY_DIGEST_TIME = "25:99";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("reads JARVIS_CHECKIN_AFTER_HOURS when set", () => {
+    process.env.JARVIS_CHECKIN_AFTER_HOURS = "24";
+    const config = loadConfig();
+    expect(config.checkinAfterHours).toBe(24);
+  });
+
+  test("leaves checkinAfterHours undefined when unset", () => {
+    const config = loadConfig();
+    expect(config.checkinAfterHours).toBeUndefined();
+  });
+
+  test("rejects a non-positive JARVIS_CHECKIN_AFTER_HOURS", () => {
+    process.env.JARVIS_CHECKIN_AFTER_HOURS = "0";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 

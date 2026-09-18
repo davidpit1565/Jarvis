@@ -114,6 +114,13 @@ export interface JarvisConfig {
   weeklyDigestDayOfWeek?: number;
   weeklyDigestTime?: string;
   /**
+   * Hours of no interaction (any channel) before JARVIS sends a wellness
+   * check-in via NOTIFY_USER's own Telegram delivery — also needs
+   * telegramGateway + telegramOwnerChatId configured. Unset disables the
+   * feature entirely.
+   */
+  checkinAfterHours?: number;
+  /**
    * Optional all-time estimated-cost threshold (USD). When set, JARVIS
    * warns (console + activity log) once cumulative estimated spend
    * crosses 75%, 90%, and 100% of it — each stage fires once, not on
@@ -359,6 +366,12 @@ export function loadConfig(): JarvisConfig {
     );
   }
 
+  const checkinAfterHoursRaw = process.env.JARVIS_CHECKIN_AFTER_HOURS?.trim();
+  const checkinAfterHours = checkinAfterHoursRaw ? Number(checkinAfterHoursRaw) : undefined;
+  if (checkinAfterHoursRaw && (Number.isNaN(checkinAfterHours) || checkinAfterHours! <= 0)) {
+    throw new ConfigError("JARVIS_CHECKIN_AFTER_HOURS must be a positive number");
+  }
+
   const costAlertThresholdRaw = process.env.JARVIS_COST_ALERT_THRESHOLD_USD?.trim();
   const costAlertThresholdUsd = costAlertThresholdRaw ? Number(costAlertThresholdRaw) : undefined;
   if (costAlertThresholdRaw && (Number.isNaN(costAlertThresholdUsd) || costAlertThresholdUsd! <= 0)) {
@@ -411,6 +424,7 @@ export function loadConfig(): JarvisConfig {
     newsRssUrl,
     weeklyDigestDayOfWeek,
     weeklyDigestTime,
+    checkinAfterHours,
     costAlertThresholdUsd,
   };
 }

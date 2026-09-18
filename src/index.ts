@@ -52,6 +52,7 @@ import { RssNewsClient } from "@/news/RssNewsClient";
 import { createGetNewsTool } from "@/tools/news/GetNewsTool";
 import { isWeeklyDigestDue } from "@/digest/isWeeklyDigestDue";
 import { formatWeeklyDigest } from "@/digest/formatWeeklyDigest";
+import { isCheckinDue } from "@/digest/isCheckinDue";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -475,6 +476,30 @@ function main() {
     }, 30_000);
   }
 
+  let checkinInterval: ReturnType<typeof setInterval> | undefined;
+  const checkinEnabled = Boolean(config.checkinAfterHours && telegramGateway && config.telegramOwnerChatId);
+  if (checkinEnabled) {
+    let lastInteractionAt = new Date();
+    let checkinSentSinceLastInteraction = false;
+    eventBus.on("brain.request", () => {
+      lastInteractionAt = new Date();
+      checkinSentSinceLastInteraction = false;
+    });
+
+    checkinInterval = setInterval(() => {
+      if (!isCheckinDue(new Date(), lastInteractionAt, config.checkinAfterHours!, checkinSentSinceLastInteraction)) {
+        return;
+      }
+
+      checkinSentSinceLastInteraction = true;
+      const hours = Math.round((Date.now() - lastInteractionAt.getTime()) / 3_600_000);
+      const message = `Haven't heard from you in about ${hours} hours — just checking in.`;
+      telegramGateway!.sendMessage(config.telegramOwnerChatId!, message).catch((error) => {
+        console.error("[jarvis] failed to send check-in:", error instanceof Error ? error.message : String(error));
+      });
+    }, 60_000);
+  }
+
   const wsServer = new JarvisWebSocketServer({
     deviceRegistry,
     deviceConnectionManager,
@@ -629,6 +654,7 @@ function main() {
     wakeUpCallStore.close();
     if (wakeUpInterval) clearInterval(wakeUpInterval);
     if (weeklyDigestInterval) clearInterval(weeklyDigestInterval);
+    if (checkinInterval) clearInterval(checkinInterval);
     calendarTokenStore.close();
     rl.close();
     process.exit(0);
