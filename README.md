@@ -1168,6 +1168,15 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   in `ClaudeBrain`) rather than left at the SDK's own defaults, so a
   transient 429/5xx gets more chances to recover before a phone call or
   chat turn gives up.
+- Optional one-shot fallback model (`JARVIS_FALLBACK_MODEL`): if the
+  primary model call still fails with a 429/503/529 after all of the
+  SDK's own retries, `ClaudeBrain` retries once against a configured
+  fallback model (e.g. a Haiku model) before giving up — a degraded reply
+  during a real provider outage or rate-limit spike beats no reply at
+  all. Opt-in only; unset means never fall back. **Not yet verified**
+  against a live outage — `isRetryableWithFallback`'s status-code logic
+  is unit-tested, but the actual retry-and-recover path needs a real
+  429/503/529 from Anthropic to exercise.
 - **`ConversationManager` is bounded to the last 50 user turns**, trimming
   whole turns (never mid-turn — that could orphan half of a `tool_use`/
   `tool_result` pair and break the next API call). The terminal chat loop

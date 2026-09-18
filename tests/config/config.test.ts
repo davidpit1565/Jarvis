@@ -25,6 +25,7 @@ const ENV_KEYS = [
   "JARVIS_OWNER_PHONE_NUMBER",
   "JARVIS_WAKEUP_CALL_DB_PATH",
   "JARVIS_ANTHROPIC_BASE_URL",
+  "JARVIS_FALLBACK_MODEL",
   "JARVIS_PUBLIC_BASE_URL",
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
@@ -135,6 +136,17 @@ describe("loadConfig", () => {
     process.env.JARVIS_ANTHROPIC_BASE_URL = "http://localhost:20128";
     const config = loadConfig();
     expect(config.anthropicBaseUrl).toBe("http://localhost:20128");
+  });
+
+  test("leaves fallbackModel undefined by default", () => {
+    const config = loadConfig();
+    expect(config.fallbackModel).toBeUndefined();
+  });
+
+  test("loads an explicit JARVIS_FALLBACK_MODEL", () => {
+    process.env.JARVIS_FALLBACK_MODEL = "claude-haiku-4-5-20251001";
+    const config = loadConfig();
+    expect(config.fallbackModel).toBe("claude-haiku-4-5-20251001");
   });
 
   test("loads Calendar settings when fully configured", () => {

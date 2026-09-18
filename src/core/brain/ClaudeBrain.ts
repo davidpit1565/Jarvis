@@ -40,6 +40,16 @@ export interface ClaudeBrainOptions {
    * always.
    */
   baseUrl?: string;
+  /**
+   * A cheaper/different model to retry against, once, if the primary
+   * model call fails with a retryable-but-exhausted error (429 rate
+   * limit, 503/529 overloaded) even after the SDK's own maxRetries. A
+   * degraded reply from a fallback model beats no reply at all during a
+   * provider outage or a rate-limit spike — this is a real-availability
+   * tradeoff, not a cost-saving default, so it's opt-in only
+   * (JARVIS_FALLBACK_MODEL unset means no fallback, ever).
+   */
+  fallbackModel?: string;
 }
 
 /**
@@ -55,6 +65,7 @@ export class ClaudeBrain implements Brain {
   private readonly webSearchMaxUses: number;
   private readonly webFetchEnabled: boolean;
   private readonly webFetchMaxUses: number;
+  private readonly fallbackModel?: string;
 
   constructor(apiKey: string, options: ClaudeBrainOptions = {}) {
     this.model = options.model ?? DEFAULT_MODEL;
@@ -63,6 +74,7 @@ export class ClaudeBrain implements Brain {
     this.webSearchMaxUses = options.webSearchMaxUses ?? 5;
     this.webFetchEnabled = options.webFetchEnabled ?? false;
     this.webFetchMaxUses = options.webFetchMaxUses ?? 5;
+    this.fallbackModel = options.fallbackModel;
     // baseURL defaults to the real Anthropic API and is pinned there
     // unless `options.baseUrl` is explicitly given: the Anthropic SDK
     // otherwise honors an ambient ANTHROPIC_BASE_URL environment variable,
@@ -98,15 +110,23 @@ export class ClaudeBrain implements Brain {
     const system = request.context ? request.context : undefined;
     const tools = this.buildTools(request.tools);
 
-    const response = await this.client.messages.create({
-      model: this.model,
+    const params = {
       max_tokens: this.maxTokens,
       system,
       messages,
       tools: tools.length > 0 ? tools : undefined,
-    });
+    };
 
-    return fromAnthropicResponse(response);
+    try {
+      const response = await this.client.messages.create({ model: this.model, ...params });
+      return fromAnthropicResponse(response);
+    } catch (error) {
+      if (this.fallbackModel && this.fallbackModel !== this.model && isRetryableWithFallback(error)) {
+        const response = await this.client.messages.create({ model: this.fallbackModel, ...params });
+        return fromAnthropicResponse(response);
+      }
+      throw error;
+    }
   }
 
   private buildTools(tools: ToolDefinition[]): Anthropic.ToolUnion[] {
@@ -141,6 +161,17 @@ export function buildAnthropicTools(
     result.push({ type: "web_fetch_20250910", name: "web_fetch", max_uses: webFetchMaxUses });
   }
   return result;
+}
+
+/**
+ * True only for the specific errors a fallback model can actually help
+ * with — the primary model itself being rate-limited or overloaded, after
+ * the SDK's own maxRetries gave up. Anything else (a bad request, an auth
+ * failure, a genuine tool-input problem) would fail identically on the
+ * fallback model too, so it's not worth the extra latency of trying.
+ */
+export function isRetryableWithFallback(error: unknown): boolean {
+  return error instanceof Anthropic.APIError && (error.status === 429 || error.status === 503 || error.status === 529);
 }
 
 function toAnthropicTools(tools: ToolDefinition[]): Anthropic.Tool[] {

@@ -158,6 +158,14 @@ export interface JarvisConfig {
    */
   anthropicBaseUrl?: string;
   /**
+   * A cheaper/different model to retry against, once, when the primary
+   * model call fails with a 429/503/529 even after the SDK's own
+   * automatic retries — a degraded reply beats no reply during a
+   * provider outage or rate-limit spike. Opt-in only; unset means never
+   * fall back.
+   */
+  fallbackModel?: string;
+  /**
    * The public base URL this server is reachable at — used for the Google
    * Calendar OAuth redirect URI. Distinct from twilioPublicBaseUrl: a
    * user might want calendar integration without the phone gateway (or
@@ -245,6 +253,7 @@ export function loadConfig(): JarvisConfig {
 
   const audioWaveformEnabled = process.env.JARVIS_AUDIO_WAVEFORM?.trim().toLowerCase() === "true";
   const anthropicBaseUrl = process.env.JARVIS_ANTHROPIC_BASE_URL?.trim() || undefined;
+  const fallbackModel = process.env.JARVIS_FALLBACK_MODEL?.trim() || undefined;
   const publicBaseUrl = process.env.JARVIS_PUBLIC_BASE_URL?.trim() || undefined;
   const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim() || undefined;
   const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim() || undefined;
@@ -356,6 +365,7 @@ export function loadConfig(): JarvisConfig {
     webFetchMaxUses,
     audioWaveformEnabled,
     anthropicBaseUrl,
+    fallbackModel,
     publicBaseUrl,
     googleClientId,
     googleClientSecret,

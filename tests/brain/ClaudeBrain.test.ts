@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
-import { ClaudeBrain, buildAnthropicTools, fromAnthropicResponse } from "@/core/brain/ClaudeBrain";
+import { ClaudeBrain, buildAnthropicTools, fromAnthropicResponse, isRetryableWithFallback } from "@/core/brain/ClaudeBrain";
 import type { ToolDefinition } from "@/types/tools";
-import type Anthropic from "@anthropic-ai/sdk";
+import Anthropic from "@anthropic-ai/sdk";
 
 describe("ClaudeBrain reliability tuning", () => {
   test("sets an explicit retry count and timeout on the underlying Anthropic client, rather than the SDK's own defaults", () => {
@@ -21,6 +21,10 @@ describe("ClaudeBrain reliability tuning", () => {
     expect(brain.baseUrl).toBe("http://localhost:20128");
   });
 
+  test("accepts a fallbackModel option without throwing", () => {
+    expect(() => new ClaudeBrain("sk-ant-test-key", { fallbackModel: "claude-haiku-4-5-20251001" })).not.toThrow();
+  });
+
   test("never picks up the ambient ANTHROPIC_BASE_URL env var on its own", () => {
     const original = process.env.ANTHROPIC_BASE_URL;
     process.env.ANTHROPIC_BASE_URL = "http://some-unrelated-local-proxy:9999";
@@ -31,6 +35,26 @@ describe("ClaudeBrain reliability tuning", () => {
       if (original === undefined) delete process.env.ANTHROPIC_BASE_URL;
       else process.env.ANTHROPIC_BASE_URL = original;
     }
+  });
+});
+
+describe("isRetryableWithFallback", () => {
+  test("is true for 429 (rate limited)", () => {
+    expect(isRetryableWithFallback(new Anthropic.APIError(429, undefined, "rate limited", undefined))).toBe(true);
+  });
+
+  test("is true for 503/529 (overloaded)", () => {
+    expect(isRetryableWithFallback(new Anthropic.APIError(503, undefined, "overloaded", undefined))).toBe(true);
+    expect(isRetryableWithFallback(new Anthropic.APIError(529, undefined, "overloaded", undefined))).toBe(true);
+  });
+
+  test("is false for a 400 (bad request — a fallback model would fail identically)", () => {
+    expect(isRetryableWithFallback(new Anthropic.APIError(400, undefined, "bad request", undefined))).toBe(false);
+  });
+
+  test("is false for a non-APIError", () => {
+    expect(isRetryableWithFallback(new Error("something else"))).toBe(false);
+    expect(isRetryableWithFallback("not even an error")).toBe(false);
   });
 });
 

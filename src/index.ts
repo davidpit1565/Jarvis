@@ -223,6 +223,7 @@ function main() {
     webFetchEnabled: config.webFetchEnabled,
     webFetchMaxUses: config.webFetchMaxUses,
     baseUrl: config.anthropicBaseUrl,
+    fallbackModel: config.fallbackModel,
   });
   const confirmationService = new ConfirmationService(confirmViaChat);
   const phoneConfirmationService = new ConfirmationService(denyPhoneConfirmation);
