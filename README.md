@@ -110,6 +110,29 @@ What's new in Phase 2:
   validation" below for what's verified vs. still needs a real Mac (both
   of these specifically also need the Accessibility permission granted
   to the Agent, which no earlier tool required).
+- **Mac device control** (`SET_VOLUME`, `TOGGLE_WIFI`, `CREATE_FOLDER`,
+  `EMPTY_TRASH`): four more named, safely-scoped device tools, deliberately
+  built on pure native framework APIs (CoreAudio, CoreWLAN, `FileManager`)
+  rather than any shell command or scripted Finder command — the same
+  boundary `ToolRegistry.swift`'s own doc comment states and that this
+  README's Security section repeats: no shell execution, no AppleScript,
+  no generic "run this on my Mac" tool exists or ever will. `SET_VOLUME`
+  (0-100, clamped) and `TOGGLE_WIFI` are `SAFE_ACTION` — both trivially
+  reversible. `CREATE_FOLDER` is also `SAFE_ACTION`, restricted to the
+  Agent's existing `FileAccessPolicy` allowlist (Desktop/Documents/
+  Downloads/the Jarvis folder) and refuses to overwrite anything that
+  already exists. `EMPTY_TRASH` is `CONFIRM` — permanently deletes
+  everything in `~/.Trash` by removing each entry via `FileManager`
+  directly (never AppleScript's "empty trash" command, never a shell
+  `rm -rf`), so it always asks fresh before running even though everything
+  in the Trash is, by definition, something already chosen for deletion.
+  All four are granted the same way as `CLICK_ELEMENT`/`TYPE_TEXT` above:
+  auto-granted on a device's pairing approval (see `autoGrantToolIdsOnApproval`
+  in `src/index.ts`), with `EMPTY_TRASH` still asking per-invocation
+  regardless of the grant. Explicitly declined alongside these: full
+  arbitrary device control (a generic command/automation executor) and
+  installing/removing applications — both cross the same "no arbitrary
+  execution" line these tools were built to respect.
 - **Bilingual (Hebrew + English) conversation**: a fixed system instruction
   (`src/core/brain/systemPrompt.ts`) tells Claude to detect and respond in
   the user's language, including mixed Hebrew/English in one message. Tool

@@ -20,6 +20,10 @@ import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
 import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
 import { clickElementTool } from "@/tools/system/ClickElementTool";
 import { typeTextTool } from "@/tools/system/TypeTextTool";
+import { setVolumeTool } from "@/tools/system/SetVolumeTool";
+import { toggleWifiTool } from "@/tools/system/ToggleWifiTool";
+import { createFolderTool } from "@/tools/system/CreateFolderTool";
+import { emptyTrashTool } from "@/tools/system/EmptyTrashTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
@@ -246,6 +250,10 @@ function main() {
   toolRegistry.registerTool(composeEmailDraftTool);
   toolRegistry.registerTool(clickElementTool);
   toolRegistry.registerTool(typeTextTool);
+  toolRegistry.registerTool(setVolumeTool);
+  toolRegistry.registerTool(toggleWifiTool);
+  toolRegistry.registerTool(createFolderTool);
+  toolRegistry.registerTool(emptyTrashTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
   toolRegistry.registerTool(createDeleteMemoryTool(memoryStore, undoStore));
@@ -772,7 +780,17 @@ function main() {
     // own doc comment on this field for why). CONFIRM tools still ask
     // per-invocation regardless (confirmViaChat below) — a grant here
     // only means "may be asked," never "runs without asking."
-    autoGrantToolIdsOnApproval: ["OPEN_URL", "OPEN_APPLICATION", "COMPOSE_EMAIL_DRAFT", "CLICK_ELEMENT", "TYPE_TEXT"],
+    autoGrantToolIdsOnApproval: [
+      "OPEN_URL",
+      "OPEN_APPLICATION",
+      "COMPOSE_EMAIL_DRAFT",
+      "CLICK_ELEMENT",
+      "TYPE_TEXT",
+      "SET_VOLUME",
+      "TOGGLE_WIFI",
+      "CREATE_FOLDER",
+      "EMPTY_TRASH",
+    ],
   });
   const httpHandle = wsServer.start(config.port);
 
