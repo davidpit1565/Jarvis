@@ -87,11 +87,15 @@ approximating a human head and use one:
     `EffectComposer`/`UnrealBloomPass` in this vendored setup, so the glow
     is faked by literally re-drawing the lines slightly bigger and fainter
     underneath.
-  - A small, subtle node dot (`THREE.Points`, size 0.022, opacity 0.45)
-    sits at every vertex of the full (non-excluded) mesh — kept
-    deliberately faint so the denser 9,000-triangle mesh doesn't turn into
-    a solid point-cloud blob burying the grid lines (an earlier,
-    brighter/larger dot setting did exactly that).
+  - A cyan-blue node dot (`THREE.Points`, color `0x6fd8e8`, size 0.03,
+    opacity 0.65) sits at every vertex of the full (non-excluded) mesh —
+    the same cyan the very first particle-based build (before any of the
+    "alien" head-shape rounds) used for its face dots, brought back once
+    the head *shape* itself was settled and the user asked for that
+    "internals" texture again. Deliberately still well under the size/
+    opacity that fused into a solid mass at this vertex density in an
+    earlier round (that earlier round used plain white, not cyan, at
+    0.05/0.9 — this is bluer *and* smaller/dimmer than that).
 - Two small bright spheres for the "pupil" glint, positioned at the real
   eye-socket coordinates (found by raycasting the source mesh at the
   visually-identified eye locations, not guessed), each backed by a small

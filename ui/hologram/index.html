@@ -691,14 +691,16 @@
       glowLines.scale.setScalar(1.025);
       modelGroup.add(glowLines);
 
-      // Small and fairly dim on purpose: at this vertex density (~4500
-      // vertices), dots at the earlier size/opacity fused into a solid
-      // white mass that buried the edge lines — the reference's dots are
-      // a subtle accent on top of a line-dominated grid, not the other
-      // way around.
+      // Cyan-blue, not white — the original particle-based build (before
+      // any of the "alien" head-shape rounds) used this same cyan
+      // (0x6fd8e8) for its face dots, and the user asked specifically to
+      // bring that "blue dots" character back now that the head shape
+      // itself is settled. Kept below the size/opacity that fused into a
+      // solid mass at this vertex density in an earlier round (~4500
+      // vertices) — enough to read as glowing blue dots, not a blob.
       const nodeMat = new THREE.PointsMaterial({
-        size: 0.022, map: spriteTex, transparent: true, depthWrite: false,
-        blending: THREE.AdditiveBlending, color: 0xffffff, opacity: 0.45,
+        size: 0.03, map: spriteTex, transparent: true, depthWrite: false,
+        blending: THREE.AdditiveBlending, color: 0x6fd8e8, opacity: 0.65,
       });
       modelGroup.add(new THREE.Points(simplified, nodeMat));
 
