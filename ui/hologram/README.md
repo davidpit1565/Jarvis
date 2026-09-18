@@ -98,28 +98,31 @@ approximating a human head and use one:
   multi-island unwrap (eyes/nose/mouth/ears/scalp are separate radial
   charts for texturing), which would draw as fragmented concentric loops
   per island instead of one continuous grid.
-  - Three ellipsoid **exclusion zones** (the two eye sockets, the mouth,
-    plus a nostril zone added later — the nostrils are their own small
-    concave cavity, easy to miss since it sits in the gap between the eye
-    and mouth zones) drop any triangle with a vertex inside them
-    (`excludeTriangles` in `index.html`) before either the solid fill mesh
-    or the grid is built on top of it. This mesh's real open-mouth/
-    eye-socket/nostril geometry is concave enough (depth folds back on
-    itself) that the spherical angle stops being monotonic there, and no
-    angle-threshold or edge-length filter fixed the resulting tangle.
-    **A real bug along the way**: for several rounds only the grid lines
-    excluded these zones, not the solid fill mesh — so the actual visible
-    mess at the mouth was overlapping translucent mouth-*interior*
-    surfaces (teeth walls, inner cheek) showing straight through the
-    fill, not a wireframe tangle at all, and no amount of re-tuning the
-    grid's exclusion radius could have fixed a problem that lived in a
-    different layer entirely. A deliberate, flat **procedural "mouth grid
-    patch"** (`buildMouthGridPatch`, a handful of straight vertical accent
-    lines) now fills the excluded mouth/chin area so it reads as a clean
-    design choice — matching the reference's own continuous fine vertical
-    lines there — rather than a hole; it's flat (not curved to the real
-    surface), which is visible as a thin sliver from a steep side angle,
-    a known trade-off for a small, mostly front-facing patch.
+  - Four ellipsoid **cavity zones** (the two eye sockets, the mouth, and
+    the nostrils — the nostrils are their own small concave cavity, easy
+    to miss since they sit in the gap between the eye and mouth zones)
+    mark where this mesh's real open-mouth/eye-socket/nostril geometry is
+    concave enough (depth folds back on itself) that the lat/long grid's
+    spherical angle stops being monotonic, tangling the grid lines there
+    — no angle-threshold or edge-length filter fixed that. The **grid**
+    hard-excludes any triangle with a vertex in these zones
+    (`excludeTriangles` in `index.html`); the custom eye sphere/glow and
+    mouth line cover the resulting gap. The **solid fill mesh** instead
+    uses a **soft per-vertex alpha fade** (`computeFadeAttribute`, applied
+    via `fillMat.onBeforeCompile`) that smoothly dims to fully transparent
+    approaching each zone's center — this went through two failed
+    attempts first: a hard cut on the fill mesh left the cut's own
+    boundary edge visible as a distinct bright contour (seeing the inside
+    rim of the hole), and *not* cutting the fill at all let this scan's
+    real, separately-sculpted eyeball spheres (common on face-scan/rig
+    assets) show straight through undimmed — both read as "visible
+    circles in the face," at any zone size. Only a gradual fade, not a
+    hard edge either way, actually fixed it. A decorative flat "mouth
+    grid patch" of procedural accent lines was also tried to fill the
+    grid's excluded mouth area and reverted — it read as "a hole with
+    bars over it," not simpler than the problem it covered; the existing
+    mouth line alone, over the now-smoothly-faded fill, reads closer to
+    the reference's simple closed lips.
   - Two further, progressively larger and dimmer copies of the same line
     geometry (`glowLines`/`glowLines2`, scale 1.03/1.07, opacity
     0.28/0.12, additive blending) are drawn behind the bright original as
@@ -136,15 +139,22 @@ approximating a human head and use one:
     fused into a solid mass at this vertex density in an earlier round
     (that earlier round used plain white, not cyan, at 0.05/0.9 — this is
     bluer *and* smaller/dimmer than that).
-- Two bright spheres for the "pupil" glint, positioned at the real
-  eye-socket coordinates (found by raycasting the source mesh at the
-  visually-identified eye locations, not guessed), each backed by a
-  soft-glow `THREE.Sprite` stretched horizontally into an almond shape
-  (radial-gradient canvas texture, additive blending) so the eyes read as
-  glowing rather than flat matte dots. Sized up and brightened from an
-  earlier, smaller/dimmer attempt — the reference's eyes are the single
-  brightest, most eye-catching feature on the whole face, and that first
-  pass read as too subtle to be a focal point.
+- Two small, additively-blended spheres for the "pupil" glint, positioned
+  at the real eye-socket coordinates (found by raycasting the source mesh
+  at the visually-identified eye locations, not guessed), each backed by
+  a soft-glow `THREE.Sprite` stretched horizontally into an almond shape.
+  Both went bigger then smaller across rounds: a first pass was too
+  subtle to be a focal point, but a later, bigger, fully-opaque sphere is
+  what actually read as "a visible ball stuck in the face" rather than an
+  eye — small, blended, and paired with the fade above (not a hard cut)
+  is what settled it: a bright core sitting *in* the face, not its own
+  separate shape.
+- A single small glint at the nose tip mimics the specular highlight a
+  protruding surface would catch under real lighting — this page's
+  wireframe/fill is flat, unlit line art with no actual light-and-shadow,
+  which is why the nose (correct in the underlying geometry) read as
+  flatter than the reference's clearly protruding one. One deliberate
+  accent, not a lighting model rewrite.
 
 ## Proportions: lens choice and a non-uniform scale, not just the mesh
 
@@ -227,17 +237,23 @@ size-attenuation math keeps working for free. Frozen (not ticking
 `uTime`) under `prefers-reduced-motion`, same as every other continuous
 motion source.
 
-## The mouth: a smaller "hole," not a big empty one
+## The eyes, mouth, and nostrils: a soft fade, not a hole or a hard cut
 
-The lat/long grid's mouth exclusion zone (see "How the face is built"
-above) was originally big enough to blank out most of the central face —
-nose, cheeks, and chin, not just the mouth cavity itself — which read as
-a large empty hole in the middle of the face rather than a small masked
-feature, per direct user feedback. Shrunk to hug just the mouth/chin
-cavity that actually causes the spherical-angle tangle, accepting a
-rougher-looking (but much smaller) tangle right at the lips instead of a
-large blank patch — a real trade-off, not a fully clean solution; see
-"Known limitations" below.
+The most persistent gap across several rounds was the mouth/eye area
+reading as "fake" — first a big empty hole (an oversized exclusion zone),
+then an ugly tangle (real open-mouth/eye-socket geometry breaking the
+grid's angle math), then, after fixing the grid, "visible circles in the
+face" once it turned out the *solid fill mesh* needed the same treatment
+as the grid but a hard cut there left its own boundary edge visible, and
+skipping the cut let this scan's real sculpted eyeball spheres show
+through instead. The fix that actually worked (see "How the face is
+built" above for the exact mechanism): the grid keeps a hard exclusion
+cut (covered by the custom eye/mouth accents), but the fill mesh uses a
+**gradual per-vertex alpha fade** toward each cavity's center instead of
+either extreme — no hole, no hard edge, no real eyeball geometry showing
+through. A decorative flat line-patch over the mouth's excluded grid area
+was also tried and reverted (see below) — simpler won over "trying to
+look like real geometry."
 
 ## Viewing it from any angle — drag to orbit
 
@@ -477,11 +493,9 @@ clears 60fps either way.
   cutting a hole in the grid necessarily leaves the neighboring iso-lines
   dangling instead of continuing smoothly, most noticeable around the
   nose/upper-lip area from a 3/4 or side angle. The custom eye/mouth
-  accents cover most of it from the front, which is the primary viewing
-  angle, but this is a real, visible remaining gap, not a solved one.
-- The procedural mouth grid patch (see "How the face is built") is flat,
-  not curved to the real face surface — from a steep side angle it's
-  visible as a thin sliver rather than following the jaw's curve.
+  accents and the fill mesh's soft fade cover most of it from the front,
+  which is the primary viewing angle, but this is a real, visible
+  remaining gap in the grid layer specifically, not a solved one.
 - The non-uniform model scale (see "Proportions" above) squashes the eye
   pupil spheres very slightly into ellipsoids, since they're children of
   the same non-uniformly scaled group — not visually significant at the

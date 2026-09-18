@@ -646,18 +646,22 @@
   // bright features rather than more grid.
   // Drops any triangle with a vertex inside one of `exclusionZones`
   // (ellipsoids in raw mesh space: {c:[x,y,z], r:[rx,ry,rz]}) — used to
-  // cut the eye sockets and mouth cavity out of BOTH the solid fill mesh
-  // and the lat/long grid built on top of it (see both call sites below).
-  // Checking every vertex, not just the triangle centroid, matters: a
-  // long triangle spanning from deep inside the cavity to well outside it
-  // can average to a centroid just outside the zone while still being
-  // exactly the kind of triangle that causes the worst visual mess —
-  // this was the actual cause of a "tangle" that survived several rounds
-  // of shrinking/growing the exclusion radius, before this was found:
-  // the *solid fill mesh* was never excluding these zones at all (only
-  // the grid lines were), so overlapping translucent mouth-interior
-  // surfaces (teeth walls, inner cheek) were showing straight through —
-  // not a wireframe problem, a solid-geometry one.
+  // cut the eye-socket, mouth, and nostril cavities out of BOTH the solid
+  // fill mesh and the lat/long grid built on top of it (see both call
+  // sites below). A depth-tube variant (cut only what's behind a z
+  // threshold, keeping the front skin) was tried and reverted — the real
+  // mesh's front surface z varies enough across the mouth/eye curvature
+  // that a flat threshold cut unevenly, sometimes removing more of the
+  // visible skin than intended. A full ellipsoid is a cruder cut but a
+  // predictable one; the resulting gap is covered by a deliberately
+  // simple accent (the existing eye sphere/glow, the mouth line) rather
+  // than a decorative "patch" trying to look like real geometry — the
+  // patch approach read as a hole with bars over it, not simpler than
+  // the problem it was covering. Checking every vertex, not just the
+  // triangle centroid, matters: a long triangle spanning from deep
+  // inside the cavity to well outside it can average to a centroid
+  // outside the zone while still being exactly the triangle causing
+  // visual mess.
   function excludeTriangles(geometry, exclusionZones) {
     const pos = geometry.attributes.position;
     const index = geometry.index;
@@ -822,28 +826,46 @@
       // needing separate treatment for them.
       modelGroup.scale.set(0.384 * 0.86, 0.384 * 1.12, 0.384 * 0.97);
 
-      // Eye-socket and mouth-cavity ellipsoids (raw mesh space) — excluded
-      // from BOTH the solid fill mesh and the grid built on it (see
-      // excludeTriangles above for why both layers need this, not just
-      // the grid: the fill mesh's overlapping translucent mouth-interior
-      // surfaces, not wireframe tangle, were the real cause of a "broken"
-      // look that survived several rounds of only re-tuning the grid's
-      // exclusion radius). The custom eye spheres/glow and mouth
-      // line+grid-patch below cover those spots instead, same as how the
-      // reference's own eyes/mouth read as distinct bright features
-      // rather than more grid.
-      const faceExclusions = [
-        { c: [-0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
-        { c: [0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
+      // Eye, mouth, and nostril ellipsoids (raw mesh space). A *hard*
+      // triangle cut at these was tried for the solid fill mesh and
+      // reverted either way it went: cutting the fill left the cut's own
+      // boundary edge visible as a distinct bright contour (you're seeing
+      // the inside rim of the hole), and NOT cutting it let this scan's
+      // real sculpted eyeball geometry show straight through — either way
+      // read as "visible circles in the face," small or large. The actual
+      // fix is a **soft fade**, not a hard cut: `aFade` (see
+      // computeFadeAttribute below) smoothly dims the fill's opacity to
+      // zero approaching each zone's center instead of an abrupt edge, so
+      // there's no boundary contour to see at all. The grid still uses a
+      // hard cut (`excludeTriangles`, below) — thin dangling line stubs
+      // at a cut boundary read far less badly than a solid shape's edge.
+      const softZones = [
+        { c: [-0.5, 1.78, 1.75], r: [0.55, 0.42, 0.75] },
+        { c: [0.5, 1.78, 1.75], r: [0.55, 0.42, 0.75] },
         { c: [0, -0.1, 1.8], r: [1.35, 1.2, 1.35] },
-        // The nostrils are their own small concave cavity (real breathing
-        // holes on this scan, same underlying issue as the mouth/eyes) —
-        // sitting in the gap between the eye and mouth exclusion zones
-        // above, this caused a dense tangle that persisted through every
-        // mouth-zone resize, since it was never actually the mouth.
         { c: [0, 1.2, 2.0], r: [0.4, 0.42, 0.5] },
       ];
-      const faceTris = excludeTriangles(trimmedTris, faceExclusions);
+      function computeFadeAttribute(geometry, zones) {
+        const pos = geometry.attributes.position;
+        const fade = new Float32Array(pos.count);
+        for (let i = 0; i < pos.count; i++) {
+          let minDist = Infinity;
+          for (const z of zones) {
+            const dx = (pos.getX(i) - z.c[0]) / z.r[0];
+            const dy = (pos.getY(i) - z.c[1]) / z.r[1];
+            const dz = (pos.getZ(i) - z.c[2]) / z.r[2];
+            minDist = Math.min(minDist, Math.sqrt(dx * dx + dy * dy + dz * dz));
+          }
+          // smoothstep: fully hidden inside the zone (dist < 0.55),
+          // fully visible past its edge (dist > 1.5), smooth in between.
+          const t = Math.max(0, Math.min(1, (minDist - 0.55) / (1.5 - 0.55)));
+          fade[i] = t * t * (3 - 2 * t);
+        }
+        geometry.setAttribute("aFade", new THREE.BufferAttribute(fade, 1));
+      }
+      computeFadeAttribute(trimmedTris, softZones);
+
+      const gridTris = excludeTriangles(trimmedTris, softZones);
 
       // A soft, glowing translucent fill of the whole head/neck volume —
       // comparison against the reference showed its head reads as a solid
@@ -855,7 +877,23 @@
         color: 0x2f7a94, transparent: true, opacity: 0.24,
         side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
       });
-      modelGroup.add(new THREE.Mesh(faceTris, fillMat));
+      // Multiplies the fragment alpha by the per-vertex `aFade` computed
+      // above — patches the one stable `gl_FragColor = vec4( outgoingLight,
+      // diffuseColor.a );` line MeshBasicMaterial's fragment shader ends
+      // with, same onBeforeCompile technique as addSizePulse.
+      fillMat.onBeforeCompile = (shader) => {
+        shader.vertexShader = "attribute float aFade;\nvarying float vFade;\n" + shader.vertexShader;
+        shader.vertexShader = shader.vertexShader.replace(
+          "#include <begin_vertex>",
+          "#include <begin_vertex>\nvFade = aFade;"
+        );
+        shader.fragmentShader = "varying float vFade;\n" + shader.fragmentShader;
+        shader.fragmentShader = shader.fragmentShader.replace(
+          "gl_FragColor = vec4( outgoingLight, diffuseColor.a );",
+          "gl_FragColor = vec4( outgoingLight, diffuseColor.a * vFade );"
+        );
+      };
+      modelGroup.add(new THREE.Mesh(trimmedTris, fillMat));
 
       // A large, soft, blurred radial sprite behind the whole head fakes
       // the outward bloom halo the reference has (real bloom needs
@@ -876,8 +914,8 @@
       modelGroup.add(halo);
 
       // A real lat/long grid computed on the actual (already
-      // eye/mouth-excluded, via faceTris above) mesh surface instead of
-      // THREE.EdgesGeometry — the reference's wireframe is a smooth,
+      // eye/mouth/nostril-excluded, via gridTris above) mesh surface
+      // instead of THREE.EdgesGeometry — the reference's wireframe is a smooth,
       // evenly-spaced wrap, and EdgesGeometry on this mesh's own
       // (irregular) triangulation reads as a tangle once dense enough to
       // cover the whole face. Center is near eye-height, slightly behind
@@ -888,7 +926,7 @@
       // against the reference showed our grid cells read as chunky,
       // blocky checkerboard squares on the forehead, vs. the reference's
       // much finer texture.
-      const edgesGeo = buildLatLongOnMesh(faceTris, 30, 28, latLongCenter);
+      const edgesGeo = buildLatLongOnMesh(gridTris, 30, 28, latLongCenter);
       const edgesMat = new THREE.LineBasicMaterial({
         color: 0xe8fbff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
       });
@@ -940,16 +978,22 @@
       // Sized up from the first attempt (0.2) and stretched horizontally
       // (almond-shaped, not round) — the reference's eyes are the single
       // brightest, most eye-catching feature on the whole face, and the
-      // first pass read as too small/subtle to be a focal point.
-      const eyeGeo = new THREE.SphereGeometry(0.1, 12, 12);
-      const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      // first pass read as too small/subtle to be a focal point. The
+      // pupil sphere itself is small and additively blended, not a big
+      // opaque ball — an earlier, bigger, fully-opaque sphere is what
+      // read as "a visible circle stuck in the face" rather than an eye;
+      // it should be a bright core inside the glow, not its own shape.
+      const eyeGeo = new THREE.SphereGeometry(0.055, 12, 12);
+      const eyeMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+      });
       const eyeGlowMat = new THREE.SpriteMaterial({
         map: spriteTex, color: 0xeaffff, transparent: true,
         blending: THREE.AdditiveBlending, depthWrite: false, opacity: 1,
       });
       for (const ex of [-0.5, 0.5]) {
         const glow = new THREE.Sprite(eyeGlowMat);
-        glow.scale.set(0.42, 0.3, 1);
+        glow.scale.set(0.2, 0.14, 1);
         glow.position.set(ex, 1.78, 1.98);
         modelGroup.add(glow);
         const eye = new THREE.Mesh(eyeGeo, eyeMat);
@@ -957,9 +1001,25 @@
         modelGroup.add(eye);
       }
 
+      // A small bright highlight right at the nose tip — the wireframe/
+      // fill on this page is flat, unlit line art with no real light-and-
+      // shadow to make a protruding surface read as protruding, which is
+      // what made the nose look flat despite the real geometry actually
+      // sticking out. A single deliberate glint here (the same trick as
+      // the eyes above, just smaller/dimmer since it's an accent, not a
+      // focal point) mimics the specular highlight a protruding tip would
+      // catch, giving it a depth cue no amount of grid/fill tuning alone
+      // provides.
+      const noseGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: spriteTex, color: 0xdfffff, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.85,
+      }));
+      noseGlow.scale.set(0.16, 0.16, 1);
+      noseGlow.position.set(0, 1.42, 2.35);
+      modelGroup.add(noseGlow);
+
       mouth = buildMouth(0, -0.11, 2.32, 1.05);
       modelGroup.add(mouth.group);
-      modelGroup.add(buildMouthGridPatch(0, -0.15, 2.3, 1.7, 1.1, 7));
 
       // Sized to actually fill most of the cranial cavity (crown near
       // y=3.97, brow near y=1.8) rather than a small patch only visible
