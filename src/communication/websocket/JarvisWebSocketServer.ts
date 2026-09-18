@@ -7,6 +7,7 @@ import type { PairingService } from "@/devices/pairing/PairingService";
 import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import type { ActivityLog } from "@/core/activity/ActivityLog";
 import type { PermissionService } from "@/permissions/PermissionService";
+import type { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
@@ -28,7 +29,14 @@ type SocketData =
   // of the device protocol, just mirrored every EventBus event.
   | { kind: "observer" }
   | { kind: "audio-ingest" }
-  | { kind: "audio-viewer" };
+  | { kind: "audio-viewer" }
+  // A real two-way text conversation with JARVIS from a browser (the
+  // hologram UI's own chat box) — distinct from "observer" (read-only
+  // telemetry) and from the phone gateway (its own per-call Orchestrator).
+  // Shares the ONE web-chat Orchestrator across every connection, same
+  // "single user, one ongoing conversation" model the CLI loop already
+  // uses, rather than a fresh throwaway conversation per browser tab.
+  | { kind: "web-chat" };
 
 type DeviceSocket = ServerWebSocket<Extract<SocketData, { kind: "device" }>>;
 
@@ -113,6 +121,19 @@ export interface JarvisWebSocketServerDependencies {
   permissionService?: PermissionService;
   defaultUserId?: string;
   autoGrantToolIdsOnApproval?: string[];
+  /**
+   * Enables a real two-way text conversation at ws(s)://.../chat — the
+   * hologram UI's chat box sends a line, gets JARVIS's real response back,
+   * the same `orchestrator.handleUserMessage()` call the CLI loop and the
+   * phone gateway already use. Absent means /chat 404s (no silent
+   * degrade — better an obvious "not available" than a socket that opens
+   * and never answers). Gated by `adminToken` when one is configured (see
+   * above) via a `?token=` query param, since unlike /observer this can
+   * trigger real device actions and spend real API budget — anyone who
+   * can open this URL should NOT automatically be able to talk to it once
+   * it's on the public internet.
+   */
+  webChatOrchestrator?: Orchestrator;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -242,6 +263,22 @@ export class JarvisWebSocketServer {
               : new Response("Upgrade failed", { status: 400 });
           }
 
+          if (isUpgradeRequest && url.pathname === "/chat") {
+            if (!this.deps.webChatOrchestrator) return new Response("Not found", { status: 404 });
+            // Same admin-token gate as pairing approval and WebAuthn setup
+            // — required once one is configured, since a WebSocket upgrade
+            // can't carry a custom header from a browser the way a normal
+            // fetch() can, so the token travels as a query param instead.
+            // Optional only for local dev with no adminToken set at all.
+            const { adminToken } = this.deps;
+            if (adminToken && !constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
+              return new Response("Unauthorized", { status: 401 });
+            }
+            return server.upgrade(req, { data: { kind: "web-chat" } })
+              ? undefined
+              : new Response("Upgrade failed", { status: 400 });
+          }
+
           if (isUpgradeRequest && url.pathname === "/voice/audio-stream") {
             if (!this.deps.audioLevelBroadcaster) {
               return new Response("Not found", { status: 404 });
@@ -293,6 +330,10 @@ export class JarvisWebSocketServer {
           if (socket.data.kind === "audio-viewer") {
             return; // viewers are receive-only; nothing to act on
           }
+          if (socket.data.kind === "web-chat") {
+            this.handleWebChatMessage(ws as ServerWebSocket<Extract<SocketData, { kind: "web-chat" }>>, raw.toString());
+            return;
+          }
           this.handleMessage(socket as DeviceSocket, raw.toString());
         },
         close: (ws) => {
@@ -314,6 +355,45 @@ export class JarvisWebSocketServer {
         },
       },
     });
+  }
+
+  /**
+   * A real conversational turn from the hologram UI's chat box — parses
+   * `{ text: string }`, feeds it through the exact same
+   * `orchestrator.handleUserMessage()` the CLI loop and phone gateway
+   * already use (so tool calls, permissions, memory — everything — work
+   * identically here), and sends the real reply back as
+   * `{ type: "assistant", text }`. A malformed payload or a thrown error
+   * sends `{ type: "error", message }` instead of dropping the
+   * connection, so the UI can show *something* went wrong rather than
+   * just going silent.
+   */
+  private handleWebChatMessage(ws: ServerWebSocket<Extract<SocketData, { kind: "web-chat" }>>, raw: string): void {
+    const { webChatOrchestrator, defaultUserId } = this.deps;
+    if (!webChatOrchestrator) return; // route already 404s before upgrade if absent — defensive only
+
+    let text: string;
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.text !== "string" || !parsed.text.trim()) {
+        ws.send(JSON.stringify({ type: "error", message: "Expected { text: string }" }));
+        return;
+      }
+      text = parsed.text.trim();
+    } catch {
+      ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+      return;
+    }
+
+    webChatOrchestrator
+      .handleUserMessage(defaultUserId ?? "local-user", text)
+      .then((response) => {
+        ws.send(JSON.stringify({ type: "assistant", text: response }));
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "Unexpected error";
+        ws.send(JSON.stringify({ type: "error", message }));
+      });
   }
 
   private handleMessage(ws: DeviceSocket, raw: string): void {
