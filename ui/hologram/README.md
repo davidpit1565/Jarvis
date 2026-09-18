@@ -61,6 +61,18 @@ Two `THREE.LineLoop` orbit rings (cyan + amber) with small satellite
 spheres animate around the head, echoing the reference's "orbiting data
 node" motif — plain geometry, no extra assets.
 
+## A visible brain, not an empty shell
+
+The wireframe is just line edges, so anything placed inside the head
+volume is naturally visible through it — a warm amber cloud of ~900
+points filling most of the cranium, plus a handful of connecting
+"synapse" line segments, gives the head genuine internal structure
+instead of reading as a hollow dome. Its glow isn't a fixed animation:
+`brainPulse` (in `index.html`) brightens on real `brain.request`/
+`brain.response` activity from the observer feed (or the labeled demo
+feed when Core is offline) and decays back to a gentle idle breathing
+glow — so it's visibly "thinking harder" exactly when Jarvis actually is.
+
 ## Viewing it from any angle — drag to orbit
 
 Click-and-drag anywhere on the page to rotate the camera freely around the

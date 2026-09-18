@@ -369,8 +369,11 @@
       ctx.translate(sx * size * 0.115, -size * 0.05);
       ctx.rotate(sx * -0.12);
       ctx.beginPath();
-      ctx.ellipse(0, 0, size * 0.078, size * 0.034, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(0,0,0,1)";
+      // Smaller and only partially erased (not a full alpha=1 cutout) —
+      // a full-black almond hole this size read as huge blank alien eyes
+      // once combined with the small bright eye spheres sitting in it.
+      ctx.ellipse(0, 0, size * 0.055, size * 0.024, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.7)";
       ctx.fill();
       ctx.restore();
     }
@@ -796,6 +799,68 @@
   headWire.add(buildEyes());
 
   /* ---------------------------------------------------------------
+   * 2b-i-b. A visible "brain" inside the translucent skull — the
+   *     wireframe is just line edges, so anything placed inside the
+   *     head volume is naturally visible through it. A warm amber cloud
+   *     of small particles filling most of the cranium, with a handful
+   *     of connecting "synapse" line segments, echoes the reference
+   *     video's internal glow rather than leaving the head an empty
+   *     shell. Its glow brightens on real brain.request/brain.response
+   *     observer events (wired further down, near the activity feed) —
+   *     when Core is actually running and thinking, not a fixed pulse.
+   * ------------------------------------------------------------- */
+  function buildBrain() {
+    const bx = rx * 0.72, by = ry * 0.62, bz = rz * 0.66;
+    const centerY = ry * 0.1;
+    const centerZ = -rz * 0.05;
+    const n = 900;
+    const positions = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      let x, y, z;
+      do {
+        x = Math.random() * 2 - 1;
+        y = Math.random() * 2 - 1;
+        z = Math.random() * 2 - 1;
+      } while (x * x + y * y + z * z > 1);
+      positions[i * 3] = x * bx;
+      positions[i * 3 + 1] = y * by + centerY;
+      positions[i * 3 + 2] = z * bz + centerZ;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      size: 0.065, map: spriteTex, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, color: 0xffb15c, opacity: 0.8,
+    });
+    const points = new THREE.Points(geo, mat);
+
+    const lineCount = 46;
+    const linePositions = new Float32Array(lineCount * 2 * 3);
+    for (let i = 0; i < lineCount; i++) {
+      const ia = Math.floor(Math.random() * n);
+      const ib = Math.floor(Math.random() * n);
+      linePositions[i * 6] = positions[ia * 3];
+      linePositions[i * 6 + 1] = positions[ia * 3 + 1];
+      linePositions[i * 6 + 2] = positions[ia * 3 + 2];
+      linePositions[i * 6 + 3] = positions[ib * 3];
+      linePositions[i * 6 + 4] = positions[ib * 3 + 1];
+      linePositions[i * 6 + 5] = positions[ib * 3 + 2];
+    }
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
+    const lineMat = new THREE.LineBasicMaterial({
+      color: 0xffb15c, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending,
+    });
+    const lines = new THREE.LineSegments(lineGeo, lineMat);
+
+    const group = new THREE.Group();
+    group.add(points, lines);
+    return { group, pointsMat: points.material, lineMat };
+  }
+  const brain = buildBrain();
+  headWire.add(brain.group);
+
+  /* ---------------------------------------------------------------
    * 2b-ii. Mouth line — two thin curved lines (upper/lower lip) whose
    *     vertical separation is driven every frame by the real audio
    *     level (the same value that drives the particle pulse below),
@@ -915,6 +980,11 @@
   let targetYaw = 0;
   let targetPitch = 0;
   let lastFaceSeenAt = 0;
+  // Bumped by pushActivityLine() below on brain.request/brain.response
+  // events (real ones from Core, or the labeled demo feed) and decayed
+  // every frame in animate() to brighten the brain visualization while
+  // Jarvis is actually "thinking" instead of a fixed idle pulse.
+  let brainPulse = 0;
   const rgbSplit = document.getElementById("rgb-split");
   const banner = document.getElementById("glitch-banner");
   const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -948,6 +1018,14 @@
     const inGlitch = t < glitchUntil;
     material.uniforms.uGlitch.value = inGlitch ? 1.0 : Math.max(0, material.uniforms.uGlitch.value - 0.08);
     if (!inGlitch) rgbSplit.style.opacity = String(Math.max(0, parseFloat(rgbSplit.style.opacity || "0") - 0.06));
+
+    // Brain glow: a small idle breathing base, brightened by real (or
+    // labeled-demo) brain.request/brain.response activity and decaying
+    // back down — never a fixed animation pretending to be "thinking".
+    brainPulse = Math.max(0, brainPulse - 0.012);
+    const brainGlow = 0.55 + Math.sin(t * 1.3) * 0.1 + brainPulse * 0.45;
+    brain.pointsMat.opacity = Math.min(1, brainGlow);
+    brain.lineMat.opacity = Math.min(0.55, 0.15 + brainPulse * 0.4);
 
     if (!REDUCED_MOTION) {
       // Face-tracking (webcam) overrides the idle drift while a real face
@@ -1127,6 +1205,7 @@
     activityLinesEl.innerHTML = activityQueue
       .map((l) => `<div class="line"><span class="t">${l.time}</span>  <span class="${l.kind}">${l.text}</span></div>`)
       .join("");
+    if (type === "brain.request" || type === "brain.response") brainPulse = 1;
   }
 
   function setActivityStatus(isLive) {
