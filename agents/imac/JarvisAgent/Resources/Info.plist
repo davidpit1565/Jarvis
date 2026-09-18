@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+REQUIRES REAL macOS VALIDATION — never tested on a real Mac.
+
+Embedded directly into the compiled binary's Mach-O __TEXT,__info_plist
+section via Package.swift's linker flags (the standard way a raw
+`swift build` executable — not an .app bundle — gets an Info.plist at
+all: macOS/TCC only shows the permission prompt, and only remembers the
+grant, for a process that carries one). Without this, WakeWordListener's
+SFSpeechRecognizer.requestAuthorization / AVCaptureDevice.requestAccess
+calls fail silently with no prompt ever shown.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.jarvis.agent</string>
+    <key>CFBundleName</key>
+    <string>JarvisAgent</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSUIElement</key>
+    <true/>
+
+    <key>NSMicrophoneUsageDescription</key>
+    <string>JARVIS listens for "Hey JARVIS" to hear voice commands. Audio is only sent to JARVIS Core after that wake phrase is heard.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>JARVIS transcribes your microphone on-device to detect the "Hey JARVIS" wake phrase and understand voice commands.</string>
+</dict>
+</plist>

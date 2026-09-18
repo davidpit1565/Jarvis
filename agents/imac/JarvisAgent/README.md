@@ -58,11 +58,15 @@ Hybrid menu bar app + `launchd` user agent, sharing one executable:
 and `AVCaptureDevice.requestAccess(for: .audio)` at launch. macOS only
 shows the permission prompts (and TCC only remembers the grant) for a
 process that carries `NSMicrophoneUsageDescription` and
-`NSSpeechRecognitionUsageDescription` in an `Info.plist` — this raw
-`swift build` executable doesn't have one yet. Packaging this as a
-proper `.app` bundle (or adding `Info.plist` linker flags to the raw
-executable target) with both keys set is required before wake-word
-listening can request permission at all, let alone work.
+`NSSpeechRecognitionUsageDescription` in an `Info.plist`.
+`Resources/Info.plist` has both keys, embedded directly into the
+compiled binary's own Mach-O `__TEXT,__info_plist` section via
+`Package.swift`'s `linkerSettings` — the standard way a raw
+`swift build` executable (not a packaged `.app` bundle) gets an
+Info.plist at all. **Unverified**: never built/run on a real Mac, so
+whether macOS actually honors an Info.plist embedded this way (versus
+requiring a real `.app` bundle) still needs a live permission-prompt
+test.
 
 ## What requires further real iMac validation
 
