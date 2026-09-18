@@ -35,11 +35,18 @@ export interface ToolRequestPayload {
 
 export type PingPayload = Record<string, never>;
 
+/** The spoken-back reply to a voice.transcript — see VoiceTranscriptPayload below. */
+export interface VoiceReplyPayload {
+  text: string;
+  [key: string]: unknown;
+}
+
 export type DeviceCommandMessage = Envelope<"device.command", DeviceCommandPayload>;
 export type ToolRequestMessage = Envelope<"tool.request", ToolRequestPayload>;
 export type PingMessage = Envelope<"ping", PingPayload>;
+export type VoiceReplyMessage = Envelope<"voice.reply", VoiceReplyPayload>;
 
-export type CoreToDeviceMessage = DeviceCommandMessage | ToolRequestMessage | PingMessage;
+export type CoreToDeviceMessage = DeviceCommandMessage | ToolRequestMessage | PingMessage | VoiceReplyMessage;
 
 // ---------------------------------------------------------------------------
 // Device -> Core payloads
@@ -79,18 +86,32 @@ export interface DeviceEventPayload {
 
 export type PongPayload = Record<string, never>;
 
+/**
+ * A wake-word-triggered voice command transcribed on-device (e.g. "Hey
+ * JARVIS, what's on my calendar") — the text after the wake phrase.
+ * Routed through the same Orchestrator.handleUserMessage path as every
+ * other channel (Telegram, phone), one conversation per device.
+ */
+export interface VoiceTranscriptPayload {
+  text: string;
+  wakeWord?: string;
+  [key: string]: unknown;
+}
+
 export type DeviceRegisterMessage = Envelope<"device.register", DeviceRegisterPayload>;
 export type DeviceStatusMessage = Envelope<"device.status", DeviceStatusPayload>;
 export type ToolResultMessage = Envelope<"tool.result", ToolResultPayload>;
 export type DeviceEventMessage = Envelope<"event", DeviceEventPayload>;
 export type PongMessage = Envelope<"pong", PongPayload>;
+export type VoiceTranscriptMessage = Envelope<"voice.transcript", VoiceTranscriptPayload>;
 
 export type DeviceToCoreMessage =
   | DeviceRegisterMessage
   | DeviceStatusMessage
   | ToolResultMessage
   | DeviceEventMessage
-  | PongMessage;
+  | PongMessage
+  | VoiceTranscriptMessage;
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -194,6 +215,14 @@ function isDeviceEventPayload(payload: Record<string, unknown>): payload is Devi
   return typeof payload.name === "string" && (payload.data === undefined || isPlainObject(payload.data));
 }
 
+function isVoiceTranscriptPayload(payload: Record<string, unknown>): payload is VoiceTranscriptPayload {
+  return (
+    typeof payload.text === "string" &&
+    payload.text.trim() !== "" &&
+    (payload.wakeWord === undefined || typeof payload.wakeWord === "string")
+  );
+}
+
 /** Parses and validates a message sent by a device to Core. */
 export function parseDeviceToCoreMessage(raw: string): ParseResult<DeviceToCoreMessage> {
   const envelopeResult = parseEnvelopeShape(raw);
@@ -250,6 +279,17 @@ export function parseDeviceToCoreMessage(raw: string): ParseResult<DeviceToCoreM
         message: { ...envelope, deviceId: deviceIdResult.message, type: "pong", payload: {} },
       };
     }
+    case "voice.transcript": {
+      const deviceIdResult = requireDeviceId(envelope);
+      if (!deviceIdResult.ok) return deviceIdResult;
+      if (!isVoiceTranscriptPayload(envelope.payload)) {
+        return { ok: false, reason: "Malformed voice.transcript payload" };
+      }
+      return {
+        ok: true,
+        message: { ...envelope, deviceId: deviceIdResult.message, type: "voice.transcript", payload: envelope.payload },
+      };
+    }
     default:
       return { ok: false, reason: `Unknown message type: ${envelope.type}` };
   }
@@ -261,6 +301,10 @@ function isToolRequestPayload(payload: Record<string, unknown>): payload is Tool
 
 function isDeviceCommandPayload(payload: Record<string, unknown>): payload is DeviceCommandPayload {
   return typeof payload.command === "string" && (payload.args === undefined || isPlainObject(payload.args));
+}
+
+function isVoiceReplyPayload(payload: Record<string, unknown>): payload is VoiceReplyPayload {
+  return typeof payload.text === "string";
 }
 
 /** Parses and validates a message sent by Core to a device. */
@@ -293,6 +337,14 @@ export function parseCoreToDeviceMessage(raw: string): ParseResult<CoreToDeviceM
       return {
         ok: true,
         message: { ...envelope, deviceId: deviceIdResult.message, type: "ping", payload: {} },
+      };
+    case "voice.reply":
+      if (!isVoiceReplyPayload(envelope.payload)) {
+        return { ok: false, reason: "Malformed voice.reply payload" };
+      }
+      return {
+        ok: true,
+        message: { ...envelope, deviceId: deviceIdResult.message, type: "voice.reply", payload: envelope.payload },
       };
     default:
       return { ok: false, reason: `Unknown message type: ${envelope.type}` };
