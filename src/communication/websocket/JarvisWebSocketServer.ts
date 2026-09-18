@@ -13,6 +13,8 @@ import { DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { createBackupArchive } from "@/backup/createBackupArchive";
 import type { ReminderStore } from "@/reminders/ReminderStore";
 import type { MemoryStore } from "@/memory/MemoryStore";
+import type { ToolAuditLog } from "@/audit/ToolAuditLog";
+import type { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
@@ -103,6 +105,10 @@ export interface JarvisWebSocketServerDependencies {
   reminderStore?: ReminderStore;
   /** Optional: enables the admin-gated GET /memory read-only endpoint. */
   memoryStore?: MemoryStore;
+  /** Optional: exposes a tool-usage summary (most-used tool, error rate) in GET /status. */
+  toolAuditLog?: ToolAuditLog;
+  /** Optional: exposes a conversation-history turn count in GET /status. */
+  conversationHistoryStore?: ConversationHistoryStore;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -562,6 +568,10 @@ export class JarvisWebSocketServer {
       webAuthnService,
       audioLevelBroadcaster,
       tokenUsageStore,
+      toolAuditLog,
+      reminderStore,
+      memoryStore,
+      conversationHistoryStore,
     } = this.deps;
 
     const devices = deviceRegistry.listDevices().map((device) => ({
@@ -590,6 +600,13 @@ export class JarvisWebSocketServer {
       tokenUsage: tokenUsage
         ? { ...tokenUsage, estimatedCostUsd: estimateCostUsd(tokenUsage, DEFAULT_MODEL) ?? null }
         : undefined,
+      toolUsage: toolAuditLog?.summary(),
+      counts: {
+        memory: memoryStore?.search("").length,
+        reminders: reminderStore?.list(true).length,
+        pendingReminders: reminderStore?.list(false).length,
+        conversationHistory: conversationHistoryStore?.count(),
+      },
     });
   }
 

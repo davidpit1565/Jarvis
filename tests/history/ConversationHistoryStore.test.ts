@@ -55,4 +55,17 @@ describe("ConversationHistoryStore", () => {
     expect(store.search("")).toEqual([]);
     store.close();
   });
+
+  test("count reflects the number of retained turns", () => {
+    const store = new ConversationHistoryStore(":memory:");
+    expect(store.count()).toBe(0);
+
+    store.record("user", "hello");
+    store.record("assistant", "hi there");
+    expect(store.count()).toBe(2);
+
+    store.record("assistant", ""); // ignored, doesn't count
+    expect(store.count()).toBe(2);
+    store.close();
+  });
 });

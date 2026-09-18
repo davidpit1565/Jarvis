@@ -55,6 +55,37 @@ describe("ToolAuditLog", () => {
     log.close();
   });
 
+  test("summary reports zeroed stats with no recorded calls", () => {
+    const log = new ToolAuditLog(":memory:");
+    expect(log.summary()).toEqual({
+      totalCalls: 0,
+      errorCount: 0,
+      errorRate: 0,
+      mostUsedTool: null,
+      toolCounts: [],
+    });
+    log.close();
+  });
+
+  test("summary reports the most-used tool and error rate", () => {
+    const log = new ToolAuditLog(":memory:");
+    log.record("save_memory", "user-1", {}, { success: true });
+    log.record("save_memory", "user-1", {}, { success: true });
+    log.record("save_memory", "user-1", {}, { success: false, error: "boom" });
+    log.record("create_reminder", "user-1", {}, { success: true });
+
+    const summary = log.summary();
+    expect(summary.totalCalls).toBe(4);
+    expect(summary.errorCount).toBe(1);
+    expect(summary.errorRate).toBe(0.25);
+    expect(summary.mostUsedTool).toBe("save_memory");
+    expect(summary.toolCounts).toEqual([
+      { toolName: "save_memory", count: 3 },
+      { toolName: "create_reminder", count: 1 },
+    ]);
+    log.close();
+  });
+
   test("survives across instances backed by the same SQLite file", () => {
     const dbPath = `/tmp/jarvis-audit-test-${crypto.randomUUID()}.sqlite`;
 

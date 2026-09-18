@@ -7,6 +7,10 @@ import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocket
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { ActivityLog } from "@/core/activity/ActivityLog";
 import { TokenUsageStore } from "@/audit/TokenUsageStore";
+import { ToolAuditLog } from "@/audit/ToolAuditLog";
+import { ReminderStore } from "@/reminders/ReminderStore";
+import { MemoryStore } from "@/memory/MemoryStore";
+import { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 
@@ -252,6 +256,72 @@ describe("Dashboard HTTP routes", () => {
     expect(data.tokenUsage.calls).toBe(1);
     expect(data.tokenUsage.estimatedCostUsd).not.toBeNull();
     tokenUsageStore.close();
+  });
+
+  test("GET /status reports a tool-usage summary from ToolAuditLog", async () => {
+    const eventBus = new EventBus();
+    const toolAuditLog = new ToolAuditLog(":memory:");
+    toolAuditLog.record("save_memory", "user-1", {}, { success: true });
+    toolAuditLog.record("save_memory", "user-1", {}, { success: false, error: "boom" });
+
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      toolAuditLog,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/status`);
+    const data = (await response.json()) as {
+      toolUsage: { totalCalls: number; errorCount: number; mostUsedTool: string | null };
+    };
+
+    expect(data.toolUsage.totalCalls).toBe(2);
+    expect(data.toolUsage.errorCount).toBe(1);
+    expect(data.toolUsage.mostUsedTool).toBe("save_memory");
+    toolAuditLog.close();
+  });
+
+  test("GET /status reports memory/reminders/conversation-history counts", async () => {
+    const eventBus = new EventBus();
+    const reminderStore = new ReminderStore(":memory:");
+    const memoryStore = new MemoryStore(":memory:");
+    const conversationHistoryStore = new ConversationHistoryStore(":memory:");
+
+    reminderStore.create({ text: "Buy milk" });
+    const r2 = reminderStore.create({ text: "Call mom" });
+    reminderStore.complete(r2.id);
+    memoryStore.save({ key: "user.name", value: "David" });
+    conversationHistoryStore.record("user", "hello");
+
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      reminderStore,
+      memoryStore,
+      conversationHistoryStore,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/status`);
+    const data = (await response.json()) as {
+      counts: { memory: number; reminders: number; pendingReminders: number; conversationHistory: number };
+    };
+
+    expect(data.counts.memory).toBe(1);
+    expect(data.counts.reminders).toBe(2);
+    expect(data.counts.pendingReminders).toBe(1);
+    expect(data.counts.conversationHistory).toBe(1);
+
+    reminderStore.close();
+    memoryStore.close();
+    conversationHistoryStore.close();
   });
 
   test("GET /status includes recent activity log entries, newest first", async () => {

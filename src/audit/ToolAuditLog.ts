@@ -3,6 +3,14 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ToolResult } from "@/types/tools";
 
+export interface ToolAuditSummary {
+  totalCalls: number;
+  errorCount: number;
+  errorRate: number;
+  mostUsedTool: string | null;
+  toolCounts: { toolName: string; count: number }[];
+}
+
 export interface ToolAuditEntry {
   id: number;
   toolName: string;
@@ -77,6 +85,32 @@ export class ToolAuditLog {
           .all(limit) as Array<Omit<ToolAuditEntry, "success"> & { success: number }>);
 
     return rows.map((row) => ({ ...row, success: row.success === 1 }));
+  }
+
+  /**
+   * Aggregate stats over everything currently retained (bounded by
+   * MAX_ROWS above), for a quick "how is JARVIS actually being used"
+   * glance on the dashboard rather than paging through raw entries.
+   */
+  summary(): ToolAuditSummary {
+    const totals = this.db
+      .query(`SELECT COUNT(*) as totalCalls, SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as errorCount FROM tool_audit_log`)
+      .get() as { totalCalls: number; errorCount: number | null };
+
+    const toolCounts = this.db
+      .query(`SELECT tool_name as toolName, COUNT(*) as count FROM tool_audit_log GROUP BY tool_name ORDER BY count DESC`)
+      .all() as { toolName: string; count: number }[];
+
+    const totalCalls = totals.totalCalls ?? 0;
+    const errorCount = totals.errorCount ?? 0;
+
+    return {
+      totalCalls,
+      errorCount,
+      errorRate: totalCalls > 0 ? errorCount / totalCalls : 0,
+      mostUsedTool: toolCounts[0]?.toolName ?? null,
+      toolCounts,
+    };
   }
 
   close(): void {

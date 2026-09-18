@@ -804,6 +804,16 @@ This is a best-effort file copy, not a hot/transactional backup — fine
 for a single-writer assistant triggered manually, not meant for point-in-
 time recovery under heavy concurrent writes.
 
+## Usage summary in /status
+
+`GET /status` also reports a `toolUsage` summary (total calls, error
+count/rate, most-used tool, and a per-tool breakdown) computed from
+`ToolAuditLog.summary()`, and a `counts` object with the current number
+of saved memory facts, total/pending reminders, and retained
+conversation-history turns — a quick "how is JARVIS actually being used
+and how much does it remember" glance without paging through raw logs or
+querying SQLite directly.
+
 ## Inspecting what JARVIS remembers
 
 `GET /reminders` and `GET /memory` are read-only JSON views of everything

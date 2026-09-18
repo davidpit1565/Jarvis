@@ -58,13 +58,19 @@ let activityLogForCrashHandlers: { record: (message: string) => void } | undefin
 // corrupted SQLite file, a full disk) still surface loudly in the logs and
 // in the dashboard's activity feed, they just don't take the whole process
 // down with them.
+// Logs only .message/.stack, never the raw error object — an error type
+// with an unexpected enumerable custom property (not something anything
+// here constructs today, but not guaranteed of every dependency forever)
+// could otherwise get its fields printed wholesale by console.error's
+// default object formatting.
 process.on("uncaughtException", (error) => {
-  console.error("[jarvis] uncaught exception (process continuing):", error);
+  console.error("[jarvis] uncaught exception (process continuing):", error.stack ?? error.message);
   activityLogForCrashHandlers?.record(`Uncaught exception: ${error.message}`);
 });
 process.on("unhandledRejection", (reason) => {
   const message = reason instanceof Error ? reason.message : String(reason);
-  console.error("[jarvis] unhandled promise rejection (process continuing):", reason);
+  const detail = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+  console.error("[jarvis] unhandled promise rejection (process continuing):", detail);
   activityLogForCrashHandlers?.record(`Unhandled rejection: ${message}`);
 });
 
@@ -189,6 +195,8 @@ function main() {
     tokenUsageStore,
     reminderStore,
     memoryStore,
+    toolAuditLog,
+    conversationHistoryStore,
     backupDbPaths: [
       config.memoryDbPath,
       config.webauthnDbPath,

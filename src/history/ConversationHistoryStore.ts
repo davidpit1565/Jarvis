@@ -57,6 +57,12 @@ export class ConversationHistoryStore {
       .all(`%${query}%`, limit) as ConversationHistoryEntry[];
   }
 
+  /** Total number of retained turns (bounded by MAX_ROWS), for a dashboard summary. */
+  count(): number {
+    const row = this.db.query(`SELECT COUNT(*) as count FROM conversation_history`).get() as { count: number };
+    return row.count;
+  }
+
   close(): void {
     this.db.close();
   }
