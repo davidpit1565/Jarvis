@@ -155,6 +155,116 @@ describe("TwilioVoiceGateway", () => {
     expect(body).toContain("&quot;");
   });
 
+  test("the greeting is spoken in both Hebrew and English", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    const response = gateway.handleIncomingCall("CA1");
+    const body = await response.text();
+
+    expect(body).toContain("שלום, כאן ג");
+    expect(body).toContain("Hi, this is JARVIS");
+  });
+
+  test("Gather defaults to automatic Hebrew/English recognition", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    const response = gateway.handleIncomingCall("CA1");
+    const body = await response.text();
+
+    expect(body).toContain('language="multi"');
+    expect(body).toContain('speechModel="deepgram_nova-3"');
+  });
+
+  test("a single BCP-47 gather language override drops the speechModel attribute", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused"), userId: "local-user" }),
+      undefined,
+      undefined,
+      undefined,
+      "he-IL"
+    );
+
+    const response = gateway.handleIncomingCall("CA1");
+    const body = await response.text();
+
+    expect(body).toContain('language="he-IL"');
+    expect(body).not.toContain("speechModel");
+  });
+
+  test("a Hebrew reply from the brain is spoken with the Hebrew voice, not the English one", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "אתה עובד על ג'רביס."),
+      userId: "local-user",
+    }));
+
+    gateway.handleIncomingCall("CA1");
+    const response = await gateway.handleGather("CA1", "מה אני עושה עכשיו");
+    const body = await response.text();
+
+    expect(body).toContain('voice="Google.he-IL-Wavenet-D"');
+    expect(body).toContain('language="he-IL"');
+    expect(body).toContain("אתה עובד על ג");
+  });
+
+  test("an English reply from the brain is spoken with the configured English voice, not the Hebrew one", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "You are working on JARVIS."),
+      userId: "local-user",
+    }));
+
+    gateway.handleIncomingCall("CA1");
+    const response = await gateway.handleGather("CA1", "what am I doing right now");
+    const body = await response.text();
+
+    expect(body).toContain('voice="Polly.Matthew-Neural">You are working on JARVIS.</Say></Gather>');
+  });
+
+  test("a custom Hebrew voice is honored", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({
+        orchestrator: makeStubOrchestrator(async () => "שלום"),
+        userId: "local-user",
+      }),
+      undefined,
+      undefined,
+      "Google.he-IL-Wavenet-A"
+    );
+
+    gateway.handleIncomingCall("CA1");
+    const response = await gateway.handleGather("CA1", "hi");
+    const body = await response.text();
+
+    expect(body).toContain('voice="Google.he-IL-Wavenet-A"');
+  });
+
+  test("the no-input and error prompts are also bilingual", async () => {
+    const noInputGateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+    noInputGateway.handleIncomingCall("CA1");
+    const noInputBody = await (await noInputGateway.handleGather("CA1", null)).text();
+    expect(noInputBody).toContain("catch that");
+    expect(noInputBody).toContain("לא שמעתי");
+
+    const errorGateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => {
+        throw new Error("boom");
+      }),
+      userId: "local-user",
+    }));
+    errorGateway.handleIncomingCall("CA1");
+    const errorBody = await (await errorGateway.handleGather("CA1", "hello")).text();
+    expect(errorBody).toContain("went wrong");
+    expect(errorBody).toContain("השתבש");
+  });
+
   test("handleCallEnded frees the session so a later gather creates a new one", async () => {
     let sessionsCreated = 0;
     const gateway = new TwilioVoiceGateway((): PhoneSession => {

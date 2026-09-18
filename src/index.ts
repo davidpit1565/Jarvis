@@ -105,7 +105,13 @@ function main() {
 
   const phoneGateway =
     config.twilioAuthToken && config.twilioPublicBaseUrl
-      ? new TwilioVoiceGateway(createPhoneSession, config.twilioVoice, audioStreamUrl)
+      ? new TwilioVoiceGateway(
+          createPhoneSession,
+          config.twilioVoice,
+          audioStreamUrl,
+          config.twilioVoiceHebrew,
+          config.twilioGatherLanguage
+        )
       : undefined;
 
   const wsServer = new JarvisWebSocketServer({

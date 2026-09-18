@@ -9,6 +9,8 @@ const ENV_KEYS = [
   "TWILIO_PUBLIC_BASE_URL",
   "TWILIO_ALLOWED_CALLERS",
   "TWILIO_VOICE",
+  "TWILIO_VOICE_HEBREW",
+  "TWILIO_GATHER_LANGUAGE",
   "JARVIS_ADMIN_TOKEN",
   "JARVIS_WEB_SEARCH",
   "JARVIS_WEB_SEARCH_MAX_USES",
@@ -102,6 +104,28 @@ describe("loadConfig", () => {
   test("leaves twilioVoice undefined when unset", () => {
     const config = loadConfig();
     expect(config.twilioVoice).toBeUndefined();
+  });
+
+  test("reads TWILIO_VOICE_HEBREW when set", () => {
+    process.env.TWILIO_VOICE_HEBREW = "Google.he-IL-Wavenet-A";
+    const config = loadConfig();
+    expect(config.twilioVoiceHebrew).toBe("Google.he-IL-Wavenet-A");
+  });
+
+  test("leaves twilioVoiceHebrew undefined when unset", () => {
+    const config = loadConfig();
+    expect(config.twilioVoiceHebrew).toBeUndefined();
+  });
+
+  test("reads TWILIO_GATHER_LANGUAGE when set", () => {
+    process.env.TWILIO_GATHER_LANGUAGE = "he-IL";
+    const config = loadConfig();
+    expect(config.twilioGatherLanguage).toBe("he-IL");
+  });
+
+  test("leaves twilioGatherLanguage undefined when unset", () => {
+    const config = loadConfig();
+    expect(config.twilioGatherLanguage).toBeUndefined();
   });
 
   test("web search is disabled by default with the default max_uses", () => {

@@ -354,15 +354,41 @@ ships credentials for either):
 5. Optionally set `TWILIO_ALLOWED_CALLERS` to a comma-separated allowlist
    of E.164 numbers (see "Security controls" above) — recommended before
    giving the number out.
-6. Optionally set `TWILIO_VOICE` to pick a different `<Say>` voice. The
-   default, `Polly.Matthew-Neural`, is a natural-sounding neural voice
+6. Optionally set `TWILIO_VOICE` to pick a different English `<Say>` voice.
+   The default, `Polly.Matthew-Neural`, is a natural-sounding neural voice
    available on standard Twilio accounts (no beta opt-in) — a clear
    step up from Twilio's robotic default "Basic" voice. If the account
    has Twilio's newer Generative voices enabled (e.g.
    `Google.en-US-Chirp3-HD-Charon`), that's an even more natural option;
    see [Twilio's voice list](https://www.twilio.com/docs/voice/twiml/say/text-speech).
-7. Call the number. JARVIS answers, listens, replies, and keeps listening
-   until the call ends.
+7. Call the number and speak in Hebrew or English (see "Hebrew + English on
+   phone calls" below) — JARVIS answers, listens, replies, and keeps
+   listening until the call ends.
+
+### Hebrew + English on phone calls
+
+Phone calls get the same bilingual JARVIS as everywhere else, but getting
+there needs more than the brain understanding both languages — Twilio's own
+speech-to-text and text-to-speech have to be told which language(s) to use:
+
+- **Speech recognition**: `<Gather>` requests `language="multi"` with
+  Twilio's `deepgram_nova-3` speech model — Twilio's own real automatic
+  Hebrew/English detection in a single request (confirmed against Twilio's
+  docs, not guessed). **Requires real validation**: never exercised against
+  a live Twilio account, and `deepgram_nova-3` could in principle not be
+  enabled on every account. If a call can't be recognized, set
+  `TWILIO_GATHER_LANGUAGE` to a single BCP-47 code (`he-IL` or `en-US`) to
+  fall back to Twilio's older single-language recognition — you'll lose
+  automatic language switching, but the call itself still works.
+- **Speech synthesis**: each `<Say>` picks its voice based on whether the
+  text being spoken contains Hebrew characters — JARVIS's own canned
+  prompts (greeting, "I didn't catch that", errors) are always spoken in
+  *both* languages back to back, since the caller's language isn't known
+  yet; the brain's actual replies are spoken in just the one language they
+  were written in. Amazon Polly (the default English voice) has no Hebrew
+  voice at all, so Hebrew always goes through Twilio's Google TTS
+  integration (`Google.he-IL-Wavenet-D` by default, overridable via
+  `TWILIO_VOICE_HEBREW`).
 
 If `TWILIO_AUTH_TOKEN`/`TWILIO_PUBLIC_BASE_URL` aren't set, the `/voice/*`
 routes don't exist at all (`404`) and nothing else changes — the phone

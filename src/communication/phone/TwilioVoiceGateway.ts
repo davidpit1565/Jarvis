@@ -8,9 +8,14 @@ export interface PhoneSession {
 /** Builds a fresh session (its own conversation, sharing everything else) for one phone call. */
 export type PhoneSessionFactory = (callSid: string) => PhoneSession;
 
-const GREETING = "Hi, this is JARVIS. What can I help you with?";
-const NO_INPUT_MESSAGE = "Sorry, I didn't catch that. Could you say that again?";
-const ERROR_MESSAGE = "Sorry, something went wrong on my end. Please try again.";
+const GREETING_EN = "Hi, this is JARVIS. What can I help you with?";
+const GREETING_HE = "שלום, כאן ג'רביס. במה אוכל לעזור?";
+const NO_INPUT_EN = "Sorry, I didn't catch that. Could you say that again?";
+const NO_INPUT_HE = "לא שמעתי. תוכל לחזור על זה?";
+const ERROR_EN = "Sorry, something went wrong on my end. Please try again.";
+const ERROR_HE = "משהו השתבש אצלי. נסה שוב בבקשה.";
+const GOODBYE_EN = "I didn't hear anything. Goodbye.";
+const GOODBYE_HE = "לא שמעתי כלום. להתראות.";
 
 /**
  * Amazon Polly's Neural voice for <Say> — noticeably more natural than
@@ -20,6 +25,30 @@ const ERROR_MESSAGE = "Sorry, something went wrong on my end. Please try again."
  * available on the account this actually runs on.
  */
 const DEFAULT_VOICE = "Polly.Matthew-Neural";
+
+/**
+ * Google's WaveNet Hebrew voice — Polly has no Hebrew voice at all, so
+ * Hebrew speech always goes through Twilio's Google TTS integration
+ * regardless of what English voice is configured. Overridable via
+ * TWILIO_VOICE_HEBREW for the same reason TWILIO_VOICE is overridable.
+ */
+const DEFAULT_HEBREW_VOICE = "Google.he-IL-Wavenet-D";
+
+/**
+ * Twilio's <Gather> only recognizes one language per request UNLESS you opt
+ * into Gather's newest Deepgram model, which supports `language="multi"` —
+ * true automatic Hebrew/English detection in a single request. This is a
+ * genuine Twilio capability (confirmed against Twilio's own docs), not
+ * guessed, but REQUIRES REAL VALIDATION: never exercised against a live
+ * Twilio account, and `deepgram_nova-3` could in principle not be enabled
+ * on every account. If it isn't, set TWILIO_GATHER_LANGUAGE to a single
+ * BCP-47 code (e.g. "he-IL" or "en-US") to fall back to Twilio's older,
+ * single-language recognition.
+ */
+const DEFAULT_GATHER_LANGUAGE = "multi";
+const MULTI_LANGUAGE_SPEECH_MODEL = "deepgram_nova-3";
+
+const HEBREW_CHARS = /[֐-׿]/;
 
 function escapeXml(text: string): string {
   return text
@@ -58,6 +87,8 @@ function twimlResponse(body: string): Response {
 export class TwilioVoiceGateway {
   private sessions: Map<string, PhoneSession> = new Map();
   private readonly voice: string;
+  private readonly hebrewVoice: string;
+  private readonly gatherLanguage: string;
 
   constructor(
     private readonly createSession: PhoneSessionFactory,
@@ -69,23 +100,47 @@ export class TwilioVoiceGateway {
      * call-scoped, not per-TwiML-response, so it doesn't need repeating
      * on every gather turn. Unset means no audio waveform feature.
      */
-    private readonly audioStreamUrl?: string
+    private readonly audioStreamUrl?: string,
+    hebrewVoice: string = DEFAULT_HEBREW_VOICE,
+    gatherLanguage: string = DEFAULT_GATHER_LANGUAGE
   ) {
     this.voice = voice;
+    this.hebrewVoice = hebrewVoice;
+    this.gatherLanguage = gatherLanguage;
+  }
+
+  /** One <Say>, in whichever voice fits the text's own language. */
+  private sayTag(text: string): string {
+    return HEBREW_CHARS.test(text)
+      ? `<Say language="he-IL" voice="${escapeXml(this.hebrewVoice)}">${escapeXml(text)}</Say>`
+      : `<Say voice="${escapeXml(this.voice)}">${escapeXml(text)}</Say>`;
   }
 
   /**
-   * A <Gather> that speaks `sayText` in the configured voice, listens for
-   * the caller's speech (Twilio does the speech-to-text itself and posts
-   * the transcript back to /voice/gather), and falls back to a goodbye if
-   * nothing was heard.
+   * Two <Say> tags, Hebrew then English — used only for JARVIS's own canned
+   * prompts (greeting, no-input, error), where the caller's language isn't
+   * known yet. Once JARVIS has an actual reply from the brain, `sayTag`
+   * speaks it in just the one language it was actually written in.
    */
-  private gatherPrompt(sayText: string): string {
+  private sayBilingual(hebrew: string, english: string): string {
+    return this.sayTag(hebrew) + this.sayTag(english);
+  }
+
+  /**
+   * A <Gather> that speaks `spokenTwiml` (already-rendered <Say> tags),
+   * listens for the caller's speech in Hebrew or English (Twilio does the
+   * speech-to-text itself and posts the transcript back to /voice/gather),
+   * and falls back to a goodbye if nothing was heard.
+   */
+  private gatherPrompt(spokenTwiml: string): string {
+    const speechModelAttr =
+      this.gatherLanguage === DEFAULT_GATHER_LANGUAGE ? ` speechModel="${MULTI_LANGUAGE_SPEECH_MODEL}"` : "";
     return (
-      `<Gather input="speech" action="/voice/gather" method="POST" speechTimeout="auto" language="en-US">` +
-      `<Say voice="${escapeXml(this.voice)}">${escapeXml(sayText)}</Say>` +
+      `<Gather input="speech" action="/voice/gather" method="POST" speechTimeout="auto" ` +
+      `language="${escapeXml(this.gatherLanguage)}"${speechModelAttr}>` +
+      spokenTwiml +
       `</Gather>` +
-      `<Say voice="${escapeXml(this.voice)}">I didn't hear anything. Goodbye.</Say>`
+      this.sayBilingual(GOODBYE_HE, GOODBYE_EN)
     );
   }
 
@@ -95,7 +150,7 @@ export class TwilioVoiceGateway {
     const streamTag = this.audioStreamUrl
       ? `<Start><Stream url="${escapeXml(this.audioStreamUrl)}" track="both_tracks" /></Start>`
       : "";
-    return twimlResponse(streamTag + this.gatherPrompt(GREETING));
+    return twimlResponse(streamTag + this.gatherPrompt(this.sayBilingual(GREETING_HE, GREETING_EN)));
   }
 
   /** POST /voice/gather — Twilio calls this with the caller's transcribed speech. */
@@ -104,17 +159,18 @@ export class TwilioVoiceGateway {
     this.sessions.set(callSid, session);
 
     if (!speechResult || speechResult.trim() === "") {
-      return twimlResponse(this.gatherPrompt(NO_INPUT_MESSAGE));
+      return twimlResponse(this.gatherPrompt(this.sayBilingual(NO_INPUT_HE, NO_INPUT_EN)));
     }
 
-    let responseText: string;
+    let spokenTwiml: string;
     try {
-      responseText = await session.orchestrator.handleUserMessage(session.userId, speechResult);
+      const responseText = await session.orchestrator.handleUserMessage(session.userId, speechResult);
+      spokenTwiml = this.sayTag(responseText);
     } catch {
-      responseText = ERROR_MESSAGE;
+      spokenTwiml = this.sayBilingual(ERROR_HE, ERROR_EN);
     }
 
-    return twimlResponse(this.gatherPrompt(responseText));
+    return twimlResponse(this.gatherPrompt(spokenTwiml));
   }
 
   /** POST /voice/status — Twilio's call status callback; frees the session's memory once the call ends. */
