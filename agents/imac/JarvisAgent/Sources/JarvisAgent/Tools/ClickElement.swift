@@ -66,7 +66,7 @@ enum ClickElementTool {
     /// Depth- and count-bounded so a pathological accessibility tree
     /// (a huge web view, a misbehaving app) can't hang this tool.
     private static func collectMatches(
-        _ element: AXUIElement, needle: String, depth: Int, visited: inout Int, into matches: inout [(AXUIElement, String)]
+        _ element: AXUIElement, needle: String, depth: Int, visited: inout Int, into matches: inout [(element: AXUIElement, label: String)]
     ) {
         if depth > maxDepth || visited > maxElementsVisited || matches.count > 20 { return }
         visited += 1
