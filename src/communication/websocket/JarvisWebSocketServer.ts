@@ -134,6 +134,10 @@ export class JarvisWebSocketServer {
             return await this.handleApproveHttp(req, server);
           }
 
+          if (req.method === "POST" && url.pathname === "/pairing/revoke") {
+            return await this.handleRevokeHttp(req, server);
+          }
+
           if (req.method === "POST" && url.pathname.startsWith("/voice/")) {
             return await this.handleVoiceWebhook(req, url);
           }
@@ -306,7 +310,7 @@ export class JarvisWebSocketServer {
 
     this.pendingConnections.delete(deviceId);
     ws.data.deviceId = deviceId;
-    deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data) });
+    deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data), close: () => ws.close() });
     deviceRegistry.updateStatus(deviceId, "online");
     this.maybeAssignRequestedRole(deviceId);
     this.send(ws, deviceId, "device.command", { command: "pairing.approved" });
@@ -335,7 +339,7 @@ export class JarvisWebSocketServer {
     if (ws) {
       this.pendingConnections.delete(deviceId);
       ws.data.deviceId = deviceId;
-      deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data) });
+      deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data), close: () => ws.close() });
       deviceRegistry.updateStatus(deviceId, "online");
       this.send(ws, deviceId, "device.command", {
         command: "pairing.approved",
@@ -344,6 +348,22 @@ export class JarvisWebSocketServer {
     }
 
     return { credential: secret };
+  }
+
+  /**
+   * Revokes a device's credential (lost/stolen/decommissioned) and
+   * immediately drops its live connection if it has one — so cutting a
+   * device off doesn't wait for it to naturally disconnect first. The
+   * device keeps showing up in GET /status (its history isn't erased) but
+   * can never reconnect without a brand-new pairing code approved again.
+   */
+  revokeDevice(deviceId: string): void {
+    const { pairingService, deviceConnectionManager } = this.deps;
+    pairingService.revoke(deviceId);
+    if (deviceConnectionManager.hasConnection(deviceId)) {
+      deviceConnectionManager.removeConnection(deviceId, "revoked");
+    }
+    this.pendingConnections.delete(deviceId);
   }
 
   /**
@@ -594,6 +614,39 @@ export class JarvisWebSocketServer {
       const message = error instanceof Error ? error.message : "Failed to approve pairing";
       return Response.json({ success: false, error: message }, { status: 400 });
     }
+  }
+
+  /**
+   * Lets a human cut off a lost/stolen device remotely (e.g. from a phone
+   * browser, via curl) without needing shell access to wherever Core
+   * actually runs — the only other way to revoke trust today. Same
+   * admin-token gate and rate limit as /pairing/approve, since both let
+   * someone reshape which devices JARVIS trusts.
+   */
+  private async handleRevokeHttp(req: Request, server: BunServer): Promise<Response> {
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "pairing-revoke"))) {
+      return Response.json({ success: false, error: "Too many attempts, try again later" }, { status: 429 });
+    }
+
+    const { adminToken } = this.deps;
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ success: false, error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    if (typeof body !== "object" || body === null || typeof (body as Record<string, unknown>).deviceId !== "string") {
+      return Response.json({ success: false, error: "Body must be { deviceId: string }" }, { status: 400 });
+    }
+
+    const { deviceId } = body as { deviceId: string };
+    this.revokeDevice(deviceId);
+    return Response.json({ success: true, deviceId });
   }
 
   private send(

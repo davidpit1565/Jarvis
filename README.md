@@ -353,6 +353,21 @@ device's long-lived credential and — if the device's socket is still open
 — pushes the credential to it immediately, promoting the connection to
 authenticated in the same step.
 
+### Revoking a lost/stolen device
+
+```bash
+curl -X POST https://<your-app>.fly.dev/pairing/revoke \
+  -H "Content-Type: application/json" -H "X-Jarvis-Admin-Token: <your admin token>" \
+  -d '{"deviceId": "<the device's id, from GET /status>"}'
+```
+
+Immediately invalidates that device's credential and, if it's currently
+connected, closes its socket right away rather than waiting for it to
+disconnect naturally. The device keeps showing up in `GET /status` (its
+history isn't erased) but can never reconnect without a brand-new pairing
+code approved again. This is the only way to cut a device off without
+shell access to wherever Core actually runs.
+
 ## Phone gateway (call JARVIS)
 
 JARVIS can be reached as an actual phone call, via

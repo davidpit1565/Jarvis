@@ -8,6 +8,8 @@ const DEFAULT_TOOL_TIMEOUT_MS = 10_000;
 /** Transport-agnostic connection abstraction so this class never touches a raw WebSocket. */
 export interface DeviceConnection {
   send(raw: string): void;
+  /** Optional: actually closes the underlying transport (e.g. on revocation), not just stops routing to it. */
+  close?(): void;
 }
 
 interface PendingToolRequest {
@@ -38,9 +40,11 @@ export class DeviceConnectionManager {
   }
 
   removeConnection(deviceId: string, reason: string = "disconnected"): void {
+    const connection = this.connections.get(deviceId);
     const had = this.connections.delete(deviceId);
     this.rejectAllPendingForDevice(deviceId, new Error(`Device disconnected: ${deviceId}`));
     if (had) {
+      connection?.close?.();
       this.eventBus.emit("device.disconnected", { deviceId, reason });
     }
   }

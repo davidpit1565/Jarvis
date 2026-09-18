@@ -5,11 +5,16 @@ import type { ToolResultMessage } from "@/communication/websocket/protocol";
 
 class MockDeviceConnection implements DeviceConnection {
   public sent: string[] = [];
+  public closed = false;
   constructor(private readonly onSend?: (raw: string) => void) {}
 
   send(raw: string): void {
     this.sent.push(raw);
     this.onSend?.(raw);
+  }
+
+  close(): void {
+    this.closed = true;
   }
 }
 
@@ -51,6 +56,17 @@ describe("DeviceConnectionManager", () => {
     manager.removeConnection("imac-1", "test_reason");
     expect(events).toEqual([{ deviceId: "imac-1", reason: "test_reason" }]);
     expect(manager.hasConnection("imac-1")).toBe(false);
+  });
+
+  test("removeConnection closes the underlying transport when it supports it", () => {
+    const eventBus = new EventBus();
+    const manager = new DeviceConnectionManager(eventBus);
+    const connection = new MockDeviceConnection();
+
+    manager.registerConnection("imac-1", connection);
+    manager.removeConnection("imac-1", "revoked");
+
+    expect(connection.closed).toBe(true);
   });
 
   test("sendToolRequest resolves once a matching tool.result arrives", async () => {
