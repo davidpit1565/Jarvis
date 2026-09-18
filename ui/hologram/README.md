@@ -53,17 +53,33 @@ approximating a human head and use one:
   with Three.js's own official examples, vendored locally under
   `headmodel/` (both as the original `.glb` and as a base64-embedded
   `.b64.js` — see "Running it" above for why).
-- Decimated from its native ~17,700 triangles down to ~3,000
+- Decimated from its native ~17,700 triangles down to ~9,000
   (`THREE.SimplifyModifier`, after `THREE.BufferGeometryUtils.mergeVertices`)
-  — sparse enough to read as a clean HUD grid instead of a dense scan.
-- Rendered as `THREE.EdgesGeometry(simplified, 20)` — this keeps only
-  edges between faces whose normals differ by more than ~20°, which is
-  what makes the nose bridge, eye-socket rims, lips, and jawline read as
-  clean contour lines instead of a busy triangulated mesh — plus a bright
-  node dot (`THREE.Points`) at every remaining vertex.
+  — dense enough to match the reference's fully-covered facial grid, while
+  still reading as line art rather than a solid-shaded scan.
+- Rendered as `THREE.EdgesGeometry(simplified, 8)` — this keeps only edges
+  between faces whose normals differ by more than ~8°. A higher angle
+  (originally 20-25°) left flat regions like the cheeks and chin sparse or
+  empty, since near-coplanar triangles produce few edges regardless of
+  triangle count; 8° pulls in enough near-flat edges to give even, dense
+  coverage across the whole face, not just the sharp contours. A second,
+  slightly larger and dimmer copy of the same edge geometry
+  (`glowLines`, scale 1.025, opacity 0.18, additive blending) is drawn
+  behind the bright original as a cheap "poor man's bloom" — there's no
+  `EffectComposer`/`UnrealBloomPass` in this vendored setup, so the glow is
+  faked by literally re-drawing the lines slightly bigger and fainter
+  underneath. A small, subtle node dot (`THREE.Points`, size 0.022, opacity
+  0.45) sits at every remaining vertex — kept deliberately faint so the
+  denser 9,000-triangle mesh doesn't turn into a solid point-cloud blob
+  burying the edge lines (an earlier, brighter/larger dot setting did
+  exactly that).
 - Two small bright spheres for the "pupil" glint, positioned at the real
   eye-socket coordinates (found by raycasting the source mesh at the
-  visually-identified eye locations, not guessed).
+  visually-identified eye locations, not guessed), each backed by a small
+  soft-glow `THREE.Sprite` (radial-gradient canvas texture, additive
+  blending) so the eyes read as glowing rather than flat matte dots — sized
+  small enough (scale 0.2) to stay contained around the eye; a larger first
+  attempt bled visibly onto the cheeks.
 
 Real ears, a real nose, a real jaw, a real neck-into-shoulders — all
 inherent to the geometry, from any angle, with no per-feature code needed
@@ -282,11 +298,12 @@ browser silently blocked the page from reading it, until
 Performance was measured, not assumed, on the earlier particle-based build:
 ~33fps sustained with **SwiftShader** (CPU software OpenGL — no GPU at
 all, the worst realistic case) rendering ~26,000 additive-blended
-particles at 1200x800. The current real-mesh build renders roughly
-1,500-3,000 vertices' worth of edges/points total — substantially lighter
-— but hasn't been re-measured with an exact fps number since switching;
-expect it to be at least as fast. Any actual GPU, including an integrated
-one, comfortably clears 60fps either way.
+particles at 1200x800. The current real-mesh build renders roughly 9,000 triangles' worth of
+edges/points (plus a duplicated glow-line layer for the fake-bloom effect)
+— still substantially lighter than the old particle build — but hasn't
+been re-measured with an exact fps number since switching; expect it to be
+at least as fast. Any actual GPU, including an integrated one, comfortably
+clears 60fps either way.
 
 ## Accessibility & responsive layout
 

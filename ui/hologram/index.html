@@ -555,7 +555,10 @@
       gltf.scene.traverse((o) => { if (o.isMesh) sourceMesh = o; });
 
       const merged = THREE.BufferGeometryUtils.mergeVertices(sourceMesh.geometry);
-      const targetTris = 3000; // sparse enough to read as a clean HUD grid, not a dense scan
+      // Denser than the first pass (3000) — direct comparison against the
+      // reference showed its grid fully covers the face at high density,
+      // not a sparse low-poly facet look.
+      const targetTris = 9000;
       const currentTris = (merged.index ? merged.index.count : merged.attributes.position.count) / 3;
       const removeCount = Math.max(
         0,
@@ -568,25 +571,51 @@
       // this scene's existing camera-distance/panel/plinth proportions.
       modelGroup.scale.setScalar(0.384);
 
-      const edgesGeo = new THREE.EdgesGeometry(simplified, 20);
+      // Brighter, near-white and higher-opacity than the first pass — the
+      // reference reads as intensely glowing, not a thin dim outline.
+      const edgesGeo = new THREE.EdgesGeometry(simplified, 8);
       const edgesMat = new THREE.LineBasicMaterial({
-        color: 0x8fe8f5, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending,
+        color: 0xcdf3ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
       });
       modelGroup.add(new THREE.LineSegments(edgesGeo, edgesMat));
+      // A second, slightly larger + dimmer copy of the same edges gives a
+      // cheap "bloom" halo around every line without needing a real
+      // post-processing pass (no EffectComposer loaded here).
+      const glowMat = new THREE.LineBasicMaterial({
+        color: 0xcdf3ff, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending,
+      });
+      const glowLines = new THREE.LineSegments(edgesGeo, glowMat);
+      glowLines.scale.setScalar(1.025);
+      modelGroup.add(glowLines);
 
+      // Small and fairly dim on purpose: at this vertex density (~4500
+      // vertices), dots at the earlier size/opacity fused into a solid
+      // white mass that buried the edge lines — the reference's dots are
+      // a subtle accent on top of a line-dominated grid, not the other
+      // way around.
       const nodeMat = new THREE.PointsMaterial({
-        size: 0.045, map: spriteTex, transparent: true, depthWrite: false,
-        blending: THREE.AdditiveBlending, color: 0xdfffff, opacity: 0.8,
+        size: 0.022, map: spriteTex, transparent: true, depthWrite: false,
+        blending: THREE.AdditiveBlending, color: 0xffffff, opacity: 0.45,
       });
       modelGroup.add(new THREE.Points(simplified, nodeMat));
 
       // Bright pupil glints — the real eye sockets are already correct
       // via the mesh's own geometry; this adds the glowing "iris" accent
       // the reference video has. Positions found by raycasting the
-      // source mesh at the visually-identified eye locations.
+      // source mesh at the visually-identified eye locations. A soft
+      // sprite billboard behind each solid pupil fakes the halo/bloom the
+      // reference's eyes have — a plain sphere alone reads as a flat dot.
       const eyeGeo = new THREE.SphereGeometry(0.085, 12, 12);
-      const eyeMat = new THREE.MeshBasicMaterial({ color: 0xeafcff });
+      const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      const eyeGlowMat = new THREE.SpriteMaterial({
+        map: spriteTex, color: 0xdfffff, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9,
+      });
       for (const ex of [-0.5, 0.5]) {
+        const glow = new THREE.Sprite(eyeGlowMat);
+        glow.scale.setScalar(0.2);
+        glow.position.set(ex, 1.78, 1.98);
+        modelGroup.add(glow);
         const eye = new THREE.Mesh(eyeGeo, eyeMat);
         eye.position.set(ex, 1.78, 1.98);
         modelGroup.add(eye);
