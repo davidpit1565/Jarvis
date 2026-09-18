@@ -19,12 +19,38 @@ internet access just to render its own face.
 
 ## How the face is built
 
-There's no 3D face model/asset. `index.html` draws a stylized face mask
-(head silhouette, eye sockets, nose/mouth shading) onto an offscreen 2D
-canvas, then samples that canvas's pixel alpha to place several thousand
-`THREE.Points` particles — brighter pixels get more/brighter particles.
-That's what gives the hologram its organic, non-uniform density instead of
-looking like a flat cutout.
+There's no 3D face model/asset, and no external mesh is loaded. Two layers
+are combined:
+
+1. **A wireframe grid head** — a procedurally-displaced low-poly sphere
+   (squashed into a head/oval shape, tapered to a rounded jaw/chin, with a
+   brow ridge and nose bump pushed out on the front-facing vertices only),
+   rendered as glowing `THREE.LineSegments` edges plus a bright dot at
+   every vertex. This is the structural layer that reads as "digital face"
+   at a glance, matching the reference video's dominant visual — a
+   triangulated mesh grid, not a photo-like cloud of noise.
+2. **A particle shimmer layer behind it** — `index.html` separately draws a
+   stylized face mask (head silhouette, eye sockets, nose/mouth shading,
+   a procedural circuit-trace overlay) onto an offscreen 2D canvas, then
+   samples that canvas's pixel alpha to place several thousand
+   `THREE.Points` particles. This gives the hologram a soft, organic halo
+   of texture/glow around the crisp wireframe instead of the wireframe
+   floating in flat empty space.
+
+Two `THREE.LineLoop` orbit rings (cyan + amber) with small satellite
+spheres animate around the head, echoing the reference's "orbiting data
+node" motif — plain geometry, no extra assets.
+
+## Background depth
+
+The background is no longer a flat gradient alone: a cheap 2D-canvas
+"matrix rain" of falling characters runs behind the WebGL scene (frozen to
+a static frame under `prefers-reduced-motion` instead of animating
+forever), plus a handful of blurred vertical light strips and blinking LED
+dots standing in for distant server racks — pure CSS, no extra geometry.
+This is still nowhere near a photoreal 3D-rendered room (see "Visual
+fidelity" below for why that specific gap is out of scope for a live
+page), but it replaces "empty void" with an actual sense of depth.
 
 ## Live "CORE ACTIVITY" feed — real, not simulated, once Core is running
 
@@ -91,13 +117,25 @@ placeholder pretending to be voice output.
 
 ## Visual fidelity vs. the reference video/images
 
-The reference was a cinematic AI-generated render (single high-detail
-frames) — this is a live, 60fps interactive page. It gets close in
-concept and mood (particle/wireframe holographic head, dark scene, side
-telemetry, glowing base, periodic glitch) but won't be a pixel-exact match
-to a one-shot render without an unreasonable real-time rendering budget.
-If specific details still feel off, point at exactly which ones — that's
-a more useful next step than a general "make it closer" pass.
+Frames were pulled from the actual reference video and compared directly
+against screenshots of this page (not "should look similar" — an actual
+side-by-side) to find concrete, fixable gaps rather than guessing. That
+comparison found the earlier build's biggest miss: the reference's head is
+a **wireframe/mesh grid** with glowing vertex dots, not a particle-noise
+cloud — a difference in visual language, not just tuning. That's now
+fixed (see "How the face is built" above), along with the orbit rings and
+background depth cues the reference also has and the old build didn't.
+
+What's still, genuinely, out of reach for a live 60fps interactive page
+without an unreasonable rendering budget: the reference is a one-shot
+cinematic AI render with a fully photoreal 3D server room (real depth of
+field, physical rack geometry, ray-traced reflections) and a physical
+metal plinth — this page approximates that room with 2D depth cues
+(blurred light strips, a matrix-rain backdrop) rather than a modeled 3D
+environment. If specific remaining details still feel off, point at
+exactly which ones from a current screenshot (not an older one — check the
+timestamp/build first) — that's a more useful next step than a general
+"make it closer" pass.
 
 ## Verified end-to-end (not just "should work")
 

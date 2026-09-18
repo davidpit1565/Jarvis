@@ -18,7 +18,29 @@
       radial-gradient(ellipse at 50% 100%, rgba(0,0,0,0.9) 0%, #030507 70%),
       #030507;
   }
-  canvas#gl { position: absolute; inset: 0; display: block; }
+  canvas#gl { position: absolute; inset: 0; display: block; z-index: 1; }
+  canvas#matrix-bg { position: absolute; inset: 0; display: block; z-index: 0; opacity: 0.5; }
+
+  /* Server-room depth cues behind the head: blurred vertical light strips
+     standing in for distant rack columns, plus a couple of stray blinking
+     LED dots — cheap (pure CSS, no geometry) but breaks up the previously
+     flat gradient background so the scene reads as a room, not a void. */
+  .rack-strip {
+    position: fixed; top: 0; bottom: 0; width: 3px; z-index: 0;
+    background: linear-gradient(180deg, transparent, rgba(90,170,190,0.35) 35%, rgba(90,170,190,0.35) 65%, transparent);
+    filter: blur(2px); opacity: 0.5;
+  }
+  .rack-strip.dim { opacity: 0.28; filter: blur(3px); }
+  .rack-led {
+    position: fixed; width: 4px; height: 4px; border-radius: 50%; z-index: 0;
+    background: #7fe0c8; box-shadow: 0 0 6px 1px #7fe0c8; opacity: 0.7;
+    animation: led-blink 2.4s ease-in-out infinite;
+  }
+  .rack-led.amber { background: #ffb15c; box-shadow: 0 0 6px 1px #ffb15c; animation-duration: 3.6s; }
+  @keyframes led-blink { 0%,100% { opacity: 0.85; } 50% { opacity: 0.15; } }
+  @media (prefers-reduced-motion: reduce) {
+    .rack-led { animation: none; opacity: 0.5; }
+  }
 
   /* subtle CRT scanlines + vignette, purely decorative */
   #scanlines {
@@ -175,6 +197,15 @@
 </head>
 <body>
   <div id="stage">
+    <canvas id="matrix-bg"></canvas>
+    <div class="rack-strip" style="left:6%"></div>
+    <div class="rack-strip dim" style="left:12%"></div>
+    <div class="rack-strip dim" style="right:14%"></div>
+    <div class="rack-strip" style="right:7%"></div>
+    <div class="rack-led" style="left:8%; top:22%"></div>
+    <div class="rack-led amber" style="left:13%; top:61%"></div>
+    <div class="rack-led" style="right:9%; top:34%"></div>
+    <div class="rack-led amber" style="right:15%; top:70%"></div>
     <canvas id="gl"></canvas>
   </div>
   <div id="scanlines"></div>
@@ -221,6 +252,54 @@
 <script>
 (function () {
   "use strict";
+
+  const REDUCED_MOTION_MQ = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------------------------------------------------------------
+   * 0. Matrix-style falling code column background — cheap 2D canvas
+   *    effect (no WebGL cost) that gives the scene depth behind the
+   *    head, echoing the reference video's data-stream backdrop. Frozen
+   *    on a single static frame under prefers-reduced-motion instead of
+   *    animating forever.
+   * ------------------------------------------------------------- */
+  (function matrixRain() {
+    const mc = document.getElementById("matrix-bg");
+    const mctx = mc.getContext("2d");
+    const CHARS = "01アイウエオカキクケコJARVISΣΩΔ";
+    let cols, drops;
+
+    function resize() {
+      mc.width = window.innerWidth;
+      mc.height = window.innerHeight;
+      cols = Math.floor(mc.width / 16);
+      drops = new Array(cols).fill(0).map(() => Math.random() * -40);
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    function drawFrame() {
+      mctx.fillStyle = "rgba(3,5,7,0.16)";
+      mctx.fillRect(0, 0, mc.width, mc.height);
+      mctx.font = "13px monospace";
+      for (let i = 0; i < cols; i++) {
+        const char = CHARS[Math.floor(Math.random() * CHARS.length)];
+        const x = i * 16;
+        const y = drops[i] * 16;
+        mctx.fillStyle = Math.random() < 0.05 ? "rgba(200,255,240,0.8)" : "rgba(90,180,170,0.45)";
+        mctx.fillText(char, x, y);
+        if (y > mc.height && Math.random() > 0.975) drops[i] = 0;
+        drops[i]++;
+      }
+    }
+
+    if (REDUCED_MOTION_MQ) {
+      // Render a handful of frames to a settled state, then stop — depth
+      // cue stays visible without a perpetual animation loop.
+      for (let i = 0; i < 40; i++) drawFrame();
+      return;
+    }
+    (function loop() { drawFrame(); requestAnimationFrame(loop); })();
+  })();
 
   /* ---------------------------------------------------------------
    * 1. Build a luminance mask of a stylized front-facing face using
@@ -515,7 +594,114 @@
   });
 
   const points = new THREE.Points(geometry, material);
-  scene.add(points);
+
+  /* ---------------------------------------------------------------
+   * 2b. Wireframe "mesh head" layer. The reference video's head is a
+   *     triangulated grid mesh with a bright dot at every vertex, not a
+   *     particle-noise cloud — the particle layer above alone can't
+   *     reproduce that. This adds the missing structural layer: a
+   *     low-poly sphere squashed into a head/oval shape, tapered to a
+   *     jaw/chin below the midline, with a brow ridge and nose bump
+   *     pushed outward on the front-facing vertices only, rendered as
+   *     glowing line edges plus a bright node dot at every vertex
+   *     (reusing the same soft sprite texture as the particle layer).
+   * ------------------------------------------------------------- */
+  function buildHeadWireframe() {
+    const sphere = new THREE.SphereGeometry(1.62, 28, 20);
+    const posAttr = sphere.attributes.position;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < posAttr.count; i++) {
+      v.fromBufferAttribute(posAttr, i);
+      const ny = v.y / 1.62; // -1 (chin) .. 1 (crown)
+      let x = v.x * 0.76;
+      let z = v.z * 0.82;
+      const y = v.y * 0.85; // shorten overall so it reads as a head, not an egg
+      if (ny < -0.05) {
+        // Saturate the taper by ny=-0.6 so the lower quarter (jaw+chin)
+        // stays at a rounded plateau width instead of narrowing all the
+        // way to the sphere's pole — otherwise it reads as a pointed
+        // teardrop instead of a jawline.
+        const tt = Math.min(1, (-ny - 0.05) / 0.55);
+        const eased = tt * tt * (3 - 2 * tt);
+        const taper = 1 - eased * 0.4;
+        x *= taper;
+        z *= taper;
+      }
+      const front = Math.max(0, z) / 0.82; // 0..1, 1 = directly facing camera
+      if (front > 0.55) {
+        const noseBand = Math.max(0, 1 - Math.abs(ny + 0.05) / 0.35);
+        z += noseBand * front * 0.16 * Math.max(0, 1 - Math.abs(x) / 0.35);
+        const browBand = Math.max(0, 1 - Math.abs(ny - 0.12) / 0.12);
+        z += browBand * front * 0.05;
+      }
+      posAttr.setXYZ(i, x, y, z);
+    }
+    posAttr.needsUpdate = true;
+
+    const wireGeo = new THREE.WireframeGeometry(sphere);
+    const wireMat = new THREE.LineBasicMaterial({
+      color: 0x8fe8f5, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending,
+    });
+    const wireframe = new THREE.LineSegments(wireGeo, wireMat);
+
+    const nodeGeo = new THREE.BufferGeometry();
+    nodeGeo.setAttribute("position", posAttr.clone());
+    const nodeMat = new THREE.PointsMaterial({
+      size: 0.05, map: spriteTex, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, color: 0xdfffff,
+    });
+    const nodes = new THREE.Points(nodeGeo, nodeMat);
+
+    const group = new THREE.Group();
+    group.add(wireframe, nodes);
+    return group;
+  }
+  const headWire = buildHeadWireframe();
+
+  const faceGroup = new THREE.Group();
+  faceGroup.add(points, headWire);
+  scene.add(faceGroup);
+
+  /* ---------------------------------------------------------------
+   * 2c. Orbiting rings with satellite dots (cyan + amber), echoing the
+   *     "orbiting data nodes" ring motif around the head in the
+   *     reference video — plain line loops + small spheres, no extra
+   *     assets needed.
+   * ------------------------------------------------------------- */
+  function buildOrbitRing(radius, color, tiltX, tiltZ, satelliteCount, speed) {
+    const segs = 96;
+    const curvePoints = [];
+    for (let i = 0; i <= segs; i++) {
+      const a = (i / segs) * Math.PI * 2;
+      curvePoints.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius * 0.32, 0));
+    }
+    const ringGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
+    const ringMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending });
+    const ringLine = new THREE.LineLoop(ringGeo, ringMat);
+
+    const group = new THREE.Group();
+    group.add(ringLine);
+    group.rotation.x = tiltX;
+    group.rotation.z = tiltZ;
+
+    const satGeo = new THREE.SphereGeometry(0.045, 10, 10);
+    const satMat = new THREE.MeshBasicMaterial({ color });
+    const satellites = [];
+    for (let s = 0; s < satelliteCount; s++) {
+      const mesh = new THREE.Mesh(satGeo, satMat);
+      const offset = (s / satelliteCount) * Math.PI * 2;
+      mesh.position.set(Math.cos(offset) * radius, Math.sin(offset) * radius * 0.32, 0);
+      group.add(mesh);
+      satellites.push({ mesh, offset });
+    }
+    return { group, satellites, radius, speed };
+  }
+  const orbitRings = [
+    buildOrbitRing(2.0, 0x6fd8e8, 0.25, 0.1, 2, 0.4),
+    buildOrbitRing(2.25, 0xffb15c, -0.35, 0.5, 2, -0.3),
+    buildOrbitRing(1.85, 0x6fd8e8, 0.6, -0.4, 1, 0.55),
+  ];
+  orbitRings.forEach((r) => scene.add(r.group));
 
   /* Thin wireframe ring beneath the head, like a scan plane. */
   const ringGeo = new THREE.RingGeometry(1.55, 1.58, 64);
@@ -567,8 +753,14 @@
     if (!inGlitch) rgbSplit.style.opacity = String(Math.max(0, parseFloat(rgbSplit.style.opacity || "0") - 0.06));
 
     if (!REDUCED_MOTION) {
-      points.rotation.y = Math.sin(t * 0.18) * 0.35;
-      points.rotation.x = Math.sin(t * 0.11) * 0.06;
+      faceGroup.rotation.y = Math.sin(t * 0.18) * 0.35;
+      faceGroup.rotation.x = Math.sin(t * 0.11) * 0.06;
+      orbitRings.forEach((r) => {
+        r.satellites.forEach((s) => {
+          const a = t * r.speed + s.offset;
+          s.mesh.position.set(Math.cos(a) * r.radius, Math.sin(a) * r.radius * 0.32, 0);
+        });
+      });
     }
     if (!REDUCED_MOTION) ring.rotation.z = t * 0.15;
 
