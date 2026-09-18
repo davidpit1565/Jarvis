@@ -161,6 +161,7 @@ function main() {
     baseUrl: config.anthropicBaseUrl,
   });
   const confirmationService = new ConfirmationService(confirmViaChat);
+  const phoneConfirmationService = new ConfirmationService(denyPhoneConfirmation);
 
   const orchestrator = new Orchestrator({
     brain,
@@ -188,7 +189,7 @@ function main() {
       eventBus,
       deviceRegistry,
       deviceConnectionManager,
-      confirmationService,
+      confirmationService: phoneConfirmationService,
       channelContext: "This conversation is happening over a live phone call right now.",
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
     });
@@ -220,7 +221,7 @@ function main() {
       eventBus,
       deviceRegistry,
       deviceConnectionManager,
-      confirmationService,
+      confirmationService: phoneConfirmationService,
       channelContext:
         "This is a scheduled wake-up call that JARVIS itself just placed — the user didn't call in, JARVIS " +
         "called them. Open by greeting them and telling them it's time to get up, giving one real, specific, " +
@@ -465,6 +466,25 @@ async function confirmViaChat(request: ConfirmationRequest): Promise<boolean> {
     `\n⚠️  JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Approve? (yes/no): `
   );
   return answer.trim().toLowerCase().startsWith("y");
+}
+
+/**
+ * Phone sessions get their own ConfirmationService using this prompter,
+ * instead of sharing confirmViaChat's terminal-bound one — otherwise a
+ * CONFIRM/DANGEROUS tool requested mid-call (e.g. UNLINK_CALENDAR,
+ * CLEAR_CONVERSATION_HISTORY) would silently hang the live call for the
+ * full 60s timeout waiting on a terminal prompt nobody on the phone can
+ * see or answer, before auto-denying anyway. This resolves immediately
+ * instead, denying the action outright: voice confirmation of a real,
+ * high-impact action is inherently unreliable (background noise,
+ * misheard "yes", someone else picking up the phone), so an immediate,
+ * clear denial — Claude can then tell the caller to do it from the
+ * terminal/dashboard instead — is the right behavior here, not a
+ * workaround for a technical limitation.
+ */
+async function denyPhoneConfirmation(request: ConfirmationRequest): Promise<boolean> {
+  console.log(`[jarvis] denied "${request.toolName}" over the phone — confirmation isn't supported on this channel`);
+  return false;
 }
 
 /**

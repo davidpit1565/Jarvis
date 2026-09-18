@@ -204,21 +204,29 @@ being unconditionally denied:
   call on **every single invocation**, no exceptions.
 - `src/core/confirmation/ConfirmationService.ts` defines the gate as a
   small `ConfirmationPrompter` function (`(request) => Promise<boolean>`),
-  decoupled from any particular UI. Today's only prompter asks in the
-  terminal chat (`confirmViaChat` in `src/index.ts`); a future channel
-  (push notification, a spoken yes/no over the phone gateway below) is
-  just a different prompter passed to the same `ConfirmationService` — no
-  change needed in the `Orchestrator`.
+  decoupled from any particular UI. The terminal chat session uses
+  `confirmViaChat` (asks in the terminal via `readline.question()`); a
+  future richer channel (a push notification, say) is just a different
+  prompter passed to the same `ConfirmationService` — no change needed in
+  the `Orchestrator`.
 - The `Orchestrator` calls this gate from one shared `authorize()` method
   used by both local and device tool execution, so the policy can't drift
   between the two paths.
-- **Bounded by a 60-second timeout that defaults to deny.** A `CONFIRM`/
-  `DANGEROUS` tool call during a phone call would otherwise route to the
-  terminal's `confirmViaChat` — which sits on `readline.question()` with
-  nobody at the terminal to answer it, since everyone using JARVIS right
-  now is on the phone, not the machine it runs on. Without a timeout, that
-  hangs the call's conversation turn forever; with one, it resolves to "no"
-  and the call continues instead of silently freezing.
+- **Bounded by a 60-second timeout that defaults to deny**, as a backstop
+  for any prompter that never answers.
+- **Phone sessions (inbound calls and outbound wake-up calls) use a
+  separate `ConfirmationService` that denies immediately**, rather than
+  sharing the terminal's — found and fixed during this session's own
+  review: a `CONFIRM`/`DANGEROUS` tool call mid-call (e.g.
+  `UNLINK_CALENDAR`, `CLEAR_CONVERSATION_HISTORY`) would otherwise have
+  silently routed to the terminal's `confirmViaChat`, hanging the live
+  call for the full 60-second timeout while nobody at the terminal could
+  see or answer it, before auto-denying anyway. An immediate denial isn't
+  a workaround for that limitation — voice confirmation of a real,
+  high-impact action is inherently unreliable (background noise, a
+  misheard "yes," someone else picking up the phone), so denying
+  outright and having Claude tell the caller to do it from the terminal/
+  dashboard instead is the actually-correct behavior here.
 
 ## Architecture
 
