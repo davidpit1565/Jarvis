@@ -38,14 +38,18 @@ Clicking the button while on `file://` shows an explicit
 There's no 3D face model/asset, and no external mesh is loaded. Two layers
 are combined:
 
-1. **A wireframe grid head** — a procedurally-displaced low-poly sphere
-   (squashed into a head/oval shape, tapered to a rounded jaw/chin, with a
-   brow ridge and nose bump pushed out on the front-facing vertices only,
-   and two small bright eye spheres seated on the same surface curve),
-   rendered as glowing `THREE.LineSegments` edges plus a bright dot at
-   every vertex. This is the structural layer that reads as "digital face"
-   at a glance, matching the reference video's dominant visual — a
-   triangulated mesh grid, not a photo-like cloud of noise.
+1. **A wireframe grid head** — a procedurally-displaced low-poly sphere,
+   proportioned like an actual human head/face (taller than wide, not a
+   rounder "ball" — an earlier attempt at fixing an alien-looking head
+   overcorrected into that): tapered to a rounded jaw/chin, a brow ridge,
+   a real protruding nose (bridge, tip bulb, and nostril flare — not one
+   soft general bump), a cheekbone ridge with a cheek hollow just below
+   it, two small bright eye spheres seated on the surface curve, and a
+   short wireframe neck underneath instead of the head floating with
+   nothing below it. Rendered as glowing `THREE.LineSegments` edges plus a
+   bright dot at every vertex — the structural layer that reads as
+   "digital face" at a glance, matching the reference video's dominant
+   visual (a triangulated mesh grid, not a photo-like cloud of noise).
 2. **A particle shimmer layer wrapped onto that same surface** — `index.html`
    separately draws a stylized face mask (head silhouette, eye sockets,
    nose/mouth shading, a procedural circuit-trace overlay) onto an

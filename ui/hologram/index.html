@@ -352,13 +352,12 @@
     headGrad.addColorStop(1, "rgba(255,255,255,0)");
     ctx.fillStyle = headGrad;
     ctx.beginPath();
-    // Half-height kept close to half-width (rounder, less "egg") so this
-    // silhouette's proportions roughly match the wireframe head's own
-    // HEAD_SX/HEAD_SY ratio it gets projected onto further down — a much
-    // taller-than-wide mask here previously stuck out past the wireframe
-    // head's actual crown/chin as a stray particle "spike" when viewed
-    // from the side.
-    ctx.ellipse(0, 0, size * 0.27, size * 0.3, 0, 0, Math.PI * 2);
+    // Proportioned to roughly match the wireframe head's own
+    // HEAD_SX/HEAD_SY ratio it gets projected onto further down (an
+    // elongated human oval, not a rounder ball) — a mismatch here
+    // previously stuck out past the wireframe head's actual crown/chin as
+    // a stray particle "spike" when viewed from the side.
+    ctx.ellipse(0, 0, size * 0.27, size * 0.36, 0, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.globalCompositeOperation = "destination-out";
@@ -579,9 +578,13 @@
   // card (which is what made it look like a 2D mask rather than a head
   // when viewed from any angle but straight-on).
   const HEAD_R = 1.62;
-  const HEAD_SX = 0.82; // width — wider than the original 0.76, less "alien skull"
-  const HEAD_SY = 0.80; // height — shorter than the original 0.85, rounder overall
-  const HEAD_SZ = 0.82; // depth
+  // Taller than wide, like an actual human head/face — a near-circular
+  // head (an earlier attempt at "less alien") wasn't the fix; the
+  // reference video's head is a clearly elongated oval with a real nose,
+  // cheekbones, and a jaw narrower than the crown.
+  const HEAD_SX = 0.7; // width
+  const HEAD_SY = 0.94; // height
+  const HEAD_SZ = 0.86; // depth — a bit deeper to leave room for the nose
 
   const MASK_SIZE = 340;
   const mask = buildFaceMask(MASK_SIZE);
@@ -746,11 +749,34 @@
         z *= taper;
       }
       const front = Math.max(0, z) / HEAD_SZ; // 0..1, 1 = directly facing camera
-      if (front > 0.55) {
-        const noseBand = Math.max(0, 1 - Math.abs(ny + 0.05) / 0.35);
-        z += noseBand * front * 0.16 * Math.max(0, 1 - Math.abs(x) / 0.35);
+      const xf = x / (HEAD_R * HEAD_SX); // -1..1, width-relative (scale-independent)
+      if (front > 0.5) {
+        // Brow ridge.
         const browBand = Math.max(0, 1 - Math.abs(ny - 0.12) / 0.12);
-        z += browBand * front * 0.05;
+        z += browBand * front * 0.055;
+
+        // Nose: a bridge running from the brow down to the tip, narrow in
+        // x, growing stronger toward the tip, plus a small rounder bulb
+        // right at the tip and a slight nostril-flare widening just above
+        // it — an actual protruding nose instead of one soft general bump.
+        const noseXFall = Math.max(0, 1 - Math.abs(xf) / 0.11);
+        const bridgeBand = Math.max(0, Math.min(1, (0.1 - ny) / 0.3)); // 0 at brow, 1 at tip
+        z += noseXFall * bridgeBand * front * 0.22;
+        const tipBand = Math.max(0, 1 - Math.abs(ny + 0.16) / 0.06);
+        z += tipBand * noseXFall * front * 0.12;
+        const flareXFall = Math.max(0, 1 - Math.abs(Math.abs(xf) - 0.09) / 0.05);
+        const flareYBand = Math.max(0, 1 - Math.abs(ny + 0.18) / 0.05);
+        z += flareXFall * flareYBand * front * 0.06;
+
+        // Cheekbone ridge, with a slight hollow just below/outside it —
+        // the wireframe grid is coarse, but this is enough to break up a
+        // perfectly smooth dome into something with real facial contour.
+        const cheekXFall = Math.max(0, 1 - Math.abs(Math.abs(xf) - 0.62) / 0.16);
+        const cheekYBand = Math.max(0, 1 - Math.abs(ny + 0.08) / 0.14);
+        z += cheekXFall * cheekYBand * front * 0.07;
+        const hollowXFall = Math.max(0, 1 - Math.abs(Math.abs(xf) - 0.66) / 0.14);
+        const hollowYBand = Math.max(0, 1 - Math.abs(ny + 0.3) / 0.13);
+        z -= hollowXFall * hollowYBand * front * 0.05;
       }
       posAttr.setXYZ(i, x, y, z);
     }
@@ -775,6 +801,26 @@
     return group;
   }
   const headWire = buildHeadWireframe();
+
+  /* ---------------------------------------------------------------
+   * 2b-0. A neck — every reference frame shows the head sitting on a
+   *     visible neck/collar, not floating with nothing underneath it.
+   *     A short wireframe cone, same material style as the head.
+   * ------------------------------------------------------------- */
+  function buildNeck() {
+    const topR = HEAD_R * HEAD_SX * 0.42;
+    const bottomR = HEAD_R * HEAD_SX * 0.36;
+    const height = HEAD_R * HEAD_SY * 0.5;
+    const topY = -HEAD_R * HEAD_SY * 0.62;
+    const cone = new THREE.CylinderGeometry(topR, bottomR, height, 16, 3, true);
+    cone.translate(0, topY - height / 2, 0);
+    const wireGeo = new THREE.WireframeGeometry(cone);
+    const wireMat = new THREE.LineBasicMaterial({
+      color: 0x8fe8f5, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending,
+    });
+    return new THREE.LineSegments(wireGeo, wireMat);
+  }
+  headWire.add(buildNeck());
 
   /* ---------------------------------------------------------------
    * 2b-i. Eyes. A smooth grid dome with no eyes reads as an alien, not a
@@ -879,8 +925,8 @@
    * ------------------------------------------------------------- */
   function buildMouth() {
     const segs = 8;
-    const width = 0.34;
-    const baseY = -0.62;
+    const width = HEAD_R * HEAD_SX * 0.5;
+    const baseY = -HEAD_R * HEAD_SY * 0.44;
     // Same front-surface projection as the eyes, evaluated at the mouth's
     // position, so it sits on the wireframe's actual surface instead of a
     // depth value left over from the old (narrower/taller) proportions.
