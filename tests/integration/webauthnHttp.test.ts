@@ -77,6 +77,22 @@ describe("WebAuthn (Face ID / Touch ID) HTTP routes", () => {
     expect(options.rp.id).toBe("localhost");
   });
 
+  test("too many register-options attempts from the same IP are rate-limited with 429", async () => {
+    const { handle, port } = setupServer({ withAuth: true });
+    activeHandle = handle;
+
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const response = await fetch(`http://localhost:${port}/auth/register-options`, {
+        method: "POST",
+        headers: { "X-Jarvis-Admin-Token": "wrong" },
+      });
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
+  });
+
   test("login-options requires no secret", async () => {
     const { handle, port } = setupServer({ withAuth: true });
     activeHandle = handle;

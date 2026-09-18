@@ -1064,6 +1064,12 @@ export class JarvisWebSocketServer {
       return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
     }
 
+    if (url.pathname === "/auth/register-options" || url.pathname === "/auth/register") {
+      if (!this.rateLimiter.attempt(rateLimitKey(req, server, "auth-register"))) {
+        return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+      }
+    }
+
     if (req.method === "POST" && url.pathname === "/auth/register-options") {
       if (!adminToken || !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
         return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });

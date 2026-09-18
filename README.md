@@ -1082,13 +1082,17 @@ conversations too, not just the current one.
   self-approve it into a trusted device with no human involved. Found
   and fixed during this session's own review, once the new `Dockerfile`/
   `fly.toml` made this endpoint publicly reachable for the first time.
-- `POST /pairing/approve`, `POST /pairing/revoke`, `POST /auth/login`, and
+- `POST /pairing/approve`, `POST /pairing/revoke`, `POST /auth/login`,
+  `POST /auth/register-options`, `POST /auth/register`, and
   the WebSocket `device.register` message are all rate-limited (10
   attempts per 5 minutes, per client IP — `src/communication/websocket/RateLimiter.ts`):
   every attempt counts against the limit whether it succeeds or fails, so
-  a 6-digit pairing code (or repeated WebAuthn verification attempts, or
-  spamming fake device registrations to fill `DeviceRegistry` with junk)
-  can't be brute-forced or spammed by hammering the endpoint. In-memory
+  a 6-digit pairing code (or repeated WebAuthn verification/registration
+  attempts, or spamming fake device registrations to fill `DeviceRegistry`
+  with junk) can't be brute-forced or spammed by hammering the endpoint.
+  Registration is already gated behind the admin token, but rate-limiting
+  it too means a leaked or guessed token can't be used to hammer the
+  endpoint indefinitely either. In-memory
   and per-process, resetting on restart — a deliberate simplicity tradeoff
   for a single-instance personal assistant. "Per client IP" actually means
   the `Fly-Client-IP` header, but **only when `FLY_APP_NAME` confirms this
