@@ -88,6 +88,26 @@ class MockDeviceConnection implements DeviceConnection {
 }
 
 describe("Orchestrator integration", () => {
+  test("rejects an oversized message before it ever reaches the brain or conversation history", async () => {
+    const brain = new ScriptedBrain([]); // would throw if ever called — proves the brain is never reached
+    const { orchestrator, conversation } = setup(brain);
+
+    const response = await orchestrator.handleUserMessage("user-1", "x".repeat(8_001));
+
+    expect(response).toContain("too long");
+    expect(brain.callCount).toBe(0);
+    expect(conversation.getMessages()).toHaveLength(0);
+  });
+
+  test("accepts a message right at the length limit", async () => {
+    const brain = new ScriptedBrain([{ text: "ok", toolCalls: [], stopReason: "end_turn" }]);
+    const { orchestrator } = setup(brain);
+
+    const response = await orchestrator.handleUserMessage("user-1", "x".repeat(8_000));
+
+    expect(response).toBe("ok");
+  });
+
   test("completes a full mocked Claude -> tool -> result -> Claude loop", async () => {
     const tool = makeEchoTool("ECHO_TOOL");
     const brain = new ScriptedBrain([

@@ -33,6 +33,15 @@ export interface OrchestratorDependencies {
 }
 
 const MAX_TOOL_ITERATIONS = 5;
+/**
+ * Generous for any real message (a long paste, a rambling phone
+ * transcript) but bounded — without this, a single oversized message
+ * (accidental paste, or a caller deliberately trying to run up cost/abuse
+ * the phone gateway) would go straight into the model with no limit at
+ * all. Rejected before touching the conversation or the brain at all, so
+ * it costs nothing and never pollutes conversation history.
+ */
+const MAX_USER_MESSAGE_LENGTH = 8_000;
 
 /**
  * The central JARVIS loop: user message -> Claude -> tool decision ->
@@ -48,6 +57,13 @@ export class Orchestrator {
   async handleUserMessage(userId: string, content: string): Promise<string> {
     const { brain, conversation, toolRegistry, eventBus, channelContext } = this.deps;
     const systemPrompt = channelContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${channelContext}` : JARVIS_SYSTEM_PROMPT;
+
+    if (content.length > MAX_USER_MESSAGE_LENGTH) {
+      return (
+        `That message is too long (${content.length} characters, limit ${MAX_USER_MESSAGE_LENGTH}) — ` +
+        "please send something shorter."
+      );
+    }
 
     conversation.addUserMessage(content);
 

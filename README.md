@@ -695,6 +695,10 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
 - A top-level `uncaughtException`/`unhandledRejection` handler logs and
   keeps the process running instead of a single unrelated bug crashing
   every open phone call and device connection at once.
+- `Orchestrator.handleUserMessage` rejects a message over 8,000 characters
+  before it ever reaches the brain or conversation history — an
+  accidental huge paste or a caller trying to run up cost/abuse the phone
+  gateway costs nothing and never pollutes conversation history.
 
 ## Current limitations
 
