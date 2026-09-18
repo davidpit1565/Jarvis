@@ -772,16 +772,24 @@
     const lineCount = 80;
     const lineEndpoints = new Array(lineCount);
     const linePositions = new Float32Array(lineCount * 2 * 3);
+    // Real neuron firing is a flash-then-decay event at a synapse, not a
+    // constant glow — each rewired connection now flashes to full
+    // brightness and fades, instead of every synapse sitting at the same
+    // fixed opacity regardless of whether it was just "fired."
+    const fireLevels = new Float32Array(lineCount);
     function rewire(i) {
       const ia = Math.floor(Math.random() * n);
       const ib = Math.floor(Math.random() * n);
       lineEndpoints[i] = [ia, ib];
+      fireLevels[i] = 1;
     }
     for (let i = 0; i < lineCount; i++) rewire(i);
     const lineGeo = new THREE.BufferGeometry();
     lineGeo.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
+    const lineColors = new Float32Array(lineCount * 2 * 3);
+    lineGeo.setAttribute("color", new THREE.BufferAttribute(lineColors, 3));
     const lineMat = new THREE.LineBasicMaterial({
-      color: 0xffb15c, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending,
+      vertexColors: true, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending,
     });
     const lines = new THREE.LineSegments(lineGeo, lineMat);
 
@@ -791,6 +799,7 @@
       group, pointsMat: points.material, lineMat,
       n, basePositions, phases, posAttr: geo.attributes.position,
       lineEndpoints, lineGeo, rewire,
+      lineColorAttr: lineGeo.attributes.color, fireLevels, baseLineColorObj: new THREE.Color(0xffb15c),
     };
   }
 
@@ -892,12 +901,30 @@
       positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
       phases[i] = Math.random() * Math.PI * 2;
     }
+    // Per-particle depth tint — real volumetric read, not a flat-colored
+    // point cloud. A single uniform color on every particle is exactly
+    // why direct feedback kept reading this as "a flat disc/blob" even
+    // once it swirled organically: there's no cue for which particles are
+    // near vs. far. Recomputed every frame in animate() from each
+    // particle's fixed direction dotted against the CAMERA's direction in
+    // the Core's own rotated local space (cheap — one vector per frame,
+    // then a dot product per particle — instead of a full world-space
+    // transform per particle) — particles facing the camera (near side)
+    // render at full brightness, particles on the far side dim down, the
+    // same "backface dimming" cue real-time point-cloud renderers use for
+    // depth without per-pixel lighting.
+    const colors = new Float32Array(n * 3);
+    const baseColorObj = new THREE.Color(color);
+    for (let i = 0; i < n; i++) {
+      colors[i * 3] = baseColorObj.r; colors[i * 3 + 1] = baseColorObj.g; colors[i * 3 + 2] = baseColorObj.b;
+    }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geo.setAttribute("aPhase", new THREE.BufferAttribute(phases, 1));
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     const mat = new THREE.PointsMaterial({
       size: 0.05, map: spriteTex, transparent: true, depthWrite: false,
-      blending: THREE.AdditiveBlending, color, opacity: 0.78,
+      blending: THREE.AdditiveBlending, vertexColors: true, opacity: 0.78,
     });
     addSizePulse(mat, 1.4, 0.4);
     const points = new THREE.Points(geo, mat);
@@ -909,14 +936,21 @@
     const lineCount = Math.round(n * 0.12);
     const lineEndpoints = new Array(lineCount);
     const linePositions = new Float32Array(lineCount * 2 * 3);
+    const lineFireLevels = new Float32Array(lineCount);
     function rewireLine(i) {
       lineEndpoints[i] = [Math.floor(Math.random() * n), Math.floor(Math.random() * n)];
+      // A freshly-picked tendril flashes bright, like a real energy pulse
+      // arriving at a new connection, then decays in animate() — not a
+      // fixed always-on opacity for every thread regardless of age.
+      lineFireLevels[i] = 1;
     }
     for (let i = 0; i < lineCount; i++) rewireLine(i);
     const lineGeo = new THREE.BufferGeometry();
     lineGeo.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
+    const lineColors = new Float32Array(lineCount * 2 * 3);
+    lineGeo.setAttribute("color", new THREE.BufferAttribute(lineColors, 3));
     const lineMat = new THREE.LineBasicMaterial({
-      color: lineColor, transparent: true, opacity: 0.26, blending: THREE.AdditiveBlending,
+      vertexColors: true, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending,
     });
     const lines = new THREE.LineSegments(lineGeo, lineMat);
 
@@ -925,6 +959,8 @@
     return {
       group, pointsMat: mat, n, basePositions, positions, directions, baseRadius,
       posAttr: geo.attributes.position, lineEndpoints, lineGeo, rewireLine,
+      colorAttr: geo.attributes.color, baseColorObj,
+      lineColorAttr: lineGeo.attributes.color, lineFireLevels, baseLineColorObj: new THREE.Color(lineColor),
     };
   }
   const flowShell = buildFlowShell(1.7, 1200, 0x8fe6f2, 0x6fd8e8);
@@ -1021,6 +1057,7 @@
       }
     `,
     fragmentShader: `
+      uniform float uTime;
       uniform float uAudio;
       uniform float uThink;
       uniform vec3 uColorOuter;
@@ -1034,7 +1071,20 @@
         fresnel = pow(fresnel, 1.8 + uAudio * 1.6);
         vec3 color = mix(uColorOuter, uColorInner, clamp(uThink * 1.3, 0.0, 1.0));
         color += vNoise * 0.08;
-        float alpha = fresnel * (0.55 + uAudio * 0.35 + uThink * 0.2);
+
+        // A slow-orbiting "energy glint" — a moving specular highlight,
+        // not a fixed studio light. Real production force-field/orb VFX
+        // (and any real glassy/metallic surface) show a highlight that
+        // travels across the surface as the object turns or the light
+        // source itself drifts; a fresnel rim alone lights every edge
+        // equally and never actually catches the light anywhere, which
+        // reads as flat/matte rather than a genuinely lit energy field.
+        vec3 lightDir = normalize(vec3(sin(uTime * 0.31), cos(uTime * 0.24), 0.55));
+        float spec = pow(max(dot(normalize(vNormalW), lightDir), 0.0), 26.0);
+        spec *= 0.5 + uAudio * 0.8 + uThink * 0.4;
+        color += spec * 1.4;
+
+        float alpha = fresnel * (0.55 + uAudio * 0.35 + uThink * 0.2) + spec * 0.4;
         gl_FragColor = vec4(color, alpha);
       }
     `,
@@ -1089,16 +1139,56 @@
   // Two crossing orbit rings, continuously and independently rotating —
   // this page's own identity now, not echoing one shot of a reference
   // video. Spin faster with voice activity, same as the outer shell.
+  //
+  // These used to be a flat MeshBasicMaterial ring — uniform color and
+  // brightness all the way around, which (combined with the crossing-
+  // ellipse layout) is exactly what a set of Saturn/planetary rings looks
+  // like. A real "arc reactor"/energy-conduit ring has traveling bright
+  // nodes circling it, not a static painted band — buildEnergyRing() below
+  // uses a small ShaderMaterial that computes each fragment's angle
+  // around the ring (atan2 of its local position) and brightens a few
+  // lobes that sweep around it over time, so the ring itself visibly
+  // carries moving energy instead of just spinning as a rigid whole.
+  function buildEnergyRing(innerR, outerR, color, speed, lobes) {
+    const geo = new THREE.RingGeometry(innerR, outerR, 96);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+      uniforms: {
+        uTime: { value: 0 },
+        uColor: { value: new THREE.Color(color) },
+        uSpeed: { value: speed },
+        uLobes: { value: lobes },
+        uBase: { value: 0.4 },
+      },
+      vertexShader: `
+        varying vec3 vPos;
+        void main() {
+          vPos = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform vec3 uColor;
+        uniform float uSpeed;
+        uniform float uLobes;
+        uniform float uBase;
+        varying vec3 vPos;
+        void main() {
+          float angle = atan(vPos.y, vPos.x);
+          float pulse = pow(0.5 + 0.5 * sin(angle * uLobes - uTime * uSpeed), 4.0);
+          float bright = uBase + (1.0 - uBase) * pulse;
+          gl_FragColor = vec4(uColor * bright, bright * 0.85);
+        }
+      `,
+    });
+    return new THREE.Mesh(geo, mat);
+  }
   const ringsGroup = new THREE.Group();
-  const orbitRingGeo = new THREE.RingGeometry(2.05, 2.09, 80);
-  const orbitRing1 = new THREE.Mesh(orbitRingGeo, new THREE.MeshBasicMaterial({
-    color: 0x6fd8e8, transparent: true, opacity: 0.45, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
-  }));
+  const orbitRing1 = buildEnergyRing(2.05, 2.09, 0x6fd8e8, 1.7, 3.0);
   orbitRing1.rotation.x = Math.PI / 2 + 0.35;
   ringsGroup.add(orbitRing1);
-  const orbitRing2 = new THREE.Mesh(orbitRingGeo, new THREE.MeshBasicMaterial({
-    color: 0xffb15c, transparent: true, opacity: 0.4, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
-  }));
+  const orbitRing2 = buildEnergyRing(2.05, 2.09, 0xffb15c, -1.3, 2.0);
   orbitRing2.rotation.x = Math.PI / 2 - 0.35;
   orbitRing2.rotation.y = 0.6;
   ringsGroup.add(orbitRing2);
@@ -1121,6 +1211,96 @@
   ring.rotation.x = Math.PI / 2 - 0.15;
   ring.position.y = -2.0;
   scene.add(ring);
+
+  // A real 3D depth-dust layer — tiny, dim points scattered in a large
+  // shell around the whole scene (not the Core itself), drifting slowly
+  // on its own independent rotation. The only depth cue in the room
+  // before this was the 2D "matrix rain" canvas *behind* the WebGL scene
+  // (a flat backdrop) — nothing existed *in* the actual 3D space around
+  // the Core to parallax against as the camera orbits, so orbiting always
+  // felt like turning a camera around a prop on an empty stage rather
+  // than moving through a real volume. 260 points spread through a
+  // spherical shell well outside the Core's own radius, each a fixed,
+  // small size (no size-pulse — this is background, not part of the
+  // Core's own "alive" reactivity) and very dim, so it reads as depth
+  // haze, not a second visible object competing with the Core.
+  function buildDepthDust(count, radius) {
+    const positions = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const u = Math.random(), v = Math.random();
+      const theta = 2 * Math.PI * u;
+      const phi = Math.acos(2 * v - 1);
+      const r = radius * (0.55 + Math.random() * 0.45);
+      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      positions[i * 3 + 2] = r * Math.cos(phi);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      size: 0.035, map: spriteTex, color: 0x5fb8d0, transparent: true,
+      opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    return new THREE.Points(geo, mat);
+  }
+  const depthDust = buildDepthDust(260, 9);
+  scene.add(depthDust);
+
+  // Pooled "shockwave" bursts — a real, visible ring that expands and
+  // fades outward whenever a real (or labeled-demo) brain.request/
+  // brain.response event lands (see spawnShockwave(), called from
+  // pushActivityLine() below). Before this, a real thought only ever
+  // showed up as the existing brainPulse brightening/growing the Core in
+  // place — legible if you're staring right at the center, easy to miss
+  // otherwise. An expanding ring is the same "something just happened"
+  // language real HUD/sonar/radar interfaces already use for a discrete
+  // event, layered on top of the continuous brainPulse growth rather than
+  // replacing it. Billboarded (a Sprite, not a flat 3D ring) so it always
+  // faces the camera regardless of orbit angle, drawn from a dedicated
+  // ring-shaped gradient texture (bright band, transparent center and
+  // edges) rather than the halo's filled-disc texture.
+  const shockwaveCanvas = document.createElement("canvas");
+  shockwaveCanvas.width = shockwaveCanvas.height = 128;
+  const swctx = shockwaveCanvas.getContext("2d");
+  const swGrad = swctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  swGrad.addColorStop(0.0, "rgba(255,255,255,0)");
+  swGrad.addColorStop(0.62, "rgba(255,255,255,0)");
+  swGrad.addColorStop(0.72, "rgba(255,255,255,0.9)");
+  swGrad.addColorStop(0.82, "rgba(255,255,255,0.9)");
+  swGrad.addColorStop(0.92, "rgba(255,255,255,0)");
+  swGrad.addColorStop(1.0, "rgba(255,255,255,0)");
+  swctx.fillStyle = swGrad;
+  swctx.fillRect(0, 0, 128, 128);
+  const shockwaveTex = new THREE.CanvasTexture(shockwaveCanvas);
+  const SHOCKWAVE_LIFETIME = 0.9;
+  const shockwavePool = [];
+  for (let i = 0; i < 5; i++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: shockwaveTex, color: 0xffb15c, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0,
+    }));
+    sp.visible = false;
+    sp.scale.set(2, 2, 1);
+    scene.add(sp);
+    shockwavePool.push({ mesh: sp, active: false, start: 0 });
+  }
+  let shockwaveCursor = 0;
+  function spawnShockwave() {
+    const sw = shockwavePool[shockwaveCursor];
+    shockwaveCursor = (shockwaveCursor + 1) % shockwavePool.length;
+    sw.active = true;
+    sw.start = clock.getElapsedTime();
+    sw.mesh.visible = true;
+  }
+
+  // State-tied halo color — was a fixed cyan regardless of what the Core
+  // was actually doing. Blended toward amber the same way the energy
+  // surface's own color already blends with uThink, so the ambient glow
+  // itself tells you "thinking" at a glance, not just the inner mind
+  // shell and the text state label.
+  const haloColorCyan = new THREE.Color(0x6fd8e8);
+  const haloColorAmber = new THREE.Color(0xffb15c);
+  const haloColorTmp = new THREE.Color();
 
   /* ---------------------------------------------------------------
    * 3. Animation loop: slow auto-rotate, idle shader time, periodic
@@ -1273,6 +1453,14 @@
       if (!REDUCED_MOTION) {
         ringsGroup.rotation.z = t * (0.12 + audioGlow * 0.35);
         ringsGroup.rotation.x = Math.sin(t * 0.2) * 0.15;
+        // A third wobble axis, out of phase with X/Z — without it the
+        // rings' only "extra" motion beyond the Core's own tumble was a
+        // single-axis wobble, which combined with the crossing-ellipse
+        // layout is exactly what a fixed set of planetary rings looks
+        // like from most angles.
+        ringsGroup.rotation.y = Math.sin(t * 0.13 + 1.1) * 0.2;
+        orbitRing1.material.uniforms.uTime.value = t;
+        orbitRing2.material.uniforms.uTime.value = t;
 
         // Real curl-noise advection (see curlNoise3() above): every
         // particle samples the same smooth field at its current position
@@ -1300,6 +1488,18 @@
         // no matter how organic its surface texture is — it needs to move
         // "like a bacterium or a living cell," i.e. the outline itself
         // has to undulate.
+        // Camera direction in the Core's OWN rotated local space (the
+        // Core tumbles freely now — see faceGroup.rotation below — so
+        // "near"/"far" has to be recomputed every frame, not just once).
+        // Cheap: one vector transform per frame, then a dot product per
+        // particle against its already-stored unit direction, instead of
+        // a full per-particle world-space transform.
+        const camLocal = camera.position.clone();
+        faceGroup.worldToLocal(camLocal);
+        if (camLocal.lengthSq() > 1e-6) camLocal.normalize();
+        const fc = flowShell.colorAttr.array;
+        const fbc = flowShell.baseColorObj;
+
         for (let i = 0; i < flowShell.n; i++) {
           const ix = i * 3, iy = ix + 1, iz = ix + 2;
           const dx = fd[ix], dy = fd[iy], dz = fd[iz];
@@ -1309,8 +1509,18 @@
           fp[ix] += c[0] * turbAmp * 0.018 - (fp[ix] - targetX) * 0.05;
           fp[iy] += c[1] * turbAmp * 0.018 - (fp[iy] - targetY) * 0.05;
           fp[iz] += c[2] * turbAmp * 0.018 - (fp[iz] - targetZ) * 0.05;
+
+          // Depth-fog tint: particles on the side facing the camera
+          // (positive dot with the camera's local direction) render at
+          // full brightness, particles on the far side dim toward ~45%
+          // — the "backface dimming" depth cue a flat, uniform-color
+          // point cloud has no way to give.
+          const facing = dx * camLocal.x + dy * camLocal.y + dz * camLocal.z;
+          const fog = 0.45 + 0.55 * (facing * 0.5 + 0.5);
+          fc[ix] = fbc.r * fog; fc[iy] = fbc.g * fog; fc[iz] = fbc.b * fog;
         }
         flowShell.posAttr.needsUpdate = true;
+        flowShell.colorAttr.needsUpdate = true;
 
         const flp = flowShell.lineGeo.attributes.position.array;
         for (let i = 0; i < flowShell.lineEndpoints.length; i++) {
@@ -1319,6 +1529,18 @@
           flp[i * 6 + 3] = fp[ib * 3]; flp[i * 6 + 4] = fp[ib * 3 + 1]; flp[i * 6 + 5] = fp[ib * 3 + 2];
         }
         flowShell.lineGeo.attributes.position.needsUpdate = true;
+
+        // Tendril "energy pulse" flash-and-decay (see rewireLine() above)
+        // instead of a fixed opacity for every thread regardless of age.
+        const flc = flowShell.lineColorAttr.array;
+        const fblc = flowShell.baseLineColorObj;
+        for (let i = 0; i < flowShell.lineFireLevels.length; i++) {
+          flowShell.lineFireLevels[i] *= 0.93;
+          const level = 0.15 + flowShell.lineFireLevels[i] * 0.85;
+          flc[i * 6] = fblc.r * level; flc[i * 6 + 1] = fblc.g * level; flc[i * 6 + 2] = fblc.b * level;
+          flc[i * 6 + 3] = fblc.r * level; flc[i * 6 + 4] = fblc.g * level; flc[i * 6 + 5] = fblc.b * level;
+        }
+        flowShell.lineColorAttr.needsUpdate = true;
 
         if (t > nextFlowRewireAt) {
           for (let k = 0; k < 3; k++) flowShell.rewireLine(Math.floor(Math.random() * flowShell.lineEndpoints.length));
@@ -1373,6 +1595,21 @@
         lp[i * 6 + 3] = bp[ib * 3]; lp[i * 6 + 4] = bp[ib * 3 + 1]; lp[i * 6 + 5] = bp[ib * 3 + 2];
       }
       brain.lineGeo.attributes.position.needsUpdate = true;
+
+      // Synapse "firing" flash-and-decay (see rewire() above): a real
+      // action potential is a brief flash at the synapse that fades, not
+      // a permanently-lit wire — every freshly rewired connection now
+      // actually looks like it just fired, then dims back to a low idle
+      // glow, rather than every synapse sitting at one constant opacity.
+      const blc = brain.lineColorAttr.array;
+      const bblc = brain.baseLineColorObj;
+      for (let i = 0; i < brain.fireLevels.length; i++) {
+        brain.fireLevels[i] *= 0.9;
+        const level = 0.15 + brain.fireLevels[i] * 0.85;
+        blc[i * 6] = bblc.r * level; blc[i * 6 + 1] = bblc.g * level; blc[i * 6 + 2] = bblc.b * level;
+        blc[i * 6 + 3] = bblc.r * level; blc[i * 6 + 4] = bblc.g * level; blc[i * 6 + 5] = bblc.b * level;
+      }
+      brain.lineColorAttr.needsUpdate = true;
     }
 
     if (!REDUCED_MOTION) {
@@ -1404,14 +1641,73 @@
         faceGroup.rotation.x = Math.sin(t * 0.19 + 0.8) * 0.32 + Math.sin(t * 0.11 + 4.2) * 0.2;
         faceGroup.rotation.z = Math.sin(t * 0.13 + 1.4) * 0.22 + Math.sin(t * 0.07 + 5.6) * 0.12;
       }
-      // Subtle continuous "breathing" scale on the whole core, a little
-      // stronger while actively thinking or speaking — reinforces that
-      // this is alive, not a static prop, even when facing straight
-      // ahead and silent.
-      const breathe = 1 + Math.sin(t * 0.7) * 0.012 + brainPulse * 0.01 + audioGlow * 0.015;
+      // Subtle continuous "breathing" scale on the whole core — was a
+      // single clean sine, which is itself a real reason a "living"
+      // shape can still read as a wind-up toy: a real biological rhythm
+      // is never one perfect unchanging frequency. A second, faster term
+      // whose own phase is slowly modulated by a much slower sine
+      // (frequency modulation, not just a second fixed sine added on
+      // top) keeps the combined rhythm from ever landing on an obviously
+      // repeating beat, closer to a real irregular pulse than a metronome.
+      const heartbeat = Math.sin(t * 1.9 + Math.sin(t * 0.37) * 2.2) * 0.006;
+      const breathe = 1 + Math.sin(t * 0.7) * 0.012 + heartbeat + brainPulse * 0.01 + audioGlow * 0.015;
       faceGroup.scale.setScalar(breathe * growthScale);
     }
     if (!REDUCED_MOTION) ring.rotation.z = t * 0.15;
+
+    // State-tied halo — was a fixed cyan sprite regardless of what the
+    // Core was actually doing; now blends toward amber with real thinking
+    // activity and brightens with either real signal, same "the ambient
+    // glow itself tells you what's happening" idea already used for the
+    // energy surface's own color mix.
+    {
+      const thinkT = Math.min(1, brainPulse * 1.3);
+      haloColorTmp.copy(haloColorCyan).lerp(haloColorAmber, thinkT);
+      coreHalo.material.color.copy(haloColorTmp);
+      coreHalo.material.opacity = 0.35 + audioGlow * 0.25 + brainPulse * 0.2;
+    }
+
+    if (!REDUCED_MOTION) {
+      // Shockwave bursts (spawnShockwave(), triggered from
+      // pushActivityLine() below on a real brain.request/brain.response
+      // event): expand and fade each active ring, deactivating once its
+      // lifetime is spent.
+      for (const sw of shockwavePool) {
+        if (!sw.active) continue;
+        const age = t - sw.start;
+        if (age > SHOCKWAVE_LIFETIME) {
+          sw.active = false;
+          sw.mesh.visible = false;
+          continue;
+        }
+        const p = age / SHOCKWAVE_LIFETIME;
+        const scale = 2.0 + p * 5.5;
+        sw.mesh.scale.set(scale, scale, 1);
+        sw.mesh.material.opacity = (1 - p) * 0.55;
+      }
+      // Depth-dust layer: its own slow independent tumble, distinct from
+      // the Core's, so the background volume itself visibly parallaxes
+      // as the scene turns instead of sitting perfectly still relative
+      // to the Core.
+      depthDust.rotation.y = t * 0.015;
+      depthDust.rotation.x = t * 0.008;
+    }
+
+    // Camera micro-shake tied to real activity — a perfectly static
+    // camera is part of what makes a render read as a diagram rather
+    // than something being observed live; real sensor/HUD footage always
+    // carries a little handheld noise. Recomputes the camera's exact
+    // orbit position fresh every frame first (cheap — a few trig calls)
+    // rather than accumulating a shake offset onto the previous frame's
+    // already-shaken position, so the shake can never drift the camera
+    // away from the orbit angle the user actually left it at.
+    updateCameraFromOrbit();
+    if (!REDUCED_MOTION) {
+      const shakeAmp = 0.008 + brainPulse * 0.05 + audioGlow * 0.045;
+      camera.position.x += simplex3(t * 2.7, 11.3, 0) * shakeAmp;
+      camera.position.y += simplex3(0, t * 2.7, 22.6) * shakeAmp;
+      camera.lookAt(0, 0, 0);
+    }
 
     composer.render();
   }
@@ -1642,6 +1938,12 @@
     if (wasNearBottom) activityLinesEl.scrollTop = activityLinesEl.scrollHeight;
     if (type === "brain.request" || type === "brain.response") {
       brainPulse = 1;
+      // A discrete, visible "something just happened" cue on top of the
+      // continuous brainPulse growth — legible even if you're not
+      // staring right at the Core's center when a real thought lands.
+      // Skipped under reduced motion, same rule as every other
+      // continuous/transient motion source on this page.
+      if (!REDUCED_MOTION) spawnShockwave();
       // How big was this real thought? messageCount for a request, tool
       // calls for a response — a longer conversation or more tool calls
       // grows the core more than a trivial one, not just for the same
