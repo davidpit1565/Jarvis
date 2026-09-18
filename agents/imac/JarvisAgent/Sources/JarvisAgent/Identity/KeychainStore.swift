@@ -1,22 +1,20 @@
-// REQUIRES REAL macOS VALIDATION — Keychain APIs cannot be exercised in
-// this Linux/Claude Code environment. This file is source only; it has
-// never been built or run against a real Keychain.
+// Verified against a real Keychain (2026-09-18): saveCredential() failed
+// with errSecMissingEntitlement (-34018) — kSecUseDataProtectionKeychain
+// requires the keychain-access-groups entitlement, which an unsigned/
+// ad-hoc `swift build` executable does not have and cannot get without a
+// paid Apple Developer code-signing identity. Removed; the legacy
+// file-based keychain API (no kSecUseDataProtectionKeychain) needs no
+// such entitlement for a plain kSecClassGenericPassword item and is what
+// this now uses.
 //
-// KNOWN ISSUE observed in the field: a saved credential sometimes failed
-// to load on a later run (hasCredential=false despite a prior successful
-// save). The most likely cause: this binary is built with `swift build`
-// and run unsigned/ad-hoc, not as a properly code-signed app. macOS scopes
-// Keychain item access partly by the calling binary's code signature —
-// an ad-hoc signature is derived from the binary's own hash, so every
-// `swift build` that changes the binary can make it look like a *different*
-// application to the Keychain, unable to read items an earlier build saved.
-// The real fix is proper code signing with a stable Developer ID (requires
-// the user's own paid Apple Developer account — out of scope here). Until
-// then, this file adds two things that are in scope: (1) real error
-// logging instead of silently swallowing the OSStatus, so this is
-// diagnosable on the real machine, and (2) kSecUseDataProtectionKeychain,
-// Apple's modern recommended flag for consistent behavior across the
-// legacy file-based keychain and the data-protection keychain.
+// Separately, still-open field risk: macOS scopes Keychain item access
+// partly by the calling binary's code signature — an ad-hoc signature is
+// derived from the binary's own hash, so a `swift build` that changes the
+// binary can look like a *different* application to the Keychain, unable
+// to read items an earlier build saved. Only a stable Developer ID
+// signature fixes that; out of scope here. Real error logging (below)
+// stays in place so that, if it happens, it's diagnosable rather than a
+// silent "hasCredential=false".
 
 import Foundation
 import Security
@@ -39,7 +37,6 @@ enum KeychainStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecValueData as String: data,
-            kSecUseDataProtectionKeychain as String: true,
             // Only this device, only while unlocked at least once since boot —
             // never synced to iCloud Keychain, since this credential is
             // specific to this one Mac's pairing with Core.
@@ -58,7 +55,6 @@ enum KeychainStore {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecUseDataProtectionKeychain as String: true,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
@@ -87,7 +83,6 @@ enum KeychainStore {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecUseDataProtectionKeychain as String: true,
         ]
         let status = SecItemDelete(query as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
