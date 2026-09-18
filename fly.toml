@@ -40,6 +40,7 @@ primary_region = "iad"
   JARVIS_TOOL_AUDIT_LOG_DB_PATH = "/data/jarvis-tool-audit.sqlite"
   JARVIS_TOKEN_USAGE_DB_PATH = "/data/jarvis-token-usage.sqlite"
   JARVIS_WAKEUP_CALL_DB_PATH = "/data/jarvis-wakeup-calls.sqlite"
+  JARVIS_CALENDAR_TOKEN_DB_PATH = "/data/jarvis-calendar-tokens.sqlite"
 
 [http_service]
   internal_port = 4770

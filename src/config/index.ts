@@ -113,6 +113,19 @@ export interface JarvisConfig {
    * local proxy just because it happened to be running.
    */
   anthropicBaseUrl?: string;
+  /**
+   * The public base URL this server is reachable at — used for the Google
+   * Calendar OAuth redirect URI. Distinct from twilioPublicBaseUrl: a
+   * user might want calendar integration without the phone gateway (or
+   * vice versa), so this isn't implied by/tied to Twilio's own config,
+   * even though in practice they're often the same URL.
+   */
+  publicBaseUrl?: string;
+  /** Google OAuth client credentials — both required together to enable Calendar integration. */
+  googleClientId?: string;
+  googleClientSecret?: string;
+  /** Path to the SQLite database storing the linked Google account's OAuth tokens. */
+  calendarTokenDbPath: string;
 }
 
 class ConfigError extends Error {}
@@ -186,6 +199,26 @@ export function loadConfig(): JarvisConfig {
 
   const audioWaveformEnabled = process.env.JARVIS_AUDIO_WAVEFORM?.trim().toLowerCase() === "true";
   const anthropicBaseUrl = process.env.JARVIS_ANTHROPIC_BASE_URL?.trim() || undefined;
+  const publicBaseUrl = process.env.JARVIS_PUBLIC_BASE_URL?.trim() || undefined;
+  const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim() || undefined;
+  const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim() || undefined;
+  const calendarTokenDbPath = process.env.JARVIS_CALENDAR_TOKEN_DB_PATH ?? "./data/jarvis-calendar-tokens.sqlite";
+
+  if (Boolean(googleClientId) !== Boolean(googleClientSecret)) {
+    throw new ConfigError("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set together (or neither) to enable Calendar integration");
+  }
+  if (googleClientId && googleClientSecret && !publicBaseUrl) {
+    throw new ConfigError(
+      "JARVIS_PUBLIC_BASE_URL is required once Calendar integration is configured (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET) — " +
+        "Google needs a real, fixed redirect URI for the OAuth flow, the same way TWILIO_PUBLIC_BASE_URL is required for Twilio."
+    );
+  }
+  if (googleClientId && googleClientSecret && !adminToken) {
+    throw new ConfigError(
+      "JARVIS_ADMIN_TOKEN is required once Calendar integration is configured — GET /calendar/oauth/start starts " +
+        "an OAuth flow linking a real Google account and must not be triggerable by an unauthenticated request."
+    );
+  }
 
   const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID?.trim() || undefined;
   const twilioFromNumber = process.env.TWILIO_FROM_NUMBER?.trim() || undefined;
@@ -238,6 +271,10 @@ export function loadConfig(): JarvisConfig {
     webFetchMaxUses,
     audioWaveformEnabled,
     anthropicBaseUrl,
+    publicBaseUrl,
+    googleClientId,
+    googleClientSecret,
+    calendarTokenDbPath,
   };
 }
 

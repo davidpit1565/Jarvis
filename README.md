@@ -570,6 +570,62 @@ another reminder notification.
 - Real Twilio per-minute cost applies to every call actually placed —
   same pricing as the inbound gateway, just outbound-initiated.
 
+## Calendar integration (read-only Google Calendar)
+
+Lets JARVIS answer "what's on my calendar" / "am I free at 3pm" with your
+actual Google Calendar, and lets reminders/wake-up calls reference real
+meetings instead of only what's been manually typed in. Read-only by
+design — JARVIS never creates, edits, or deletes calendar events, only
+looks at them.
+
+**Setup** (Google Cloud Console, one-time, done manually — this can't be
+automated from here):
+
+1. Create a project at [console.cloud.google.com](https://console.cloud.google.com)
+   (or reuse an existing one) and enable the **Google Calendar API** for it.
+2. Configure the **OAuth consent screen** (External or Internal, whichever
+   your Google account allows) — you only need to add your own Google
+   account as a test user if it stays in "Testing" mode, which is fine for
+   a personal assistant.
+3. Create an **OAuth 2.0 Client ID** of type "Web application" with an
+   authorized redirect URI of exactly
+   `<JARVIS_PUBLIC_BASE_URL>/calendar/oauth/callback` (e.g.
+   `https://your-app.fly.dev/calendar/oauth/callback`). Copy the resulting
+   Client ID and Client Secret.
+4. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+   `JARVIS_PUBLIC_BASE_URL` (plus `JARVIS_ADMIN_TOKEN`, required once
+   Calendar is configured — see "Security controls" below).
+5. Visit `<JARVIS_PUBLIC_BASE_URL>/calendar/oauth/start?token=<JARVIS_ADMIN_TOKEN>`
+   in a browser, approve Google's consent screen, and you're linked —
+   `LIST_CALENDAR_EVENTS` and the proactive calendar context below start
+   working immediately, no restart needed.
+
+**What's implemented:**
+
+- **`LIST_CALENDAR_EVENTS`** (`READ`) — the user's upcoming events,
+  soonest first, via Google's Calendar API v3 (`src/calendar/GoogleCalendarClient.ts`,
+  raw `fetch` calls, no SDK dependency, matching this project's existing
+  style — see `TwilioOutboundCaller`).
+- OAuth tokens (the refresh token and current access token) are persisted
+  to their own SQLite database (`src/calendar/CalendarTokenStore.ts`,
+  `JARVIS_CALENDAR_TOKEN_DB_PATH`) — access tokens are refreshed
+  automatically (a minute before actual expiry) whenever a request needs
+  one, with no manual re-linking required afterward.
+- Upcoming events are woven into the same proactive context mechanism as
+  due reminders (`src/calendar/todayCalendarNote.ts`, composed in
+  `buildContextNote`) — including into wake-up calls, so "you have a 9am
+  meeting" can come from your real calendar, not just what you typed into
+  a reminder. A calendar lookup failure (not linked yet, an expired
+  refresh token, a Google API hiccup) is treated as "nothing to add,"
+  never something that breaks the turn.
+- `GET /calendar/oauth/start` is gated by the admin token as a **query
+  parameter** (`?token=...`), not the `X-Jarvis-Admin-Token` header used
+  everywhere else — this route is meant to be opened directly in a
+  browser to reach Google's consent screen, which a fetch header can't
+  do. `GET /calendar/oauth/callback` is protected by a single-use,
+  server-issued `state` value (real CSRF protection), independent of the
+  admin token, since Google's own redirect has no way to carry a header.
+
 ## Live audio waveform (see JARVIS's voice on a call)
 
 Setting `JARVIS_AUDIO_WAVEFORM=true` adds a live waveform to the

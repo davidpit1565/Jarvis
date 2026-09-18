@@ -16,6 +16,7 @@ import type { ReminderStore } from "@/reminders/ReminderStore";
 import type { MemoryStore } from "@/memory/MemoryStore";
 import type { ToolAuditLog } from "@/audit/ToolAuditLog";
 import type { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
+import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
@@ -119,6 +120,12 @@ export interface JarvisWebSocketServerDependencies {
    * (tests, local dev without persistence) where there's no disk to check.
    */
   dataDirectory?: string;
+  /**
+   * Optional: enables GET /calendar/oauth/start and /calendar/oauth/callback,
+   * which link a Google account for read-only Calendar access. When unset,
+   * both routes 404.
+   */
+  calendarClient?: GoogleCalendarClient;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -158,6 +165,15 @@ export class JarvisWebSocketServer {
    * but far too slow to brute-force a 6-digit code or hammer verification.
    */
   private readonly rateLimiter = new RateLimiter(10, 5 * 60 * 1000);
+  /**
+   * OAuth `state` values issued by GET /calendar/oauth/start and not yet
+   * redeemed — CSRF protection for the callback, since Google's redirect
+   * carries no way to re-prove the admin token that gated /start. Each
+   * value is single-use (removed once redeemed) and this being in-memory
+   * (not persisted) is fine: a restart mid-flow just means starting the
+   * link again, which is a rare, deliberate, one-time action.
+   */
+  private readonly pendingOAuthStates: Set<string> = new Set();
 
   constructor(private readonly deps: JarvisWebSocketServerDependencies) {}
 
@@ -278,6 +294,14 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && url.pathname.startsWith("/auth/")) {
             return await this.handleAuthRoute(req, url, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/calendar/oauth/start") {
+            return this.handleCalendarOAuthStart(req, url);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/calendar/oauth/callback") {
+            return await this.handleCalendarOAuthCallback(url);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
@@ -695,6 +719,60 @@ export class JarvisWebSocketServer {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
     }
     return Response.json({ memory: memoryStore.search("") });
+  }
+
+  /**
+   * GET /calendar/oauth/start — begins linking a Google account for
+   * read-only Calendar access. Gated by the admin token as a query
+   * parameter (`?token=...`), not a header: this is a route the user
+   * navigates to directly in a browser to reach Google's consent screen,
+   * which a fetch header can't do.
+   */
+  private handleCalendarOAuthStart(req: Request, url: URL): Response {
+    const { adminToken, calendarClient } = this.deps;
+    if (!calendarClient || !adminToken) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    const state = randomUUID();
+    this.pendingOAuthStates.add(state);
+    return Response.redirect(calendarClient.buildAuthUrl(state), 302);
+  }
+
+  /** GET /calendar/oauth/callback — Google redirects here once the user grants (or denies) access. */
+  private async handleCalendarOAuthCallback(url: URL): Promise<Response> {
+    const { calendarClient } = this.deps;
+    if (!calendarClient) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    const error = url.searchParams.get("error");
+    if (error) {
+      return new Response(`Google Calendar linking was not completed: ${error}`, { status: 400 });
+    }
+
+    const state = url.searchParams.get("state");
+    const code = url.searchParams.get("code");
+    if (!state || !this.pendingOAuthStates.has(state) || !code) {
+      return new Response("Invalid or expired OAuth state", { status: 400 });
+    }
+    this.pendingOAuthStates.delete(state);
+
+    try {
+      await calendarClient.exchangeCodeForTokens(code);
+    } catch (err) {
+      console.error("[jarvis] Google Calendar OAuth exchange failed:", err instanceof Error ? err.message : String(err));
+      return new Response("Failed to complete Google Calendar linking. Check the server logs for details.", {
+        status: 500,
+      });
+    }
+
+    return new Response("Google Calendar linked successfully. You can close this tab.", {
+      headers: { "Content-Type": "text/plain" },
+    });
   }
 
   private hasValidSession(req: Request): boolean {

@@ -32,6 +32,9 @@ import { createCreateWakeUpCallTool } from "@/tools/wakeup/CreateWakeUpCallTool"
 import { createListWakeUpCallsTool } from "@/tools/wakeup/ListWakeUpCallsTool";
 import { createDeleteWakeUpCallTool } from "@/tools/wakeup/DeleteWakeUpCallTool";
 import { TwilioOutboundCaller } from "@/communication/phone/TwilioOutboundCaller";
+import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
+import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import { createListCalendarEventsTool } from "@/tools/calendar/ListCalendarEventsTool";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -97,6 +100,20 @@ function main() {
   const webAuthnService = new WebAuthnService(webAuthnStore);
   const sessionStore = new SessionStore();
 
+  const calendarEnabled = Boolean(config.googleClientId && config.googleClientSecret && config.publicBaseUrl);
+  const calendarTokenStore = new CalendarTokenStore(config.calendarTokenDbPath);
+  const calendarClient = calendarEnabled
+    ? new GoogleCalendarClient(
+        config.googleClientId!,
+        config.googleClientSecret!,
+        new URL("/calendar/oauth/callback", config.publicBaseUrl).toString(),
+        calendarTokenStore
+      )
+    : undefined;
+  if (calendarClient) {
+    toolRegistry.registerTool(createListCalendarEventsTool(calendarClient));
+  }
+
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
@@ -147,7 +164,7 @@ function main() {
     deviceRegistry,
     deviceConnectionManager,
     confirmationService,
-    contextProvider: () => buildContextNote(config, reminderStore),
+    contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
   });
 
   // A phone call gets its own conversation thread (a fresh ConversationManager
@@ -166,7 +183,7 @@ function main() {
       deviceConnectionManager,
       confirmationService,
       channelContext: "This conversation is happening over a live phone call right now.",
-      contextProvider: () => buildContextNote(config, reminderStore),
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -204,7 +221,7 @@ function main() {
         "today — a meeting, a task, a workout). If they push back or say they're tired, don't just accept it: " +
         "persuade them further with another real, specific reason, the way a determined friend would, rather " +
         "than immediately backing off. Keep replies short and energetic — this is a live phone call.",
-      contextProvider: () => buildContextNote(config, reminderStore),
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -291,6 +308,7 @@ function main() {
     memoryStore,
     toolAuditLog,
     conversationHistoryStore,
+    calendarClient,
     dataDirectory: config.memoryDbPath === ":memory:" ? undefined : dirname(config.memoryDbPath),
     backupDbPaths: [
       config.memoryDbPath,
@@ -303,6 +321,7 @@ function main() {
       config.toolAuditLogDbPath,
       config.tokenUsageDbPath,
       config.wakeUpCallDbPath,
+      config.calendarTokenDbPath,
     ],
   });
   const httpHandle = wsServer.start(config.port);
@@ -400,6 +419,7 @@ function main() {
     webAuthnStore.close();
     wakeUpCallStore.close();
     if (wakeUpInterval) clearInterval(wakeUpInterval);
+    calendarTokenStore.close();
     rl.close();
     process.exit(0);
   }

@@ -23,6 +23,10 @@ const ENV_KEYS = [
   "JARVIS_OWNER_PHONE_NUMBER",
   "JARVIS_WAKEUP_CALL_DB_PATH",
   "JARVIS_ANTHROPIC_BASE_URL",
+  "JARVIS_PUBLIC_BASE_URL",
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "JARVIS_CALENDAR_TOKEN_DB_PATH",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -122,6 +126,41 @@ describe("loadConfig", () => {
     process.env.JARVIS_ANTHROPIC_BASE_URL = "http://localhost:20128";
     const config = loadConfig();
     expect(config.anthropicBaseUrl).toBe("http://localhost:20128");
+  });
+
+  test("loads Calendar settings when fully configured", () => {
+    process.env.GOOGLE_CLIENT_ID = "client-id";
+    process.env.GOOGLE_CLIENT_SECRET = "client-secret";
+    process.env.JARVIS_PUBLIC_BASE_URL = "https://example.fly.dev";
+    process.env.JARVIS_ADMIN_TOKEN = "admin-secret";
+
+    const config = loadConfig();
+    expect(config.googleClientId).toBe("client-id");
+    expect(config.googleClientSecret).toBe("client-secret");
+    expect(config.publicBaseUrl).toBe("https://example.fly.dev");
+  });
+
+  test("throws when only GOOGLE_CLIENT_ID is set", () => {
+    process.env.GOOGLE_CLIENT_ID = "client-id";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("throws when Calendar is configured without JARVIS_PUBLIC_BASE_URL", () => {
+    process.env.GOOGLE_CLIENT_ID = "client-id";
+    process.env.GOOGLE_CLIENT_SECRET = "client-secret";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("throws when Calendar is configured without JARVIS_ADMIN_TOKEN", () => {
+    process.env.GOOGLE_CLIENT_ID = "client-id";
+    process.env.GOOGLE_CLIENT_SECRET = "client-secret";
+    process.env.JARVIS_PUBLIC_BASE_URL = "https://example.fly.dev";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults JARVIS_CALENDAR_TOKEN_DB_PATH", () => {
+    const config = loadConfig();
+    expect(config.calendarTokenDbPath).toBe("./data/jarvis-calendar-tokens.sqlite");
   });
 
   test("defaults JARVIS_WAKEUP_CALL_DB_PATH", () => {

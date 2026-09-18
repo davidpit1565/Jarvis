@@ -40,7 +40,7 @@ export interface OrchestratorDependencies {
    * due" without the user having to ask, instead of only ever answering
    * exactly what was asked.
    */
-  contextProvider?: () => string | undefined;
+  contextProvider?: () => string | undefined | Promise<string | undefined>;
 }
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -67,7 +67,7 @@ export class Orchestrator {
 
   async handleUserMessage(userId: string, content: string): Promise<string> {
     const { brain, conversation, toolRegistry, eventBus, channelContext, contextProvider } = this.deps;
-    const extraContext = [channelContext, contextProvider?.()].filter(Boolean).join("\n\n");
+    const extraContext = [channelContext, await contextProvider?.()].filter(Boolean).join("\n\n");
     const systemPrompt = extraContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${extraContext}` : JARVIS_SYSTEM_PROMPT;
 
     if (content.length > MAX_USER_MESSAGE_LENGTH) {
