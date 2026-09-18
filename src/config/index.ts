@@ -104,6 +104,8 @@ export interface JarvisConfig {
    */
   weatherLatitude?: number;
   weatherLongitude?: number;
+  /** Enables GET_NEWS — free RSS headlines from this one configured feed. Unset means the tool doesn't exist. */
+  newsRssUrl?: string;
   /**
    * Optional all-time estimated-cost threshold (USD). When set, JARVIS
    * warns (console + activity log) once cumulative estimated spend
@@ -327,6 +329,8 @@ export function loadConfig(): JarvisConfig {
     );
   }
 
+  const newsRssUrl = process.env.JARVIS_NEWS_RSS_URL?.trim() || undefined;
+
   const costAlertThresholdRaw = process.env.JARVIS_COST_ALERT_THRESHOLD_USD?.trim();
   const costAlertThresholdUsd = costAlertThresholdRaw ? Number(costAlertThresholdRaw) : undefined;
   if (costAlertThresholdRaw && (Number.isNaN(costAlertThresholdUsd) || costAlertThresholdUsd! <= 0)) {
@@ -376,6 +380,7 @@ export function loadConfig(): JarvisConfig {
     telegramOwnerChatId,
     weatherLatitude,
     weatherLongitude,
+    newsRssUrl,
     costAlertThresholdUsd,
   };
 }

@@ -753,6 +753,15 @@ account, no cost — matching this project's "as close to free as possible"
 goal. Find your own coordinates at any map site (right-click → "What's
 here").
 
+## News
+
+Setting `JARVIS_NEWS_RSS_URL` enables **`GET_NEWS`** (`READ`) — real
+headlines from that one RSS feed (any news site's RSS URL works), via a
+small regex-based reader (`src/news/RssNewsClient.ts`) rather than a full
+XML parser dependency. No API key, no account, and deliberately scoped to
+whichever single feed you configure, not a general web-wide news
+aggregator.
+
 ## Live audio waveform (see JARVIS's voice on a call)
 
 Setting `JARVIS_AUDIO_WAVEFORM=true` adds a live waveform to the
@@ -1242,7 +1251,7 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
 - Local tools: `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION`/
   `OPEN_APPLICATION` (device — app name/bundle ID only, and launching a
   named app), memory/reminder/conversation-history/calendar/wake-up-call/
-  `SEARCH_EMAIL`/`GET_WEATHER`/`NOTIFY_USER` tools (see their own sections above). Real internet search/URL reading
+  `SEARCH_EMAIL`/`GET_WEATHER`/`GET_NEWS`/`NOTIFY_USER` tools (see their own sections above). Real internet search/URL reading
   exist separately, as Anthropic's own server-side `web_search`/`web_fetch`
   tools (opt-in via `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not
   through this registry — see "Real internet search" / "Real URL reading"

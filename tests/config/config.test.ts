@@ -36,6 +36,7 @@ const ENV_KEYS = [
   "TELEGRAM_OWNER_CHAT_ID",
   "JARVIS_WEATHER_LATITUDE",
   "JARVIS_WEATHER_LONGITUDE",
+  "JARVIS_NEWS_RSS_URL",
   "JARVIS_COST_ALERT_THRESHOLD_USD",
 ];
 let saved: Record<string, string | undefined> = {};
@@ -377,6 +378,17 @@ describe("loadConfig", () => {
     process.env.JARVIS_WEATHER_LATITUDE = "not-a-number";
     process.env.JARVIS_WEATHER_LONGITUDE = "34.78";
     expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("reads JARVIS_NEWS_RSS_URL when set", () => {
+    process.env.JARVIS_NEWS_RSS_URL = "https://example.com/feed.xml";
+    const config = loadConfig();
+    expect(config.newsRssUrl).toBe("https://example.com/feed.xml");
+  });
+
+  test("leaves newsRssUrl undefined when unset", () => {
+    const config = loadConfig();
+    expect(config.newsRssUrl).toBeUndefined();
   });
 
   test("reads JARVIS_COST_ALERT_THRESHOLD_USD when set", () => {

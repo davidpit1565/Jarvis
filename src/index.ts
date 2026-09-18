@@ -46,6 +46,8 @@ import { GmailClient } from "@/gmail/GmailClient";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
 import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
 import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
+import { RssNewsClient } from "@/news/RssNewsClient";
+import { createGetNewsTool } from "@/tools/news/GetNewsTool";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -151,6 +153,11 @@ function main() {
   if (weatherEnabled) {
     const weatherClient = new OpenMeteoClient(config.weatherLatitude!, config.weatherLongitude!);
     toolRegistry.registerTool(createGetWeatherTool(weatherClient));
+  }
+
+  if (config.newsRssUrl) {
+    const newsClient = new RssNewsClient(config.newsRssUrl);
+    toolRegistry.registerTool(createGetNewsTool(newsClient));
   }
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
