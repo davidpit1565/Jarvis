@@ -174,6 +174,13 @@ being unconditionally denied:
 - The `Orchestrator` calls this gate from one shared `authorize()` method
   used by both local and device tool execution, so the policy can't drift
   between the two paths.
+- **Bounded by a 60-second timeout that defaults to deny.** A `CONFIRM`/
+  `DANGEROUS` tool call during a phone call would otherwise route to the
+  terminal's `confirmViaChat` — which sits on `readline.question()` with
+  nobody at the terminal to answer it, since everyone using JARVIS right
+  now is on the phone, not the machine it runs on. Without a timeout, that
+  hangs the call's conversation turn forever; with one, it resolves to "no"
+  and the call continues instead of silently freezing.
 
 ## Architecture
 
