@@ -55,3 +55,47 @@ describe("OpenMeteoClient.getCurrentWeather", () => {
     await expect(client.getCurrentWeather()).rejects.toThrow(/current_weather/);
   });
 });
+
+describe("OpenMeteoClient.getDailyForecast", () => {
+  test("maps a successful response into DailyForecastDay entries", async () => {
+    let capturedUrl: string | undefined;
+    global.fetch = (async (url: string) => {
+      capturedUrl = url;
+      return new Response(
+        JSON.stringify({
+          daily: {
+            time: ["2026-01-15", "2026-01-16"],
+            temperature_2m_min: [10, 8],
+            temperature_2m_max: [18, 15],
+            weathercode: [1, 61],
+            precipitation_probability_max: [5, 80],
+          },
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const client = new OpenMeteoClient(32.08, 34.78);
+    const forecast = await client.getDailyForecast(2);
+
+    expect(forecast).toEqual([
+      { date: "2026-01-15", minTemperatureC: 10, maxTemperatureC: 18, description: "mainly clear", precipitationChancePercent: 5 },
+      { date: "2026-01-16", minTemperatureC: 8, maxTemperatureC: 15, description: "slight rain", precipitationChancePercent: 80 },
+    ]);
+    expect(capturedUrl).toContain("forecast_days=2");
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
+
+    const client = new OpenMeteoClient(0, 0);
+    await expect(client.getDailyForecast()).rejects.toThrow(/400/);
+  });
+
+  test("throws if the response is missing daily", async () => {
+    global.fetch = (async () => new Response(JSON.stringify({}), { status: 200 })) as unknown as typeof fetch;
+
+    const client = new OpenMeteoClient(0, 0);
+    await expect(client.getDailyForecast()).rejects.toThrow(/daily/);
+  });
+});

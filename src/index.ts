@@ -53,6 +53,7 @@ import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
 import { createGetEmailTool } from "@/tools/gmail/GetEmailTool";
 import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
 import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
+import { createGetWeatherForecastTool } from "@/tools/weather/GetWeatherForecastTool";
 import { RssNewsClient } from "@/news/RssNewsClient";
 import { createGetNewsTool } from "@/tools/news/GetNewsTool";
 import { isWeeklyDigestDue } from "@/digest/isWeeklyDigestDue";
@@ -167,6 +168,7 @@ function main() {
   if (weatherEnabled) {
     const weatherClient = new OpenMeteoClient(config.weatherLatitude!, config.weatherLongitude!);
     toolRegistry.registerTool(createGetWeatherTool(weatherClient));
+    toolRegistry.registerTool(createGetWeatherForecastTool(weatherClient));
   }
 
   if (config.newsRssUrl) {

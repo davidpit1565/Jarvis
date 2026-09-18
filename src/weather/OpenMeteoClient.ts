@@ -5,6 +5,14 @@ export interface CurrentWeather {
   isDay: boolean;
 }
 
+export interface DailyForecastDay {
+  date: string;
+  minTemperatureC: number;
+  maxTemperatureC: number;
+  description: string;
+  precipitationChancePercent: number;
+}
+
 const OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 
 // WMO weather codes, as returned by Open-Meteo's `current_weather.weathercode`.
@@ -83,5 +91,42 @@ export class OpenMeteoClient {
       description: describeWeatherCode(weathercode),
       isDay: is_day === 1,
     };
+  }
+
+  /** Daily min/max temperature, conditions, and precipitation chance for the next `days` days (including today). */
+  async getDailyForecast(days: number = 3): Promise<DailyForecastDay[]> {
+    const url = new URL(OPEN_METEO_FORECAST_URL);
+    url.searchParams.set("latitude", String(this.latitude));
+    url.searchParams.set("longitude", String(this.longitude));
+    url.searchParams.set("daily", "temperature_2m_min,temperature_2m_max,weathercode,precipitation_probability_max");
+    url.searchParams.set("forecast_days", String(days));
+    url.searchParams.set("timezone", "auto");
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      throw new Error(`Open-Meteo request failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+
+    const data = (await response.json()) as {
+      daily?: {
+        time: string[];
+        temperature_2m_min: number[];
+        temperature_2m_max: number[];
+        weathercode: number[];
+        precipitation_probability_max: number[];
+      };
+    };
+
+    if (!data.daily) {
+      throw new Error("Open-Meteo response didn't include daily forecast");
+    }
+
+    return data.daily.time.map((date, i) => ({
+      date,
+      minTemperatureC: data.daily!.temperature_2m_min[i]!,
+      maxTemperatureC: data.daily!.temperature_2m_max[i]!,
+      description: describeWeatherCode(data.daily!.weathercode[i]!),
+      precipitationChancePercent: data.daily!.precipitation_probability_max[i]!,
+    }));
   }
 }

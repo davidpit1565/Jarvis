@@ -791,11 +791,14 @@ verification, malformed JSON, disabled-gateway 404) against the actual
 
 Setting `JARVIS_WEATHER_LATITUDE`/`JARVIS_WEATHER_LONGITUDE` (both
 required together) enables **`GET_WEATHER`** (`READ`) — a real current
-temperature/wind/conditions lookup for that one location, via
-[Open-Meteo](https://open-meteo.com)'s free forecast API. No API key, no
-account, no cost — matching this project's "as close to free as possible"
-goal. Find your own coordinates at any map site (right-click → "What's
-here").
+temperature/wind/conditions lookup for that one location, and
+**`GET_WEATHER_FORECAST`** (`READ`) — the daily min/max temperature,
+conditions, and chance of rain for the next several days (defaults to 3,
+capped at 7), for "will it rain tomorrow"/"what's the weather like this
+week" — both via [Open-Meteo](https://open-meteo.com)'s free forecast
+API. No API key, no account, no cost — matching this project's "as close
+to free as possible" goal. Find your own coordinates at any map site
+(right-click → "What's here").
 
 ## News
 
