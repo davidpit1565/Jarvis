@@ -1799,8 +1799,33 @@
    *     (Core offline, unreachable) they honestly read "NO DATA" rather
    *     than silently keeping stale or fabricated-looking numbers.
    * ------------------------------------------------------------- */
-  function corePort() { return new URLSearchParams(location.search).get("port") || "4770"; }
-  function coreHost() { return new URLSearchParams(location.search).get("host") || "localhost"; }
+  // Was hardcoded to `http://`/`ws://` against an explicit ?host=&port=
+  // (defaulting to localhost:4770) — fine for local dev, but breaks the
+  // moment this page is served over a real public HTTPS URL: a browser
+  // blocks mixed-content http://ws:// calls from an https:// page
+  // outright. coreOrigin() picks the right scheme automatically and, for
+  // the one case where "this page's own origin IS Core" is actually true
+  // — served from Core's own `/hologram` route (see JarvisWebSocketServer
+  // below) — needs no query params at all. Deliberately scoped to that
+  // one path rather than "same-origin whenever not file://": the
+  // documented local-dev flow (`python3 -m http.server` on some other
+  // port, for face-tracking's fetch() needs) serves this same file from
+  // an arbitrary origin that is NOT Core, and defaulting to same-origin
+  // there would silently point /status and /observer at the wrong port.
+  // Falls back to the legacy localhost:4770 default, or an explicit
+  // ?host=&port= override (add `&secure=1` to reach a public HTTPS Core
+  // from a plain http:///file:// dev page — wss/https instead of ws/http).
+  function coreOrigin(scheme) {
+    const q = new URLSearchParams(location.search);
+    const hostParam = q.get("host");
+    const secure = location.protocol === "https:" || q.get("secure") === "1";
+    const proto = scheme === "ws" ? (secure ? "wss" : "ws") : (secure ? "https" : "http");
+    if (hostParam) return `${proto}://${hostParam}:${q.get("port") || "4770"}`;
+    if (location.protocol !== "file:" && location.host && location.pathname.startsWith("/hologram")) {
+      return `${proto}://${location.host}`;
+    }
+    return `${proto}://localhost:${q.get("port") || "4770"}`;
+  }
 
   function setPanelStatus(isLive) {
     for (const id of ["status-indicator-left", "status-indicator-right"]) {
@@ -1814,7 +1839,7 @@
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 900);
-      const res = await fetch(`http://${coreHost()}:${corePort()}/status`, { signal: controller.signal });
+      const res = await fetch(`${coreOrigin("http")}/status`, { signal: controller.signal });
       clearTimeout(timeout);
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
@@ -2002,7 +2027,7 @@
   function connectObserver() {
     let socket;
     try {
-      socket = new WebSocket(`ws://${coreHost()}:${corePort()}/observer`);
+      socket = new WebSocket(`${coreOrigin("ws")}/observer`);
     } catch (e) {
       setActivityStatus(false);
       startDemoFeed();
