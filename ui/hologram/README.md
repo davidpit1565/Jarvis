@@ -48,6 +48,14 @@ kept re-introducing "alien" cues one at a time (a bulbous crown, a funnel
 chin, wrong proportions, no real ears), the actual fix was to stop
 approximating a human head and use one:
 
+- A soft, glowing translucent **fill** of the whole head/neck/shoulders
+  volume (a low-opacity, additively-blended `THREE.MeshBasicMaterial`
+  rendered with the same decimated geometry, double-sided) sits behind
+  the grid. Without it, the wireframe read as a hollow cage around empty
+  black space; the reference's head reads as a solid glowing mass with a
+  grid on top. Kept deliberately faint (opacity 0.16) so it never
+  competes with the grid lines/dots for attention — it should stop the
+  inside from reading as a void, not become the dominant visual.
 - **[LeePerrySmith](https://github.com/mrdoob/three.js/tree/master/examples/models/gltf/LeePerrySmith)**
   — a real facial-capture scan (head, neck, and shoulders) distributed
   with Three.js's own official examples, vendored locally under

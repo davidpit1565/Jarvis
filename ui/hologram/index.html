@@ -661,6 +661,19 @@
       // this scene's existing camera-distance/panel/plinth proportions.
       modelGroup.scale.setScalar(0.384);
 
+      // A soft, glowing translucent fill of the whole head/neck/shoulders
+      // volume — comparison against the reference showed its head reads
+      // as a solid glowing mass with a grid on top, not a hollow wireframe
+      // cage around empty black space, which is what this page looked
+      // like without this. Very low opacity and additive so it never
+      // competes with the grid lines/dots for attention, just stops the
+      // inside from reading as an empty void.
+      const fillMat = new THREE.MeshBasicMaterial({
+        color: 0x1c4a5c, transparent: true, opacity: 0.16,
+        side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+      });
+      modelGroup.add(new THREE.Mesh(simplified, fillMat));
+
       // A real lat/long grid computed on the actual mesh surface (see
       // buildLatLongOnMesh above) instead of THREE.EdgesGeometry — the
       // reference's wireframe is a smooth, evenly-spaced wrap, and
