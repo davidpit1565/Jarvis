@@ -193,7 +193,11 @@
     position: fixed; left: 4%; right: 4%; bottom: 20%;
     max-height: 24vh; overflow: visible; z-index: 4;
     font-size: 10.5px; line-height: 1.6; color: #7fe0c8;
-    background: linear-gradient(180deg, rgba(6,14,16,0.0), rgba(6,14,16,0.35));
+    /* Darkened a bit from 0.35 at the bottom — real bloom (added
+       alongside this) is bright enough to bleed through the previous,
+       more translucent gradient and reduce legibility of the busiest
+       part of the feed (the newest, bottom-most lines). */
+    background: linear-gradient(180deg, rgba(6,14,16,0.05), rgba(6,14,16,0.55));
     border-top: 1px solid rgba(127,224,200,0.18);
     padding-top: 6px; user-select: none;
   }
@@ -373,6 +377,19 @@
   </div>
 
 <script src="./three.min.js"></script>
+<!-- Real bloom (UnrealBloomPass), not the "poor man's" duplicate-and-fade
+     shell trick used everywhere on this page until now. These are the
+     official Three.js r128 example scripts (matching the vendored
+     three.min.js exactly), fetched from the same public npm release, not
+     hand-written — MIT licensed, same as three.js itself. Load order
+     matters: EffectComposer.js defines THREE.Pass, which RenderPass/
+     ShaderPass/UnrealBloomPass all extend at class-definition time. -->
+<script src="./postprocessing/EffectComposer.js"></script>
+<script src="./postprocessing/RenderPass.js"></script>
+<script src="./postprocessing/ShaderPass.js"></script>
+<script src="./shaders/CopyShader.js"></script>
+<script src="./shaders/LuminosityHighPassShader.js"></script>
+<script src="./postprocessing/UnrealBloomPass.js"></script>
 <script>
 (function () {
   "use strict";
@@ -444,6 +461,26 @@
   // flatter, more flattering telephoto-like compression.
   const camera = new THREE.PerspectiveCamera(28, window.innerWidth / window.innerHeight, 0.1, 100);
   camera.position.set(0, 0, 12);
+
+  /* ---------------------------------------------------------------
+   * Real bloom (UnrealBloomPass) — replaces the "poor man's bloom" this
+   * page used everywhere until now (re-drawing the same wireframe bigger
+   * and fainter underneath it). That trick only ever fakes glow around
+   * literal duplicated line geometry; real bloom picks up genuinely
+   * bright pixels wherever they are — the energy surface's fresnel rim,
+   * the flow-field particles, the brain — with zero extra per-object
+   * work. threshold/strength/radius tuned against real screenshots (see
+   * ui/hologram/README.md), not guessed.
+   * ------------------------------------------------------------- */
+  const composer = new THREE.EffectComposer(renderer);
+  composer.addPass(new THREE.RenderPass(scene, camera));
+  const bloomPass = new THREE.UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    0.42,
+    0.4,
+    0.35
+  );
+  composer.addPass(bloomPass);
 
   /* ---------------------------------------------------------------
    * 2a. Manual orbit — drag to inspect the head from any angle (side,
@@ -1281,7 +1318,7 @@
     }
     if (!REDUCED_MOTION) ring.rotation.z = t * 0.15;
 
-    renderer.render(scene, camera);
+    composer.render();
   }
   animate();
 
@@ -1289,6 +1326,7 @@
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight); // resizes every added pass, including bloomPass
     // Re-fit the Core to the new aspect ratio (e.g. a phone rotated, or a
     // desktop window narrowed past the portrait breakpoint) without
     // disturbing the user's own orbit angle, just the distance.

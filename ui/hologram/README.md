@@ -146,6 +146,50 @@ same as every other signal on this page. Frozen (no per-frame advection)
 under `prefers-reduced-motion`, same rule as every other continuous motion
 source here — the real-signal-driven group scale/opacity changes stay on.
 
+### Real bloom (`UnrealBloomPass`), not a duplicated-shell trick
+
+Every glow on this page used to be faked the same way: redraw the same
+line geometry a second time, bigger and fainter, underneath the crisp
+copy — a real technique (used throughout production motion graphics when
+real bloom isn't available), but a manual one, applied per-object, that
+only ever glows around literal duplicated geometry.
+
+This page now runs a real post-processing bloom pass —
+`THREE.EffectComposer` + `THREE.RenderPass` + `THREE.UnrealBloomPass`,
+the official Three.js r128 example scripts (matching the vendored
+`three.min.js` exactly, fetched from the same public npm release,
+MIT-licensed same as Three.js itself — not hand-written, not a CDN
+dependency, vendored locally under `postprocessing/`/`shaders/` the same
+way `facetrack/` already is). Real bloom finds genuinely bright pixels
+*anywhere in the rendered frame* — the energy surface's fresnel rim, the
+flow field's particles, the brain's points — and glows around them
+automatically, with zero extra per-object setup, which is exactly why it
+reads as more "alive"/premium than the old per-shell trick could.
+
+`strength`/`radius`/`threshold` (0.42 / 0.4 / 0.35) were tuned against
+real screenshots, not guessed: an initial 0.75 strength blew out the
+center to near-solid white and lost the wireframe's crisp line detail —
+turned down until the glow reads as energy radiating off real geometry,
+not overexposure. The CORE ACTIVITY panel's background also had to be
+darkened slightly (0.35 → 0.55 alpha at the bottom edge) — real bloom is
+bright enough to bleed through what used to be a subtle enough gradient,
+and the newest (bottom-most, most important) activity lines were the
+first to lose legibility.
+
+**Real, measured performance cost, not hidden**: a real FPS A/B on this
+sandbox's software `swiftshader` renderer (headless, `performance.now()`
+over 3s, no real GPU available here at all) showed bloom taking this
+page from ~15fps to ~6fps. That is a genuine cost of multi-pass
+post-processing, not a rounding error — but it's specifically a
+*software*-rendering cost: `UnrealBloomPass` is a standard, GPU-optimized
+real-time technique (mip-mapped blur passes on the GPU) used at native
+60fps+ in production games and demos on any real graphics hardware, which
+this sandbox has none of. Worth knowing about, not worth avoiding real
+bloom over — but real hardware verification (does this still feel smooth
+on the actual machine this runs on) is the one honest gap this
+environment structurally cannot close, same category as the Swift Agent
+tools' "requires real macOS validation."
+
 ### Individually pulsing dots — not a field of fixed-size points
 
 Every glowing dot on the outer shell (and the brain's particles) individually
