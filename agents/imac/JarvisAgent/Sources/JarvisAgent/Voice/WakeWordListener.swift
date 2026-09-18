@@ -73,9 +73,19 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     }
 
     /// Speaks a reply aloud — the response to a voice.reply from Core.
+    /// Without an explicit voice, AVSpeechSynthesizer falls back to the
+    /// system's default language voice regardless of what the text is
+    /// actually in — a Hebrew reply came out in an English voice
+    /// whenever the Mac's own language wasn't set to Hebrew. Picks the
+    /// voice from the reply's own script instead (same idea as the phone
+    /// gateway's and the browser voice mode's per-language selection).
     func speak(_ text: String) {
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        let isHebrew = text.unicodeScalars.contains { (0x0590...0x05FF).contains($0.value) }
+        if let voice = AVSpeechSynthesisVoice(language: isHebrew ? "he-IL" : "en-US") {
+            utterance.voice = voice
+        }
         synthesizer.speak(utterance)
     }
 
