@@ -281,4 +281,52 @@ describe("TwilioVoiceGateway", () => {
     await gateway.handleGather("CA1", "hi");
     expect(sessionsCreated).toBe(2);
   });
+
+  test("a call is ended by JARVIS itself after too many turns, as a cost/abuse safety net", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "ok"),
+      userId: "local-user",
+    }));
+
+    gateway.handleIncomingCall("CA1");
+    let lastBody = "";
+    for (let i = 0; i < 41; i++) {
+      const response = await gateway.handleGather("CA1", "hello");
+      lastBody = await response.text();
+    }
+
+    expect(lastBody).toContain("<Hangup/>");
+    expect(lastBody).not.toContain("<Gather");
+  });
+
+  test("a call well under the turn limit is unaffected", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "ok"),
+      userId: "local-user",
+    }));
+
+    gateway.handleIncomingCall("CA1");
+    const response = await gateway.handleGather("CA1", "hello");
+    const body = await response.text();
+
+    expect(body).toContain("<Gather");
+    expect(body).not.toContain("<Hangup/>");
+  });
+
+  test("handleCallEnded resets the turn count for a later call with the same CallSid", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "ok"),
+      userId: "local-user",
+    }));
+
+    gateway.handleIncomingCall("CA1");
+    for (let i = 0; i < 41; i++) await gateway.handleGather("CA1", "hello");
+    gateway.handleCallEnded("CA1");
+
+    gateway.handleIncomingCall("CA1"); // Twilio can reuse a CallSid in principle; treat it as a fresh call
+    const response = await gateway.handleGather("CA1", "hello");
+    const body = await response.text();
+
+    expect(body).toContain("<Gather");
+  });
 });

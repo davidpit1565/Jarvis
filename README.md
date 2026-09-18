@@ -403,6 +403,10 @@ only needs to shuttle text in and out through the existing `Orchestrator`.
 - Three webhook routes, added to the existing WebSocket server's HTTP
   handling (`src/communication/websocket/JarvisWebSocketServer.ts`):
   `POST /voice/incoming`, `POST /voice/gather`, `POST /voice/status`.
+- Capped at 40 back-and-forth turns per call — JARVIS ends the call itself
+  (a spoken goodbye, then `<Hangup/>`) rather than letting one very long or
+  automated call run up Twilio/Anthropic cost indefinitely with no natural
+  end. Generous for an actual conversation; resets on the next call.
 - Every incoming webhook request's Twilio signature is verified
   (`src/communication/phone/twilioSignature.ts`, HMAC-SHA1 per Twilio's
   spec) against the **configured public URL**
