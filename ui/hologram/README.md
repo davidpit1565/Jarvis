@@ -82,10 +82,6 @@ are combined:
    curvature and looks correct from an angle instead of reading as a flat
    card floating in front of the wireframe.
 
-Two `THREE.LineLoop` orbit rings (cyan + amber) with small satellite
-spheres animate around the head, echoing the reference's "orbiting data
-node" motif — plain geometry, no extra assets.
-
 ## A visible brain, not an empty shell
 
 The wireframe is just line edges, so anything placed inside the head
@@ -254,8 +250,11 @@ side-by-side) to find concrete, fixable gaps rather than guessing. That
 comparison found the earlier build's biggest miss: the reference's head is
 a **wireframe/mesh grid** with glowing vertex dots, not a particle-noise
 cloud — a difference in visual language, not just tuning. That's now
-fixed (see "How the face is built" above), along with the orbit rings and
-background depth cues the reference also has and the old build didn't.
+fixed (see "How the face is built" above), along with background depth
+cues the reference also has and the old build didn't. An earlier pass
+also added two orbiting "data node" rings around the head, echoing one
+of the reference video's other shots — removed again on request, since
+that specific shot isn't the one this page is matching.
 
 What's still, genuinely, out of reach for a live 60fps interactive page
 without an unreasonable rendering budget: the reference is a one-shot

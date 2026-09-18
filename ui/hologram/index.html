@@ -1091,47 +1091,6 @@
   faceGroup.add(points, headWire);
   scene.add(faceGroup);
 
-  /* ---------------------------------------------------------------
-   * 2c. Orbiting rings with satellite dots (cyan + amber), echoing the
-   *     "orbiting data nodes" ring motif around the head in the
-   *     reference video — plain line loops + small spheres, no extra
-   *     assets needed.
-   * ------------------------------------------------------------- */
-  function buildOrbitRing(radius, color, tiltX, tiltZ, satelliteCount, speed) {
-    const segs = 96;
-    const curvePoints = [];
-    for (let i = 0; i <= segs; i++) {
-      const a = (i / segs) * Math.PI * 2;
-      curvePoints.push(new THREE.Vector3(Math.cos(a) * radius, Math.sin(a) * radius * 0.32, 0));
-    }
-    const ringGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
-    const ringMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending });
-    const ringLine = new THREE.LineLoop(ringGeo, ringMat);
-
-    const group = new THREE.Group();
-    group.add(ringLine);
-    group.rotation.x = tiltX;
-    group.rotation.z = tiltZ;
-
-    const satGeo = new THREE.SphereGeometry(0.045, 10, 10);
-    const satMat = new THREE.MeshBasicMaterial({ color });
-    const satellites = [];
-    for (let s = 0; s < satelliteCount; s++) {
-      const mesh = new THREE.Mesh(satGeo, satMat);
-      const offset = (s / satelliteCount) * Math.PI * 2;
-      mesh.position.set(Math.cos(offset) * radius, Math.sin(offset) * radius * 0.32, 0);
-      group.add(mesh);
-      satellites.push({ mesh, offset });
-    }
-    return { group, satellites, radius, speed };
-  }
-  const orbitRings = [
-    buildOrbitRing(2.0, 0x6fd8e8, 0.25, 0.1, 2, 0.4),
-    buildOrbitRing(2.25, 0xffb15c, -0.35, 0.5, 2, -0.3),
-    buildOrbitRing(1.85, 0x6fd8e8, 0.6, -0.4, 1, 0.55),
-  ];
-  orbitRings.forEach((r) => scene.add(r.group));
-
   /* Thin wireframe ring beneath the head, like a scan plane. */
   const ringGeo = new THREE.RingGeometry(1.55, 1.58, 64);
   const ringMat = new THREE.MeshBasicMaterial({ color: 0x6fd8e8, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
@@ -1255,12 +1214,6 @@
       // thinking, not a static prop, even when facing straight ahead.
       const breathe = 1 + Math.sin(t * 0.7) * 0.012 + brainPulse * 0.01;
       faceGroup.scale.setScalar(breathe);
-      orbitRings.forEach((r) => {
-        r.satellites.forEach((s) => {
-          const a = t * r.speed + s.offset;
-          s.mesh.position.set(Math.cos(a) * r.radius, Math.sin(a) * r.radius * 0.32, 0);
-        });
-      });
     }
     if (!REDUCED_MOTION) ring.rotation.z = t * 0.15;
 
