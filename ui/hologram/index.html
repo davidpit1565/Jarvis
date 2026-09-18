@@ -451,7 +451,13 @@
   let lastPointerY = 0;
 
   function updateCameraFromOrbit() {
-    const elev = Math.max(-1.2, Math.min(1.2, camElevation));
+    // Was capped at +-1.2 rad (~69 deg) — direct request was to be able to
+    // spin the Core all the way up and down, not just side to side, since
+    // it's meant to be inspected/played with from any angle (it's round,
+    // not a flat panel). +-1.55 rad (~88.8 deg) gets you almost straight
+    // overhead/underneath without the camera flipping through the exact
+    // pole, which is the one real gimbal-lock artifact full 90 deg risks.
+    const elev = Math.max(-1.55, Math.min(1.55, camElevation));
     camera.position.set(
       camDistance * Math.sin(camAzimuth) * Math.cos(elev),
       camDistance * Math.sin(elev),
@@ -552,6 +558,110 @@
       material.userData.shader = shader;
     };
     material.needsUpdate = true;
+  }
+
+  /* ---------------------------------------------------------------
+   * Curl noise — a divergence-free vector field derived from the CURL of
+   * a simplex-noise potential, not the noise itself. This is the actual,
+   * named technique (widely documented — Three.js Journey's "GPGPU Flow
+   * Field Particles" lesson, al-ro's "3D Curl Noise" writeup) behind the
+   * organic, swirling, never-converging/never-repeating look of a real
+   * energy/plasma/smoke sim, as opposed to a geometric wireframe (which
+   * inevitably reads as "a globe" — it has visible latitude/longitude
+   * lines because it IS a UV-sphere) or independent per-particle sine
+   * jitter (visibly synchronized/mechanical once you watch it a few
+   * seconds). Every particle samples the SAME smooth field, so nearby
+   * particles swirl together in coherent tendrils, exactly the "brain
+   * with waves" look from the reference images, instead of independently
+   * wobbling in place.
+   *
+   * Implementation: a compact public-domain 3D simplex noise (same
+   * Gustavson/Ashima algorithm family as the GLSL version already used
+   * for the energy surface above, ported to JS since this needs to run
+   * per-particle on the CPU every frame — no GPGPU/render-to-texture
+   * pipeline in this vendored Three.js r128 setup), then curl computed
+   * via the standard numerical-derivative formula: three offset noise
+   * samples build a vector potential Ψ, and curl(Ψ) = the field that's
+   * actually divergence-free (particles swirl around each other, never
+   * pile up or fly apart) — central-difference partial derivatives of
+   * each Ψ component, combined per the textbook 3D curl definition.
+   * ------------------------------------------------------------- */
+  const CURL_PERM = (() => {
+    const p = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) p[i] = i;
+    let seed = 1337;
+    function rand() { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }
+    for (let i = 255; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      const tmp = p[i]; p[i] = p[j]; p[j] = tmp;
+    }
+    const perm = new Uint8Array(512);
+    for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+    return perm;
+  })();
+  const CURL_GRAD3 = [
+    [1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],
+    [0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1],
+  ];
+  function simplex3(xin, yin, zin) {
+    const F3 = 1 / 3, G3 = 1 / 6;
+    const s = (xin + yin + zin) * F3;
+    const i = Math.floor(xin + s), j = Math.floor(yin + s), k = Math.floor(zin + s);
+    const t = (i + j + k) * G3;
+    const x0 = xin - (i - t), y0 = yin - (j - t), z0 = zin - (k - t);
+    let i1, j1, k1, i2, j2, k2;
+    if (x0 >= y0) {
+      if (y0 >= z0) { i1=1;j1=0;k1=0; i2=1;j2=1;k2=0; }
+      else if (x0 >= z0) { i1=1;j1=0;k1=0; i2=1;j2=0;k2=1; }
+      else { i1=0;j1=0;k1=1; i2=1;j2=0;k2=1; }
+    } else {
+      if (y0 < z0) { i1=0;j1=0;k1=1; i2=0;j2=1;k2=1; }
+      else if (x0 < z0) { i1=0;j1=1;k1=0; i2=0;j2=1;k2=1; }
+      else { i1=0;j1=1;k1=0; i2=1;j2=1;k2=0; }
+    }
+    const x1 = x0 - i1 + G3, y1 = y0 - j1 + G3, z1 = z0 - k1 + G3;
+    const x2 = x0 - i2 + 2*G3, y2 = y0 - j2 + 2*G3, z2 = z0 - k2 + 2*G3;
+    const x3 = x0 - 1 + 3*G3, y3 = y0 - 1 + 3*G3, z3 = z0 - 1 + 3*G3;
+    const ii = i & 255, jj = j & 255, kk = k & 255;
+    function corner(gi, x, y, z) {
+      let t2 = 0.6 - x*x - y*y - z*z;
+      if (t2 < 0) return 0;
+      const g = CURL_GRAD3[gi % 12];
+      t2 *= t2;
+      return t2 * t2 * (g[0]*x + g[1]*y + g[2]*z);
+    }
+    const gi0 = CURL_PERM[ii + CURL_PERM[jj + CURL_PERM[kk]]];
+    const gi1 = CURL_PERM[ii+i1 + CURL_PERM[jj+j1 + CURL_PERM[kk+k1]]];
+    const gi2 = CURL_PERM[ii+i2 + CURL_PERM[jj+j2 + CURL_PERM[kk+k2]]];
+    const gi3 = CURL_PERM[ii+1 + CURL_PERM[jj+1 + CURL_PERM[kk+1]]];
+    const n0 = corner(gi0, x0, y0, z0);
+    const n1 = corner(gi1, x1, y1, z1);
+    const n2 = corner(gi2, x2, y2, z2);
+    const n3 = corner(gi3, x3, y3, z3);
+    return 32 * (n0 + n1 + n2 + n3);
+  }
+  const CURL_EPS = 0.09;
+  const curlOut = new Float32Array(3);
+  // Three independent potential-field components, Psi = (p, q, r) —
+  // offset from each other in noise-space (a standard trick to decorrelate
+  // them cheaply, rather than three unrelated noise functions). curl(Psi)
+  // needs exactly six partial derivatives (textbook 3D curl definition):
+  // p's y- and z-derivative, q's z- and x-derivative, r's x- and
+  // y-derivative — each a central difference, 12 noise samples total.
+  function curlNoise3(x, y, z) {
+    const e = CURL_EPS;
+    const dPx_dy = (simplex3(x, y + e, z) - simplex3(x, y - e, z)) / (2 * e);
+    const dPx_dz = (simplex3(x, y, z + e) - simplex3(x, y, z - e)) / (2 * e);
+    const qx = x + 31.4;
+    const dPy_dz = (simplex3(qx, y, z + e) - simplex3(qx, y, z - e)) / (2 * e);
+    const dPy_dx = (simplex3(qx + e, y, z) - simplex3(qx - e, y, z)) / (2 * e);
+    const rx = x + 62.8;
+    const dPz_dx = (simplex3(rx + e, y, z) - simplex3(rx - e, y, z)) / (2 * e);
+    const dPz_dy = (simplex3(rx, y + e, z) - simplex3(rx, y - e, z)) / (2 * e);
+    curlOut[0] = dPz_dy - dPy_dz;
+    curlOut[1] = dPx_dz - dPz_dx;
+    curlOut[2] = dPy_dx - dPx_dy;
+    return curlOut;
   }
 
   /* A visible "brain" inside the translucent skull — the rendering above
@@ -656,38 +766,73 @@
    *     - deliberately not faked; see README.
    * ------------------------------------------------------------- */
 
-  // Outer shell — the "body": brightens, grows, and spins faster with
-  // real voice activity (audioGlow, in animate()/audioLoop() below).
-  const outerGeo = new THREE.SphereGeometry(1.7, 26, 20);
-  const outerWire = new THREE.WireframeGeometry(outerGeo);
-  const outerMat = new THREE.LineBasicMaterial({
-    color: 0xe8fbff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
-  });
-  const outerShell = new THREE.LineSegments(outerWire, outerMat);
-  faceGroup.add(outerShell);
-  // A second, larger + dimmer copy of the same shell for a cheap "poor
-  // man's bloom" — no EffectComposer/UnrealBloomPass in this vendored
-  // r128 setup, so the glow is faked by re-drawing the shell bigger and
-  // fainter underneath, same technique used throughout this page.
-  const outerGlowMat = new THREE.LineBasicMaterial({
-    color: 0xafeeff, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending,
-  });
-  const outerGlow = new THREE.LineSegments(outerWire, outerGlowMat);
-  faceGroup.add(outerGlow);
+  // Outer shell — the "body": a real curl-noise flow field (see the
+  // curlNoise3() writeup above), not a wireframe UV-sphere. A clean
+  // geometric sphere has visible latitude/longitude lines because that's
+  // literally what it is — direct feedback was that this reads as "a
+  // globe," not a living AI core. Every particle is seeded at an
+  // irregular radius around a rough sphere (not a perfect one — the
+  // "brain with waves" envelope from the reference images), then advected
+  // by the SAME smooth curl field every frame, so nearby particles swirl
+  // together in coherent tendrils rather than independently wobbling.
+  function buildFlowShell(baseRadius, count, color, lineColor) {
+    const n = count;
+    const basePositions = new Float32Array(n * 3);
+    const positions = new Float32Array(n * 3);
+    const phases = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const u = Math.random(), v = Math.random();
+      const theta = 2 * Math.PI * u;
+      const phi = Math.acos(2 * v - 1);
+      // Radius jitter is the actual fix for "looks like a planet" — a
+      // uniform radius is what makes a point cloud read as a perfect
+      // sphere in the first place.
+      const r = baseRadius * (0.82 + Math.random() * 0.34);
+      const x = r * Math.sin(phi) * Math.cos(theta);
+      const y = r * Math.sin(phi) * Math.sin(theta);
+      const z = r * Math.cos(phi);
+      basePositions[i * 3] = x; basePositions[i * 3 + 1] = y; basePositions[i * 3 + 2] = z;
+      positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
+      phases[i] = Math.random() * Math.PI * 2;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute("aPhase", new THREE.BufferAttribute(phases, 1));
+    const mat = new THREE.PointsMaterial({
+      size: 0.05, map: spriteTex, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, color, opacity: 0.78,
+    });
+    addSizePulse(mat, 1.4, 0.4);
+    const points = new THREE.Points(geo, mat);
 
-  // Individually pulsing dots on the outer shell (see addSizePulse
-  // above) — every dot grows/shrinks on its own random phase instead of
-  // a fixed size, the "always alive" look.
-  const outerDotsMat = new THREE.PointsMaterial({
-    size: 0.045, map: spriteTex, transparent: true, depthWrite: false,
-    blending: THREE.AdditiveBlending, color: 0x6fd8e8, opacity: 0.7,
-  });
-  const outerPhases = new Float32Array(outerGeo.attributes.position.count);
-  for (let i = 0; i < outerPhases.length; i++) outerPhases[i] = Math.random() * Math.PI * 2;
-  outerGeo.setAttribute("aPhase", new THREE.BufferAttribute(outerPhases, 1));
-  addSizePulse(outerDotsMat, 1.6, 0.45);
-  const faceDotsMat = outerDotsMat;
-  faceGroup.add(new THREE.Points(outerGeo, outerDotsMat));
+    // Tendril threads connecting random pairs, periodically re-picked —
+    // the same technique buildBrain() already uses for synapses, applied
+    // here to get the connected-energy-thread look the reference footage
+    // shows instead of isolated floating dots.
+    const lineCount = Math.round(n * 0.12);
+    const lineEndpoints = new Array(lineCount);
+    const linePositions = new Float32Array(lineCount * 2 * 3);
+    function rewireLine(i) {
+      lineEndpoints[i] = [Math.floor(Math.random() * n), Math.floor(Math.random() * n)];
+    }
+    for (let i = 0; i < lineCount; i++) rewireLine(i);
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
+    const lineMat = new THREE.LineBasicMaterial({
+      color: lineColor, transparent: true, opacity: 0.26, blending: THREE.AdditiveBlending,
+    });
+    const lines = new THREE.LineSegments(lineGeo, lineMat);
+
+    const group = new THREE.Group();
+    group.add(points, lines);
+    return {
+      group, pointsMat: mat, n, basePositions, positions,
+      posAttr: geo.attributes.position, lineEndpoints, lineGeo, rewireLine,
+    };
+  }
+  const flowShell = buildFlowShell(1.7, 1200, 0x8fe6f2, 0x6fd8e8);
+  faceGroup.add(flowShell.group);
+  const faceDotsMat = flowShell.pointsMat;
 
   // The "energy surface" — a real fresnel-rim-lit, simplex-noise-displaced
   // shader surface (not another wireframe) sitting just inside the outer
@@ -879,6 +1024,7 @@
   let brainPulse = 0;
   let brainIntensity = 0;
   let nextBrainRewireAt = 0;
+  let nextFlowRewireAt = 0;
   // Declared here (before animate() first runs) rather than down by
   // audioLoop() below, for the same reason as the `let`s above — a
   // variable referenced inside animate() must already exist the first
@@ -979,23 +1125,58 @@
       faceDotsMat.userData.shader.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
     }
 
-    // Outer "body" shell + orbit rings: brighten, grow, and spin faster
-    // with real voice activity (audioGlow — fed by the mic today via
-    // audioLoop() below, ready for real Core TTS output later, same
-    // hooks that used to drive the old head's mouth-open animation).
+    // Outer "body" flow shell + orbit rings: brighten, grow, and swirl
+    // faster with real voice activity (audioGlow — fed by the mic today
+    // via audioLoop() below, ready for real Core TTS output later, same
+    // hooks that used to drive the old head's mouth-open animation, then
+    // the old wireframe shell's rotation).
     {
       const voiceScale = 1 + audioGlow * 0.35;
-      outerShell.scale.setScalar(voiceScale);
-      outerGlow.scale.setScalar(1.035 * voiceScale);
-      outerMat.opacity = Math.min(1, 0.7 + audioGlow * 0.3);
+      flowShell.group.scale.setScalar(voiceScale);
       energySurface.scale.setScalar(voiceScale);
       energyMat.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
       energyMat.uniforms.uAudio.value = audioGlow;
       energyMat.uniforms.uThink.value = brainPulse;
       if (!REDUCED_MOTION) {
-        outerShell.rotation.y = t * (0.08 + audioGlow * 0.4);
         ringsGroup.rotation.z = t * (0.12 + audioGlow * 0.35);
         ringsGroup.rotation.x = Math.sin(t * 0.2) * 0.15;
+
+        // Real curl-noise advection (see curlNoise3() above): every
+        // particle samples the same smooth field at its current position
+        // and drifts along it, then gets pulled back a little toward its
+        // anchor point so the flow swirls AROUND the core's envelope
+        // instead of drifting away or collapsing inward — the standard
+        // way to keep a curl-noise field visually bounded to a shape.
+        // Amplitude never hits zero (turbBase) — per direct request, the
+        // Core must never sit still like a flat image — and grows further
+        // with real thinking/voice activity, same as every other signal
+        // on this page.
+        const turbBase = 0.22;
+        const turbAmp = turbBase + audioGlow * 0.85 + brainPulse * 0.55;
+        const flowT = t * 0.15;
+        const fp = flowShell.positions;
+        const fb = flowShell.basePositions;
+        for (let i = 0; i < flowShell.n; i++) {
+          const ix = i * 3, iy = ix + 1, iz = ix + 2;
+          const c = curlNoise3(fp[ix] * 0.55 + flowT, fp[iy] * 0.55, fp[iz] * 0.55 - flowT * 0.7);
+          fp[ix] += c[0] * turbAmp * 0.018 - (fp[ix] - fb[ix]) * 0.05;
+          fp[iy] += c[1] * turbAmp * 0.018 - (fp[iy] - fb[iy]) * 0.05;
+          fp[iz] += c[2] * turbAmp * 0.018 - (fp[iz] - fb[iz]) * 0.05;
+        }
+        flowShell.posAttr.needsUpdate = true;
+
+        const flp = flowShell.lineGeo.attributes.position.array;
+        for (let i = 0; i < flowShell.lineEndpoints.length; i++) {
+          const [ia, ib] = flowShell.lineEndpoints[i];
+          flp[i * 6] = fp[ia * 3]; flp[i * 6 + 1] = fp[ia * 3 + 1]; flp[i * 6 + 2] = fp[ia * 3 + 2];
+          flp[i * 6 + 3] = fp[ib * 3]; flp[i * 6 + 4] = fp[ib * 3 + 1]; flp[i * 6 + 5] = fp[ib * 3 + 2];
+        }
+        flowShell.lineGeo.attributes.position.needsUpdate = true;
+
+        if (t > nextFlowRewireAt) {
+          for (let k = 0; k < 3; k++) flowShell.rewireLine(Math.floor(Math.random() * flowShell.lineEndpoints.length));
+          nextFlowRewireAt = t + 0.9;
+        }
       }
     }
 

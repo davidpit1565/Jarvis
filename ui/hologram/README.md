@@ -71,12 +71,10 @@ compromise reached after a real face didn't work out.
 
 ### What it's built from
 
-- **Outer shell** — a `THREE.SphereGeometry` rendered as a `WireframeGeometry`
-  lat/long grid (cyan/white), plus a second, larger and dimmer copy behind
-  it for a cheap "poor man's bloom" (no `EffectComposer`/`UnrealBloomPass`
-  in this vendored r128 setup) — the same glow-duplication technique used
-  throughout this page. Individually-pulsing dots (`addSizePulse`, see
-  below) sit at every vertex.
+- **Outer shell — a real curl-noise flow field**, not a wireframe (see the
+  dedicated section below for why and how). ~1,200 particles seeded at an
+  irregular radius around a rough sphere, swirling together in coherent
+  tendrils.
 - **Inner shell** — a smaller concentric wireframe sphere (amber), the
   "mind," which brightens, grows, and spins faster while Jarvis is
   actively thinking.
@@ -95,6 +93,58 @@ Being fully abstract and radially symmetric-ish by construction, the Core
 has **no "wrong from the back" problem** the way the old head did — there's
 no anatomy to get right or wrong from any angle, so orbiting around it (see
 below) just works everywhere, with no per-angle tuning.
+
+### The outer shell is a curl-noise flow field, not a wireframe sphere
+
+The Core's first version rendered its outer shell as a `THREE.SphereGeometry`
+wireframe — a clean lat/long grid. Direct feedback, backed by reference
+images (Iron Man's JARVIS brain-formation VFX, and other AI-hologram
+concept art), was that this reads as **a globe, not a living AI core** — a
+UV-sphere wireframe has visible latitude/longitude lines because that's
+literally what it is, and a perfectly uniform radius is what makes a point
+cloud read as a planet in the first place.
+
+The actual, named technique behind the reference images' organic, swirling,
+"brain with waves" look is **curl noise** — the *curl* of a noise field
+(divergence-free by construction), not the noise field itself. This is a
+well-documented real-time VFX technique (see Three.js Journey's "GPGPU Flow
+Field Particles" lesson and al-ro's "3D Curl Noise" writeup) for exactly
+this look: particles pushed by a curl-noise field swirl and tumble together
+in coherent tendrils, never converging to a point and never flying apart,
+because the field has zero divergence by construction. That's categorically
+different from either a smooth geometric wireframe (mechanically regular)
+or independent per-particle sine jitter (visibly synchronized/mechanical
+once you watch it a few seconds, since every particle runs its own
+disconnected clock) — with curl noise, *nearby* particles share almost the
+same field sample, so they move together, and distant particles diverge,
+which is what makes it look like flowing energy instead of a bag of
+independently-vibrating dots.
+
+Implementation (`curlNoise3()`/`simplex3()` in `index.html`, right after
+`addSizePulse()`): a compact public-domain 3D simplex noise (same
+Gustavson/Ashima algorithm family as the GLSL version already used for the
+energy surface's shader), then curl computed via the textbook formula —
+three offset noise samples build a vector potential Ψ = (p, q, r), and
+curl(Ψ) = (∂r/∂y − ∂q/∂z, ∂p/∂z − ∂r/∂x, ∂q/∂x − ∂p/∂y), each partial
+derivative a central difference. This runs on the CPU, once per particle
+per frame (`buildFlowShell()`'s particles, advected in `animate()`) rather
+than a GPGPU render-to-texture pipeline, since this vendored Three.js r128
+setup has no build step to add one — measured with a real fake-vs-real A/B
+FPS comparison (headless, `performance.now()` over 3s) against the previous
+wireframe build: no regression (15.1fps vs. 12.0fps under this sandbox's
+software `swiftshader` renderer — both numbers are low only because there's
+no real GPU here at all; a real GPU renders either version far faster).
+
+Each particle also gets pulled gently back toward its own anchor point
+every frame (a soft "leash," proportional to how far it's drifted) so the
+flow visibly swirls *around* the Core's envelope instead of drifting away
+or collapsing inward — the standard way to keep a curl-noise field
+bounded to a shape rather than letting it disperse. Turbulence amplitude
+is never zero (per direct request, the Core must never sit still like a
+flat static image) and grows further with real thinking/voice activity,
+same as every other signal on this page. Frozen (no per-frame advection)
+under `prefers-reduced-motion`, same rule as every other continuous motion
+source here — the real-signal-driven group scale/opacity changes stay on.
 
 ### Individually pulsing dots — not a field of fixed-size points
 
@@ -144,6 +194,14 @@ Core (mouse wheel to zoom); it's real 3D geometry, not a flat sprite. This
 is separate from webcam face tracking: **orbiting moves the camera** around
 a Core that stays put; **face tracking rotates the Core itself** to face
 wherever your tracked face is. Both can be in play at once.
+
+Vertical drag range was ±1.2 rad (~69°) — enough to tilt the view, not
+enough to actually look from above or below. Per direct request (it's
+round, so dragging should work in every direction, not just side to side),
+this is now ±1.55 rad (~88.8°) — close enough to straight overhead/
+underneath to feel unrestricted, stopping just short of the exact pole
+where the camera's up-vector would flip (a real gimbal-lock artifact, not
+a style choice). Verified with real screenshots dragged to both extremes.
 
 ## Background depth
 
