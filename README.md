@@ -755,6 +755,12 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   in `ClaudeBrain`) rather than left at the SDK's own defaults, so a
   transient 429/5xx gets more chances to recover before a phone call or
   chat turn gives up.
+- **Every file-backed SQLite store uses WAL journal mode**, not SQLite's
+  default rollback journal — lets a read and a write against the same
+  store happen concurrently without blocking each other (e.g. the
+  dashboard's `/status` reading `MemoryStore` while a conversation is
+  actively saving a fact), and is more resilient to a hard kill mid-write.
+  Verified live against a real file, not just asserted in code.
 - **A paired device survives a restart** — `PairingService` and
   `DeviceRegistry` are now both optionally SQLite-backed
   (`JARVIS_PAIRING_DB_PATH`, `JARVIS_DEVICE_REGISTRY_DB_PATH`). Before

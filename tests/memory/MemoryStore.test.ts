@@ -77,4 +77,14 @@ describe("MemoryStore", () => {
     expect(store.deleteByKey("missing")).toBe(false);
     store.close();
   });
+
+  test("a file-backed store uses WAL journal mode", () => {
+    const dbPath = `/tmp/jarvis-memory-test-${crypto.randomUUID()}.sqlite`;
+    const store = new MemoryStore(dbPath);
+    const mode = (store as unknown as { db: { query: (sql: string) => { get: () => { journal_mode: string } } } }).db
+      .query("PRAGMA journal_mode")
+      .get();
+    expect(mode.journal_mode).toBe("wal");
+    store.close();
+  });
 });

@@ -33,6 +33,7 @@ export class ActivityLog {
 
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
+    this.db.run("PRAGMA journal_mode = WAL");
     this.db.run(`
       CREATE TABLE IF NOT EXISTS activity_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

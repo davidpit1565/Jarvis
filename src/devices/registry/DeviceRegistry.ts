@@ -40,6 +40,7 @@ export class DeviceRegistry {
 
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
+    this.db.run("PRAGMA journal_mode = WAL");
     this.db.run(`
       CREATE TABLE IF NOT EXISTS devices (
         id TEXT PRIMARY KEY,

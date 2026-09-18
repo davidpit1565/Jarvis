@@ -17,6 +17,10 @@ export class MemoryStore {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
     this.db = new Database(dbPath);
+    // WAL lets a read (e.g. SEARCH_MEMORY) and a write (SAVE_MEMORY) happen
+    // concurrently without blocking each other, and survives a hard kill
+    // more safely than the default rollback journal. No effect on ":memory:".
+    if (dbPath !== ":memory:") this.db.run("PRAGMA journal_mode = WAL");
     this.db.run(`
       CREATE TABLE IF NOT EXISTS memory_records (
         id TEXT PRIMARY KEY,

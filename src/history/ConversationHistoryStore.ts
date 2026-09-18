@@ -22,6 +22,7 @@ export class ConversationHistoryStore {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
     this.db = new Database(dbPath);
+    if (dbPath !== ":memory:") this.db.run("PRAGMA journal_mode = WAL");
     this.db.run(`
       CREATE TABLE IF NOT EXISTS conversation_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
