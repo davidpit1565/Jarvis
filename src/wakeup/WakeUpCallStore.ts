@@ -73,6 +73,38 @@ export class WakeUpCallStore {
     return result.changes > 0;
   }
 
+  private getById(id: string): WakeUpCallRecord | null {
+    const row = this.db
+      .query(
+        `SELECT id, time_of_day as timeOfDay, label, enabled, last_triggered_date as lastTriggeredDate, created_at as createdAt
+         FROM wakeup_calls WHERE id = ?`
+      )
+      .get(id) as (Omit<WakeUpCallRecord, "enabled"> & { enabled: number }) | null;
+    return row ? { ...row, enabled: row.enabled === 1 } : null;
+  }
+
+  /**
+   * Edits an existing wake-up call's time of day and/or label in place —
+   * e.g. "actually wake me up at 8 instead". Without this, changing
+   * anything meant delete-then-recreate, which loses lastTriggeredDate
+   * for no reason (so the call could fire again today right after being
+   * "changed" for later today).
+   */
+  update(id: string, changes: { timeOfDay?: string; label?: string | null }): WakeUpCallRecord | null {
+    const existing = this.getById(id);
+    if (!existing) return null;
+
+    if (changes.timeOfDay !== undefined && !isValidTimeOfDay(changes.timeOfDay)) {
+      throw new Error(`Invalid timeOfDay: "${changes.timeOfDay}" — expected 24-hour HH:MM`);
+    }
+
+    const timeOfDay = changes.timeOfDay ?? existing.timeOfDay;
+    const label = changes.label !== undefined ? changes.label : existing.label;
+
+    this.db.query(`UPDATE wakeup_calls SET time_of_day = ?, label = ? WHERE id = ?`).run(timeOfDay, label, id);
+    return { ...existing, timeOfDay, label };
+  }
+
   /** Records that this call actually went out today, so the scheduler doesn't fire it again until tomorrow. */
   markTriggered(id: string, dateStr: string): void {
     this.db.query(`UPDATE wakeup_calls SET last_triggered_date = ? WHERE id = ?`).run(dateStr, id);

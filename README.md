@@ -551,9 +551,12 @@ another reminder notification.
 - **`CREATE_WAKEUP_CALL`** (`SAFE_ACTION`, standing-granted) — just tell
   JARVIS "wake me up at 7am every day" and it schedules a recurring daily
   call at that time (`src/wakeup/WakeUpCallStore.ts`,
-  `JARVIS_WAKEUP_CALL_DB_PATH`). **`LIST_WAKEUP_CALLS`** (`READ`) and
-  **`DELETE_WAKEUP_CALL`** (`SAFE_ACTION`, standing-granted) round out
-  managing the schedule entirely through conversation.
+  `JARVIS_WAKEUP_CALL_DB_PATH`). **`LIST_WAKEUP_CALLS`** (`READ`),
+  **`UPDATE_WAKEUP_CALL`** (`SAFE_ACTION`, standing-granted — edits the
+  time/label in place, e.g. "actually wake me up at 8 instead," without
+  losing its schedule history), and **`DELETE_WAKEUP_CALL`**
+  (`SAFE_ACTION`, standing-granted) round out managing the schedule
+  entirely through conversation.
 - A scheduler tick every 30 seconds (`src/index.ts`) checks the schedule
   against the current time in `JARVIS_TIMEZONE` and places any due call
   via `TwilioOutboundCaller` (Twilio's REST API) — idempotent by design

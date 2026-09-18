@@ -70,6 +70,44 @@ describe("WakeUpCallStore", () => {
     store.close();
   });
 
+  test("update edits timeOfDay and/or label in place", () => {
+    const store = new WakeUpCallStore(":memory:");
+    const record = store.create({ timeOfDay: "07:00", label: "weekday" });
+
+    const updated = store.update(record.id, { timeOfDay: "08:00" });
+    expect(updated?.timeOfDay).toBe("08:00");
+    expect(updated?.label).toBe("weekday"); // unchanged
+
+    const updatedAgain = store.update(record.id, { label: "later" });
+    expect(updatedAgain?.timeOfDay).toBe("08:00"); // unchanged
+    expect(updatedAgain?.label).toBe("later");
+    store.close();
+  });
+
+  test("update preserves lastTriggeredDate", () => {
+    const store = new WakeUpCallStore(":memory:");
+    const record = store.create({ timeOfDay: "07:00" });
+    store.markTriggered(record.id, "2026-01-15");
+
+    const updated = store.update(record.id, { timeOfDay: "08:00" });
+    expect(updated?.timeOfDay).toBe("08:00");
+    expect(store.list()[0]?.lastTriggeredDate).toBe("2026-01-15");
+    store.close();
+  });
+
+  test("update returns null for an unknown id", () => {
+    const store = new WakeUpCallStore(":memory:");
+    expect(store.update("does-not-exist", { timeOfDay: "08:00" })).toBeNull();
+    store.close();
+  });
+
+  test("update throws on an invalid timeOfDay", () => {
+    const store = new WakeUpCallStore(":memory:");
+    const record = store.create({ timeOfDay: "07:00" });
+    expect(() => store.update(record.id, { timeOfDay: "99:99" })).toThrow();
+    store.close();
+  });
+
   test("survives across instances backed by the same SQLite file", () => {
     const dbPath = `/tmp/jarvis-wakeup-test-${crypto.randomUUID()}.sqlite`;
 

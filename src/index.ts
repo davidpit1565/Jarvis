@@ -31,6 +31,7 @@ import { getDueWakeUpCalls, formatTimeOfDay, formatDateKey } from "@/wakeup/getD
 import { createCreateWakeUpCallTool } from "@/tools/wakeup/CreateWakeUpCallTool";
 import { createListWakeUpCallsTool } from "@/tools/wakeup/ListWakeUpCallsTool";
 import { createDeleteWakeUpCallTool } from "@/tools/wakeup/DeleteWakeUpCallTool";
+import { createUpdateWakeUpCallTool } from "@/tools/wakeup/UpdateWakeUpCallTool";
 import { TwilioOutboundCaller } from "@/communication/phone/TwilioOutboundCaller";
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
@@ -251,8 +252,10 @@ function main() {
   if (wakeUpCallsEnabled) {
     toolRegistry.registerTool(createCreateWakeUpCallTool(wakeUpCallStore));
     toolRegistry.registerTool(createListWakeUpCallsTool(wakeUpCallStore));
+    toolRegistry.registerTool(createUpdateWakeUpCallTool(wakeUpCallStore));
     toolRegistry.registerTool(createDeleteWakeUpCallTool(wakeUpCallStore));
     permissionService.grant(DEFAULT_USER_ID, "CREATE_WAKEUP_CALL");
+    permissionService.grant(DEFAULT_USER_ID, "UPDATE_WAKEUP_CALL");
     permissionService.grant(DEFAULT_USER_ID, "DELETE_WAKEUP_CALL");
 
     const outboundCaller = new TwilioOutboundCaller(
