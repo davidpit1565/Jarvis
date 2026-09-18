@@ -887,6 +887,37 @@
   let audioGlow = 0;
   const jarvisStateEl = document.getElementById("jarvis-state");
   let lastJarvisStateLabel = "";
+  // Real, PERSISTENT growth — distinct from brainPulse/audioGlow above,
+  // which are momentary and decay back down every time. Per direct user
+  // request ("based on how it answers me, how it thinks... it should also
+  // grow"): every real brain.request/brain.response Core ever sends this
+  // page (never the labeled DEMO feed — see the isReal param on
+  // pushActivityLine below) nudges a persisted counter, and the Core's
+  // idle baseline size very slowly grows with it, with real diminishing
+  // returns (a log curve, capped at +22% — chosen small enough that even
+  // full growth stays well inside the clearance margins measured for the
+  // side panels, including the narrow-viewport fit from the responsive
+  // pass above) so it never runs away or crowds anything out. Declared
+  // here (before animate()'s first synchronous call) for the same TDZ
+  // reason as the other `let`s above.
+  const GROWTH_STORAGE_KEY = "jarvis_total_real_brain_events";
+  const GROWTH_CAP_EVENTS = 300;
+  const GROWTH_MAX = 0.22;
+  function loadTotalRealBrainEvents() {
+    try {
+      return parseInt(localStorage.getItem(GROWTH_STORAGE_KEY), 10) || 0;
+    } catch (e) {
+      return 0; // localStorage can throw (private browsing, blocked, file:// edge cases) — never let growth break the page
+    }
+  }
+  function saveTotalRealBrainEvents(n) {
+    try { localStorage.setItem(GROWTH_STORAGE_KEY, String(n)); } catch (e) { /* non-fatal — growth just won't persist this session */ }
+  }
+  function growthScaleFor(n) {
+    return 1 + Math.min(GROWTH_MAX, (Math.log10(1 + n) / Math.log10(1 + GROWTH_CAP_EVENTS)) * GROWTH_MAX);
+  }
+  let totalRealBrainEvents = loadTotalRealBrainEvents();
+  let growthScale = growthScaleFor(totalRealBrainEvents);
   const rgbSplit = document.getElementById("rgb-split");
   const banner = document.getElementById("glitch-banner");
   const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1036,7 +1067,7 @@
       // this is alive, not a static prop, even when facing straight
       // ahead and silent.
       const breathe = 1 + Math.sin(t * 0.7) * 0.012 + brainPulse * 0.01 + audioGlow * 0.015;
-      faceGroup.scale.setScalar(breathe);
+      faceGroup.scale.setScalar(breathe * growthScale);
     }
     if (!REDUCED_MOTION) ring.rotation.z = t * 0.15;
 
@@ -1069,6 +1100,12 @@
     ["MEMORY LOAD", "64%", 0.64],
     ["TOOL REGISTRY", "—", 0],
     ["PERMISSION GATE", "NOMINAL", 0.9],
+    // Real, not cosmetic — see the growth declarations above. Shown here
+    // (rather than left silent) for the same reason the Core's state
+    // label is shown as text in Round 4: if the Core's baseline size is
+    // visibly changing, the dashboard should say why instead of leaving
+    // it a mystery.
+    ["GROWTH", `×${growthScale.toFixed(2)}`, (growthScale - 1) / GROWTH_MAX],
   ];
   const rightLines = [
     ["DEVICES", "—", 0],
@@ -1094,6 +1131,15 @@
   const panelRightRows = document.getElementById("panel-right-rows");
   renderPanel(panelLeftRows, leftLines);
   renderPanel(panelRightRows, rightLines);
+
+  // Called from pushActivityLine() above on every real (never demo)
+  // brain.request/brain.response — keeps the GROWTH row in sync with the
+  // same growthScale value actually applied to the Core's size.
+  function updateGrowthRow() {
+    leftLines[4][1] = `×${growthScale.toFixed(2)}`;
+    leftLines[4][2] = (growthScale - 1) / GROWTH_MAX;
+    renderPanel(panelLeftRows, leftLines);
+  }
 
   setInterval(() => {
     // subtle live-feeling jitter on the purely-cosmetic values only —
@@ -1195,7 +1241,7 @@
     }
   }
 
-  function pushActivityLine(type, payload, timestamp) {
+  function pushActivityLine(type, payload, timestamp, isReal = false) {
     const time = new Date(timestamp || Date.now()).toLocaleTimeString([], { hour12: false });
     activityQueue.push({ time, text: describeEvent(type, payload || {}), kind: kindFor(type) });
     if (activityQueue.length > MAX_ACTIVITY_LINES) activityQueue.shift();
@@ -1212,6 +1258,15 @@
       const p = payload || {};
       const magnitude = type === "brain.request" ? (p.messageCount || 1) / 6 : ((p.toolCallCount || 0) + 1) / 4;
       brainIntensity = Math.max(brainIntensity, Math.min(1, magnitude));
+      // Persistent growth (see the declarations above): only ever from a
+      // real Core connection, never the labeled DEMO feed, so the Core
+      // never grows from anything but genuine use.
+      if (isReal) {
+        totalRealBrainEvents++;
+        saveTotalRealBrainEvents(totalRealBrainEvents);
+        growthScale = growthScaleFor(totalRealBrainEvents);
+        updateGrowthRow();
+      }
     }
   }
 
@@ -1267,12 +1322,12 @@
       clearTimeout(connectTimeout);
       stopDemoFeed();
       setActivityStatus(true);
-      pushActivityLine("device.connected", { deviceId: "observer (this page)" }, Date.now());
+      pushActivityLine("device.connected", { deviceId: "observer (this page)" }, Date.now(), true);
     });
     socket.addEventListener("message", (ev) => {
       try {
         const msg = JSON.parse(ev.data);
-        pushActivityLine(msg.type, msg.payload, msg.timestamp);
+        pushActivityLine(msg.type, msg.payload, msg.timestamp, true);
       } catch (e) { /* ignore malformed frames */ }
     });
     socket.addEventListener("close", () => {

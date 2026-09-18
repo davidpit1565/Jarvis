@@ -192,6 +192,47 @@ pattern most voice-AI UIs converge on, but Core has no real speech-detection
 signal to back it with, so — same rule as everywhere else on this page —
 it's left out rather than faked.
 
+## Real, persistent growth — not just a momentary pulse
+
+Per direct request: *"based on how it answers me, how it thinks... it
+should also grow."* `brainPulse`/`brainIntensity` above already make the
+Core grow and brighten for the few seconds around a real thought, then
+decay back down — that's reactivity, not growth. This is the other half:
+a real, **persistent** baseline size, `growthScale`, that only ever
+increases from genuine accumulated use.
+
+Every real `brain.request`/`brain.response` Core sends this page (never
+the labeled DEMO feed — a 4th parameter on `pushActivityLine()`,
+`isReal`, is only ever `true` from an actual `/observer` WebSocket
+message, and demo-feed calls simply never pass it) increments a counter
+persisted to `localStorage`. The Core's idle size is `growthScale` times
+its base size, on a real diminishing-returns curve (`log10`) capped at
++22% total — chosen small enough that even fully "grown" the Core stays
+well inside the panel clearance margins measured for both desktop and the
+narrow-viewport fit above, so growth can never crowd anything out or
+reintroduce the overlap bugs already fixed. It survives page reloads
+(same origin) since it's read from `localStorage` on load, not reset to a
+fixed starting value.
+
+Shown honestly, not left invisible: a **GROWTH** row in the SYSTEM STATUS
+panel (`×1.00` at zero real events, climbing toward `×1.22`) — the same
+principle as the STATE label above: if the Core's own baseline size is
+changing, the dashboard says why instead of leaving it a silent mystery.
+`localStorage` access is wrapped in `try/catch` throughout (private
+browsing, blocked storage, or `file://` edge cases all fail differently
+across browsers) so a storage failure never breaks the page — growth
+simply won't persist that session.
+
+Verified with a real fake Core WebSocket server (a tiny `Bun.serve`
+script, not a mock of the growth code itself) sending a genuine burst of
+`brain.request`/`brain.response` frames: the GROWTH row climbed in step
+with the real event count, `localStorage`'s stored count matched exactly,
+and — the actual point of the feature — reloading the page carried the
+accumulated count forward instead of resetting it. A second run confirmed
+the inverse just as concretely: with Core genuinely offline (demo feed
+only, several full 2.2s demo cycles), the counter never left `null` —
+proof the demo feed cannot, not just does not, touch it.
+
 ## Real dashboard numbers, not decoration — TOOL REGISTRY / DEVICES / OBSERVERS
 
 The two side panels also poll a second real endpoint, **`GET /status`**
