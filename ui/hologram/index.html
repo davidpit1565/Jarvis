@@ -432,6 +432,25 @@
   sctx.fillRect(0, 0, 32, 32);
   const spriteTex = new THREE.CanvasTexture(spriteCanvas);
 
+  // A separate, much more gradual falloff for the large ambient head-glow
+  // halo below — spriteTex's 3-stop gradient is tuned for small crisp
+  // accent dots and shows a visible hard edge once blown up to sprite
+  // scale ~7 for a whole-head bloom wash; this one tapers over several
+  // more steps so the glow fades into the dark background rather than
+  // reading as a lit circle with a boundary.
+  const haloCanvas = document.createElement("canvas");
+  haloCanvas.width = haloCanvas.height = 128;
+  const hctx = haloCanvas.getContext("2d");
+  const haloGrad = hctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  haloGrad.addColorStop(0, "rgba(255,255,255,1)");
+  haloGrad.addColorStop(0.25, "rgba(255,255,255,0.55)");
+  haloGrad.addColorStop(0.5, "rgba(255,255,255,0.22)");
+  haloGrad.addColorStop(0.75, "rgba(255,255,255,0.06)");
+  haloGrad.addColorStop(1, "rgba(255,255,255,0)");
+  hctx.fillStyle = haloGrad;
+  hctx.fillRect(0, 0, 128, 128);
+  const haloTex = new THREE.CanvasTexture(haloCanvas);
+
   const faceGroup = new THREE.Group();
   scene.add(faceGroup);
 
@@ -629,6 +648,43 @@
     return new THREE.BufferGeometry().setFromPoints(segPositions);
   }
 
+  // The LeePerrySmith scan includes real, wide bust/shoulders — comparison
+  // against the reference showed its figure is a slender neck fading to
+  // almost nothing near the bottom of frame, not a wide torso. Cropping
+  // the geometry itself (rather than just the camera framing) keeps this
+  // working regardless of viewport/orbit angle. Drops any triangle with a
+  // vertex below minY (used for solid meshes / line-grid input, where a
+  // triangle needs all 3 vertices intact) or any vertex below minY
+  // outright (used for THREE.Points, which ignores the index buffer
+  // entirely and draws one point per position regardless of triangles).
+  function clipTrianglesByY(geometry, minY) {
+    const pos = geometry.attributes.position;
+    const index = geometry.index;
+    const triCount = index ? index.count / 3 : pos.count / 3;
+    function idx(t, k) { return index ? index.getX(t * 3 + k) : t * 3 + k; }
+    const kept = [];
+    for (let t = 0; t < triCount; t++) {
+      const ia = idx(t, 0), ib = idx(t, 1), ic = idx(t, 2);
+      if (pos.getY(ia) < minY || pos.getY(ib) < minY || pos.getY(ic) < minY) continue;
+      kept.push(ia, ib, ic);
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute("position", pos);
+    out.setIndex(kept);
+    return out;
+  }
+  function clipPointsByY(geometry, minY) {
+    const pos = geometry.attributes.position;
+    const kept = [];
+    for (let i = 0; i < pos.count; i++) {
+      if (pos.getY(i) < minY) continue;
+      kept.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute("position", new THREE.Float32BufferAttribute(kept, 3));
+    return out;
+  }
+
   function base64ToArrayBuffer(b64) {
     const binary = atob(b64);
     const bytes = new Uint8Array(binary.length);
@@ -656,23 +712,48 @@
       );
       const simplified = new THREE.SimplifyModifier().modify(merged, removeCount);
 
+      // Crop off the scan's real wide shoulders (see clipTrianglesByY
+      // above) — the reference is a slender neck fading to almost nothing,
+      // not a wide torso, and this was the single biggest silhouette
+      // mismatch once the head shape/grid/fill were otherwise settled.
+      const shoulderCutoffY = -1.4;
+      const trimmedTris = clipTrianglesByY(simplified, shoulderCutoffY);
+      const trimmedPoints = clipPointsByY(simplified, shoulderCutoffY);
+
       const modelGroup = new THREE.Group();
       // The source scan is natively ~8 units across; scale it down to
       // this scene's existing camera-distance/panel/plinth proportions.
       modelGroup.scale.setScalar(0.384);
 
-      // A soft, glowing translucent fill of the whole head/neck/shoulders
-      // volume — comparison against the reference showed its head reads
-      // as a solid glowing mass with a grid on top, not a hollow wireframe
-      // cage around empty black space, which is what this page looked
-      // like without this. Very low opacity and additive so it never
-      // competes with the grid lines/dots for attention, just stops the
-      // inside from reading as an empty void.
+      // A soft, glowing translucent fill of the whole head/neck volume —
+      // comparison against the reference showed its head reads as a solid
+      // glowing mass with a grid on top, not a hollow wireframe cage
+      // around empty black space. Brighter and more saturated than the
+      // first attempt at this (0x1c4a5c/0.16) — the reference's glow reads
+      // as much more intense/blown-out than a subtle tint.
       const fillMat = new THREE.MeshBasicMaterial({
-        color: 0x1c4a5c, transparent: true, opacity: 0.16,
+        color: 0x2f7a94, transparent: true, opacity: 0.24,
         side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
       });
-      modelGroup.add(new THREE.Mesh(simplified, fillMat));
+      modelGroup.add(new THREE.Mesh(trimmedTris, fillMat));
+
+      // A large, soft, blurred radial sprite behind the whole head fakes
+      // the outward bloom halo the reference has (real bloom needs
+      // EffectComposer/UnrealBloomPass, not available in this vendored
+      // r128 setup) — without this the head reads as a crisp, contained
+      // shape against pure black, not a glowing light source in a dark
+      // room.
+      const haloMat = new THREE.SpriteMaterial({
+        map: haloTex, color: 0x6fd8e8, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.3,
+      });
+      const halo = new THREE.Sprite(haloMat);
+      halo.scale.set(6.5, 7.5, 1);
+      // Well behind the face (z=-1.6, vs. brain at z=-0.9 and face front
+      // around z=2) — the first placement (z=-0.5) sat close enough to
+      // the brain that the cyan halo washed its amber out toward white.
+      halo.position.set(0, 1.2, -1.6);
+      modelGroup.add(halo);
 
       // A real lat/long grid computed on the actual mesh surface (see
       // buildLatLongOnMesh above) instead of THREE.EdgesGeometry — the
@@ -689,20 +770,27 @@
         { c: [0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
         { c: [0, -0.1, 1.8], r: [1.35, 1.2, 1.35] },
       ];
-      const edgesGeo = buildLatLongOnMesh(simplified, 22, 20, latLongCenter, latLongExclusions);
+      const edgesGeo = buildLatLongOnMesh(trimmedTris, 22, 20, latLongCenter, latLongExclusions);
       const edgesMat = new THREE.LineBasicMaterial({
-        color: 0xcdf3ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+        color: 0xe8fbff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
       });
       modelGroup.add(new THREE.LineSegments(edgesGeo, edgesMat));
-      // A second, slightly larger + dimmer copy of the same edges gives a
-      // cheap "bloom" halo around every line without needing a real
-      // post-processing pass (no EffectComposer loaded here).
+      // A second and third, progressively larger + dimmer copy of the same
+      // edges gives a cheap "bloom" halo around every line without needing
+      // a real post-processing pass (no EffectComposer loaded here) — one
+      // extra layer wasn't enough glow spread compared to the reference.
       const glowMat = new THREE.LineBasicMaterial({
-        color: 0xcdf3ff, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending,
+        color: 0xafeeff, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending,
       });
       const glowLines = new THREE.LineSegments(edgesGeo, glowMat);
-      glowLines.scale.setScalar(1.025);
+      glowLines.scale.setScalar(1.03);
       modelGroup.add(glowLines);
+      const glowMat2 = new THREE.LineBasicMaterial({
+        color: 0xafeeff, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending,
+      });
+      const glowLines2 = new THREE.LineSegments(edgesGeo, glowMat2);
+      glowLines2.scale.setScalar(1.07);
+      modelGroup.add(glowLines2);
 
       // Cyan-blue, not white — the original particle-based build (before
       // any of the "alien" head-shape rounds) used this same cyan
@@ -715,7 +803,7 @@
         size: 0.03, map: spriteTex, transparent: true, depthWrite: false,
         blending: THREE.AdditiveBlending, color: 0x6fd8e8, opacity: 0.65,
       });
-      modelGroup.add(new THREE.Points(simplified, nodeMat));
+      modelGroup.add(new THREE.Points(trimmedPoints, nodeMat));
 
       // Bright pupil glints — the real eye sockets are already correct
       // via the mesh's own geometry; this adds the glowing "iris" accent
@@ -723,15 +811,19 @@
       // source mesh at the visually-identified eye locations. A soft
       // sprite billboard behind each solid pupil fakes the halo/bloom the
       // reference's eyes have — a plain sphere alone reads as a flat dot.
-      const eyeGeo = new THREE.SphereGeometry(0.085, 12, 12);
+      // Sized up from the first attempt (0.2) and stretched horizontally
+      // (almond-shaped, not round) — the reference's eyes are the single
+      // brightest, most eye-catching feature on the whole face, and the
+      // first pass read as too small/subtle to be a focal point.
+      const eyeGeo = new THREE.SphereGeometry(0.1, 12, 12);
       const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
       const eyeGlowMat = new THREE.SpriteMaterial({
-        map: spriteTex, color: 0xdfffff, transparent: true,
-        blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9,
+        map: spriteTex, color: 0xeaffff, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false, opacity: 1,
       });
       for (const ex of [-0.5, 0.5]) {
         const glow = new THREE.Sprite(eyeGlowMat);
-        glow.scale.setScalar(0.2);
+        glow.scale.set(0.42, 0.3, 1);
         glow.position.set(ex, 1.78, 1.98);
         modelGroup.add(glow);
         const eye = new THREE.Mesh(eyeGeo, eyeMat);
@@ -758,7 +850,10 @@
   const ringMat = new THREE.MeshBasicMaterial({ color: 0x6fd8e8, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
   const ring = new THREE.Mesh(ringGeo, ringMat);
   ring.rotation.x = Math.PI / 2 - 0.15;
-  ring.position.y = -1.55;
+  // Raised from -1.55 to sit just under the now-cropped, shorter neck
+  // (see shoulderCutoffY above) instead of leaving a large empty gap
+  // where the wide shoulders used to be.
+  ring.position.y = -0.85;
   scene.add(ring);
 
   /* ---------------------------------------------------------------

@@ -48,14 +48,32 @@ kept re-introducing "alien" cues one at a time (a bulbous crown, a funnel
 chin, wrong proportions, no real ears), the actual fix was to stop
 approximating a human head and use one:
 
-- A soft, glowing translucent **fill** of the whole head/neck/shoulders
-  volume (a low-opacity, additively-blended `THREE.MeshBasicMaterial`
-  rendered with the same decimated geometry, double-sided) sits behind
-  the grid. Without it, the wireframe read as a hollow cage around empty
-  black space; the reference's head reads as a solid glowing mass with a
-  grid on top. Kept deliberately faint (opacity 0.16) so it never
-  competes with the grid lines/dots for attention — it should stop the
-  inside from reading as a void, not become the dominant visual.
+- The scan's real bust is **cropped at the neck** (`clipTrianglesByY`/
+  `clipPointsByY` in `index.html`, cutting anything below a fixed height
+  in the source mesh) before any of the layers below are built. The
+  reference is a slender neck fading to almost nothing near the bottom of
+  frame; LeePerrySmith's real shoulders are wide and square, and once the
+  head shape/grid/fill were otherwise settled this was the single
+  biggest remaining silhouette mismatch — a width probe by height band
+  (logged during development) showed the neck stays a fairly constant
+  ~2.3-2.7 units wide up to the cutoff, then flares to 7-8.5 units for
+  the actual shoulders just below it.
+- A soft, glowing translucent **fill** of the whole (now neck-cropped)
+  head/neck volume sits behind the grid (a `THREE.MeshBasicMaterial`,
+  additively blended, double-sided, using the same cropped geometry).
+  Without it, the wireframe read as a hollow cage around empty black
+  space; the reference's head reads as a solid glowing mass with a grid
+  on top.
+- A large, soft-edged `THREE.Sprite` behind the head fakes the outward
+  **bloom halo** the reference has — real bloom needs
+  `EffectComposer`/`UnrealBloomPass`, not available in this vendored r128
+  setup. Uses its own gradient texture (`haloTex`) with several gradual
+  falloff steps rather than the small accent-dot sprite texture used
+  everywhere else on the page — reusing that one at this large a scale
+  showed a visible hard-edged circle instead of a soft ambient wash.
+  Positioned well behind the face (not near the brain) so its cyan tint
+  doesn't wash the brain's amber out toward white, which an earlier,
+  closer placement did.
 - **[LeePerrySmith](https://github.com/mrdoob/three.js/tree/master/examples/models/gltf/LeePerrySmith)**
   — a real facial-capture scan (head, neck, and shoulders) distributed
   with Three.js's own official examples, vendored locally under
@@ -89,28 +107,31 @@ approximating a human head and use one:
     existing custom eye/mouth accents (below) to cover it instead is what
     actually worked, the same way the reference's own eyes/mouth read as
     distinct bright features rather than more grid.
-  - A second, slightly larger and dimmer copy of the same line geometry
-    (`glowLines`, scale 1.025, opacity 0.18, additive blending) is drawn
-    behind the bright original as a cheap "poor man's bloom" — there's no
-    `EffectComposer`/`UnrealBloomPass` in this vendored setup, so the glow
-    is faked by literally re-drawing the lines slightly bigger and fainter
-    underneath.
+  - Two further, progressively larger and dimmer copies of the same line
+    geometry (`glowLines`/`glowLines2`, scale 1.03/1.07, opacity
+    0.28/0.12, additive blending) are drawn behind the bright original as
+    a cheap "poor man's bloom" — there's no `EffectComposer`/
+    `UnrealBloomPass` in this vendored setup, so the glow is faked by
+    literally re-drawing the lines slightly bigger and fainter underneath
+    (one extra layer wasn't enough spread compared to the reference).
   - A cyan-blue node dot (`THREE.Points`, color `0x6fd8e8`, size 0.03,
-    opacity 0.65) sits at every vertex of the full (non-excluded) mesh —
-    the same cyan the very first particle-based build (before any of the
-    "alien" head-shape rounds) used for its face dots, brought back once
-    the head *shape* itself was settled and the user asked for that
-    "internals" texture again. Deliberately still well under the size/
-    opacity that fused into a solid mass at this vertex density in an
-    earlier round (that earlier round used plain white, not cyan, at
-    0.05/0.9 — this is bluer *and* smaller/dimmer than that).
-- Two small bright spheres for the "pupil" glint, positioned at the real
+    opacity 0.65) sits at every vertex of the cropped mesh — the same
+    cyan the very first particle-based build (before any of the "alien"
+    head-shape rounds) used for its face dots, brought back once the head
+    *shape* itself was settled and the user asked for that "internals"
+    texture again. Deliberately still well under the size/opacity that
+    fused into a solid mass at this vertex density in an earlier round
+    (that earlier round used plain white, not cyan, at 0.05/0.9 — this is
+    bluer *and* smaller/dimmer than that).
+- Two bright spheres for the "pupil" glint, positioned at the real
   eye-socket coordinates (found by raycasting the source mesh at the
-  visually-identified eye locations, not guessed), each backed by a small
-  soft-glow `THREE.Sprite` (radial-gradient canvas texture, additive
-  blending) so the eyes read as glowing rather than flat matte dots — sized
-  small enough (scale 0.2) to stay contained around the eye; a larger first
-  attempt bled visibly onto the cheeks.
+  visually-identified eye locations, not guessed), each backed by a
+  soft-glow `THREE.Sprite` stretched horizontally into an almond shape
+  (radial-gradient canvas texture, additive blending) so the eyes read as
+  glowing rather than flat matte dots. Sized up and brightened from an
+  earlier, smaller/dimmer attempt — the reference's eyes are the single
+  brightest, most eye-catching feature on the whole face, and that first
+  pass read as too subtle to be a focal point.
 
 Real ears, a real nose, a real jaw, a real neck-into-shoulders — all
 inherent to the geometry, from any angle, with no per-feature code needed
