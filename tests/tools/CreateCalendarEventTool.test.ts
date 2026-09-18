@@ -3,6 +3,7 @@ import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { createCreateCalendarEventTool } from "@/tools/calendar/CreateCalendarEventTool";
 import { PermissionLevel } from "@/types/permissions";
+import { UndoStore } from "@/core/undo/UndoStore";
 
 const context = { userId: "user-1", requestId: "req-1" };
 const originalFetch = global.fetch;
@@ -63,5 +64,29 @@ describe("CREATE_CALENDAR_EVENT tool", () => {
     const tool = createCreateCalendarEventTool(makeClient());
     const result = await tool.execute({ summary: "Test", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:15:00Z" }, context);
     expect(result.success).toBe(false);
+  });
+
+  test("records the created event in the undo store when one is provided", async () => {
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({ id: "e1", summary: "Standup", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:15:00Z" } }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    const tool = createCreateCalendarEventTool(makeClient(), undoStore);
+    await tool.execute({ summary: "Standup", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:15:00Z" }, context);
+
+    expect(undoStore.takeLast()).toEqual({ type: "calendar_event_created", eventId: "e1", summary: "Standup" });
+  });
+
+  test("does not record anything in the undo store on failure", async () => {
+    global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    const tool = createCreateCalendarEventTool(makeClient(), undoStore);
+    await tool.execute({ summary: "Test", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:15:00Z" }, context);
+
+    expect(undoStore.takeLast()).toBeUndefined();
   });
 });

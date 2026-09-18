@@ -42,6 +42,8 @@ import { createListCalendarEventsTool } from "@/tools/calendar/ListCalendarEvent
 import { createUnlinkCalendarTool } from "@/tools/calendar/UnlinkCalendarTool";
 import { createCreateCalendarEventTool } from "@/tools/calendar/CreateCalendarEventTool";
 import { createDeleteCalendarEventTool } from "@/tools/calendar/DeleteCalendarEventTool";
+import { UndoStore } from "@/core/undo/UndoStore";
+import { createUndoLastActionTool } from "@/tools/undo/UndoLastActionTool";
 import { GmailClient } from "@/gmail/GmailClient";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
 import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
@@ -135,11 +137,13 @@ function main() {
         calendarTokenStore
       )
     : undefined;
+  const undoStore = new UndoStore();
   if (calendarClient) {
     toolRegistry.registerTool(createListCalendarEventsTool(calendarClient));
-    toolRegistry.registerTool(createCreateCalendarEventTool(calendarClient));
+    toolRegistry.registerTool(createCreateCalendarEventTool(calendarClient, undoStore));
     toolRegistry.registerTool(createDeleteCalendarEventTool(calendarClient));
     toolRegistry.registerTool(createUnlinkCalendarTool(calendarTokenStore));
+    toolRegistry.registerTool(createUndoLastActionTool(undoStore, calendarClient));
   }
 
   // Shares the same Google account link as Calendar (one OAuth consent
@@ -196,6 +200,7 @@ function main() {
     permissionService.grant(DEFAULT_USER_ID, "DELETE_CALENDAR_EVENT");
     // Same DANGEROUS reasoning as CLEAR_CONVERSATION_HISTORY above.
     permissionService.grant(DEFAULT_USER_ID, "UNLINK_CALENDAR");
+    permissionService.grant(DEFAULT_USER_ID, "UNDO_LAST_ACTION");
   }
 
   const deviceRegistry = new DeviceRegistry(config.deviceRegistryDbPath);

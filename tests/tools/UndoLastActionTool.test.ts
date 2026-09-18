@@ -1,0 +1,75 @@
+import { describe, test, expect, afterEach } from "bun:test";
+import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
+import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import { UndoStore } from "@/core/undo/UndoStore";
+import { createUndoLastActionTool } from "@/tools/undo/UndoLastActionTool";
+import { PermissionLevel } from "@/types/permissions";
+
+const context = { userId: "user-1", requestId: "req-1" };
+const originalFetch = global.fetch;
+
+afterEach(() => {
+  global.fetch = originalFetch;
+});
+
+function makeClient() {
+  const tokenStore = new CalendarTokenStore(":memory:");
+  tokenStore.save({ refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
+  return new GoogleCalendarClient("id", "secret", "https://example.com/callback", tokenStore);
+}
+
+describe("UNDO_LAST_ACTION tool", () => {
+  test("is SAFE_ACTION", () => {
+    const tool = createUndoLastActionTool(new UndoStore(), makeClient());
+    expect(tool.requiredPermission).toBe(PermissionLevel.SAFE_ACTION);
+  });
+
+  test("returns a failure result when there's nothing to undo", async () => {
+    const tool = createUndoLastActionTool(new UndoStore(), makeClient());
+    const result = await tool.execute({}, context);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Nothing to undo");
+  });
+
+  test("deletes the last-created calendar event", async () => {
+    let deletedEventId: string | undefined;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      deletedEventId = decodeURIComponent(url.split("/").pop() ?? "");
+      expect(init?.method).toBe("DELETE");
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    undoStore.record({ type: "calendar_event_created", eventId: "e1", summary: "Dentist" });
+    const tool = createUndoLastActionTool(undoStore, makeClient());
+
+    const result = await tool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    expect(deletedEventId).toBe("e1");
+  });
+
+  test("taking the action clears the undo store — undoing twice fails the second time", async () => {
+    global.fetch = (async () => new Response(null, { status: 204 })) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    undoStore.record({ type: "calendar_event_created", eventId: "e1", summary: "Dentist" });
+    const tool = createUndoLastActionTool(undoStore, makeClient());
+
+    await tool.execute({}, context);
+    const second = await tool.execute({}, context);
+
+    expect(second.success).toBe(false);
+  });
+
+  test("returns a failure result (not a throw) when the delete fails", async () => {
+    global.fetch = (async () => new Response("forbidden", { status: 403 })) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    undoStore.record({ type: "calendar_event_created", eventId: "e1", summary: "Dentist" });
+    const tool = createUndoLastActionTool(undoStore, makeClient());
+
+    const result = await tool.execute({}, context);
+    expect(result.success).toBe(false);
+  });
+});

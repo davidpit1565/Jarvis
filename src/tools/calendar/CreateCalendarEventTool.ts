@@ -1,6 +1,7 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import type { UndoStore } from "@/core/undo/UndoStore";
 
 export interface CreateCalendarEventInput extends Record<string, unknown> {
   summary: string;
@@ -21,7 +22,10 @@ function isValidIsoDate(value: string): boolean {
  * it's wrong), and requiring an interactive confirmation on every single
  * calendar add would defeat the point of just asking JARVIS to add it.
  */
-export function createCreateCalendarEventTool(calendarClient: GoogleCalendarClient): LocalTool<CreateCalendarEventInput> {
+export function createCreateCalendarEventTool(
+  calendarClient: GoogleCalendarClient,
+  undoStore?: UndoStore
+): LocalTool<CreateCalendarEventInput> {
   return {
     id: "CREATE_CALENDAR_EVENT",
     name: "create_calendar_event",
@@ -65,6 +69,7 @@ export function createCreateCalendarEventTool(calendarClient: GoogleCalendarClie
           end: input.end,
           location: input.location ?? null,
         });
+        undoStore?.record({ type: "calendar_event_created", eventId: event.id, summary: event.summary });
         return { success: true, data: { event } };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
