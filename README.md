@@ -568,10 +568,11 @@ other app's private files — and because the whole point of this
 project's security model (permission levels, the audit log, rate
 limiting, the confirmation flow) is that JARVIS only ever gets exactly
 the access it's been deliberately scoped to, nothing implicit. A
-photo-library integration is a separate, larger piece of work (it needs
-its own macOS permission prompt and a dedicated Photos-framework
-integration, not just a file read) and is intentionally not bundled into
-this change.
+photo-library integration needed its own macOS permission prompt and a
+dedicated Photos-framework integration, not just a file read — LIST_RECENT_PHOTOS
+is that integration, added later: metadata only (filename, date,
+dimensions, favorite flag) for the most recent items, never the actual
+image/video bytes, which remains separate, larger work.
 
 ## Phone gateway (call JARVIS)
 
@@ -1723,9 +1724,17 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   `web_search`/`web_fetch` tools (opt-in via `JARVIS_WEB_SEARCH=true`/
   `JARVIS_WEB_FETCH=true`), not through this registry — see "Real
   internet search" / "Real URL reading" above.
-- No Photos library access, no iPhone file access, and no write/delete
-  file access on the Mac at all — file access is Mac-only, read-only,
-  and scoped to `~/Desktop`/`~/Documents`/`~/Downloads`/`~/Jarvis`.
+- `LIST_RECENT_PHOTOS` gives Photos-library *metadata* only (filename,
+  date, dimensions, favorite flag) for the most recent items — never the
+  actual image/video bytes, and still no iPhone file access at all. File
+  access on the Mac itself is otherwise scoped to
+  `~/Desktop`/`~/Documents`/`~/Downloads`/`~/Jarvis` (see `READ_FILE_BYTES`
+  for the raw-bytes counterpart to `READ_TEXT_FILE`, used by
+  `SHARE_FILE_TO_PHONE` to deliver a small file to Telegram) and, for
+  `WRITE_FILE` specifically, no longer read-only — it's the one WRITE
+  capability the Agent has, CONFIRM-level (a fresh human confirmation on
+  every single call, no standing grant bypasses it), capped at 150KB, and
+  can overwrite an existing file with no undo.
 - **No arbitrary automation, by design.** There is no generic "run this
   shell command"/AppleScript/settings-change tool, and never will be —
   every capability the Agent can execute is a named, compiled-in Swift

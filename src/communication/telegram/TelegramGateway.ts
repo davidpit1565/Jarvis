@@ -119,6 +119,42 @@ export class TelegramGateway {
     }
   }
 
+  // 50MB is Telegram's own bot-API document upload limit — this check is
+  // defense in depth, not the real cap: ShareFileToPhoneTool's own
+  // caller-provided base64Content is realistically already bounded by
+  // READ_FILE_BYTES's 150KB device-side cap.
+  private static readonly MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
+
+  /**
+   * Uploads a file to the chat as a real Telegram document — the delivery
+   * half of SHARE_FILE_TO_PHONE, given bytes already read off the Mac by
+   * READ_FILE_BYTES. Multipart/form-data, distinct from sendMessage's
+   * plain JSON POST, since Telegram's sendDocument endpoint expects an
+   * actual file upload.
+   */
+  async sendDocument(chatId: string, base64Content: string, filename: string): Promise<void> {
+    const bytes = Buffer.from(base64Content, "base64");
+    if (bytes.length === 0) {
+      throw new Error("base64Content decoded to zero bytes");
+    }
+    if (bytes.length > TelegramGateway.MAX_DOCUMENT_BYTES) {
+      throw new Error(`File is ${bytes.length} bytes, over Telegram's ${TelegramGateway.MAX_DOCUMENT_BYTES}-byte document limit`);
+    }
+
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    form.append("document", new Blob([bytes]), filename);
+
+    const response = await fetch(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendDocument`, {
+      method: "POST",
+      body: form,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Telegram sendDocument failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+  }
+
   /**
    * Handles one Telegram Update webhook payload. Silently ignores anything
    * that isn't a plain text message (photos, stickers, service messages,

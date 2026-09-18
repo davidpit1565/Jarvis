@@ -16,6 +16,10 @@ import { quitApplicationTool } from "@/tools/system/QuitApplicationTool";
 import { openUrlTool } from "@/tools/system/OpenUrlTool";
 import { listDirectoryTool } from "@/tools/system/ListDirectoryTool";
 import { readTextFileTool } from "@/tools/system/ReadTextFileTool";
+import { readFileBytesTool } from "@/tools/system/ReadFileBytesTool";
+import { listRecentPhotosTool } from "@/tools/system/ListRecentPhotosTool";
+import { writeFileTool } from "@/tools/system/WriteFileTool";
+import { scheduleMacNotificationTool } from "@/tools/system/ScheduleMacNotificationTool";
 import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
 import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
 import { clickElementTool } from "@/tools/system/ClickElementTool";
@@ -44,6 +48,14 @@ import { createCreateWakeUpCallTool } from "@/tools/wakeup/CreateWakeUpCallTool"
 import { createListWakeUpCallsTool } from "@/tools/wakeup/ListWakeUpCallsTool";
 import { createDeleteWakeUpCallTool } from "@/tools/wakeup/DeleteWakeUpCallTool";
 import { createUpdateWakeUpCallTool } from "@/tools/wakeup/UpdateWakeUpCallTool";
+import { AlarmStore } from "@/alarms/AlarmStore";
+import { getDueAlarms } from "@/alarms/getDueAlarms";
+import { createCreateAlarmTool } from "@/tools/alarms/CreateAlarmTool";
+import { createListAlarmsTool } from "@/tools/alarms/ListAlarmsTool";
+import { createDeleteAlarmTool } from "@/tools/alarms/DeleteAlarmTool";
+import { createUpdateAlarmTool } from "@/tools/alarms/UpdateAlarmTool";
+import { TwilioSmsSender } from "@/communication/phone/TwilioSmsSender";
+import { createSendSmsTool } from "@/tools/phone/SendSmsTool";
 import { TwilioOutboundCaller } from "@/communication/phone/TwilioOutboundCaller";
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
@@ -69,6 +81,8 @@ import { createPauseMusicTool } from "@/tools/spotify/PauseMusicTool";
 import { createSkipTrackTool } from "@/tools/spotify/SkipTrackTool";
 import { createUnlinkSpotifyTool } from "@/tools/spotify/UnlinkSpotifyTool";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
+import { createSendEmailTool } from "@/tools/gmail/SendEmailTool";
+import { createReplyEmailTool } from "@/tools/gmail/ReplyEmailTool";
 import { createGetEmailTool } from "@/tools/gmail/GetEmailTool";
 import { createGetUnreadEmailCountTool } from "@/tools/gmail/GetUnreadEmailCountTool";
 import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
@@ -90,6 +104,7 @@ import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/Twi
 import { TelegramGateway, type TelegramSession } from "@/communication/telegram/TelegramGateway";
 import { DeviceVoiceGateway, type DeviceVoiceSession } from "@/communication/voice/DeviceVoiceGateway";
 import { createNotifyUserTool } from "@/tools/telegram/NotifyUserTool";
+import { createShareFileToPhoneTool } from "@/tools/telegram/ShareFileToPhoneTool";
 import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ActivityLog } from "@/core/activity/ActivityLog";
 import { WebAuthnStore } from "@/auth/WebAuthnStore";
@@ -193,6 +208,8 @@ function main() {
     toolRegistry.registerTool(createSearchEmailTool(gmailClient));
     toolRegistry.registerTool(createGetEmailTool(gmailClient));
     toolRegistry.registerTool(createGetUnreadEmailCountTool(gmailClient));
+    toolRegistry.registerTool(createSendEmailTool(gmailClient));
+    toolRegistry.registerTool(createReplyEmailTool(gmailClient));
   }
 
   const spotifyEnabled = Boolean(config.spotifyClientId && config.spotifyClientSecret && config.publicBaseUrl);
@@ -242,6 +259,10 @@ function main() {
   toolRegistry.registerTool(openUrlTool);
   toolRegistry.registerTool(listDirectoryTool);
   toolRegistry.registerTool(readTextFileTool);
+  toolRegistry.registerTool(readFileBytesTool);
+  toolRegistry.registerTool(listRecentPhotosTool);
+  toolRegistry.registerTool(writeFileTool);
+  toolRegistry.registerTool(scheduleMacNotificationTool);
   toolRegistry.registerTool(composeEmailDraftTool);
   toolRegistry.registerTool(clickElementTool);
   toolRegistry.registerTool(typeTextTool);
@@ -279,6 +300,13 @@ function main() {
     permissionService.grant(DEFAULT_USER_ID, "UNLINK_CALENDAR");
     permissionService.grant(DEFAULT_USER_ID, "UNDO_LAST_ACTION");
   }
+  if (gmailClient) {
+    // SAFE_ACTION per SendEmailTool/ReplyEmailTool's own reasoning: the
+    // effect (exact recipient, subject, body) is fully specified up front,
+    // same as CREATE_CALENDAR_EVENT — not CONFIRM/DANGEROUS.
+    permissionService.grant(DEFAULT_USER_ID, "SEND_EMAIL");
+    permissionService.grant(DEFAULT_USER_ID, "REPLY_EMAIL");
+  }
   if (spotifyClient) {
     permissionService.grant(DEFAULT_USER_ID, "PLAY_MUSIC");
     permissionService.grant(DEFAULT_USER_ID, "PAUSE_MUSIC");
@@ -306,7 +334,7 @@ function main() {
   // (via "device.roleGranted") and, since PermissionService's grants are
   // in-memory only, re-derived at startup for any device that already
   // has the role persisted from before a restart.
-  const STANDARD_PRIMARY_DEVICE_TOOLS = ["OPEN_APPLICATION", "QUIT_APPLICATION", "OPEN_URL"];
+  const STANDARD_PRIMARY_DEVICE_TOOLS = ["OPEN_APPLICATION", "QUIT_APPLICATION", "OPEN_URL", "SCHEDULE_MAC_NOTIFICATION"];
   function grantPrimaryDeviceTools(deviceId: string): void {
     for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {
       permissionService.grant(DEFAULT_USER_ID, toolId, deviceId);
@@ -385,6 +413,7 @@ function main() {
       config.ownerPhoneNumber
   );
   const wakeUpCallStore = new WakeUpCallStore(config.wakeUpCallDbPath);
+  const alarmStore = new AlarmStore(config.alarmDbPath);
 
   // A wake-up call gets its own conversation thread like any other phone
   // call, but with a distinct channelContext: JARVIS placed this call
@@ -516,6 +545,8 @@ function main() {
   if (telegramGateway && config.telegramOwnerChatId) {
     toolRegistry.registerTool(createNotifyUserTool(telegramGateway, config.telegramOwnerChatId));
     permissionService.grant(DEFAULT_USER_ID, "NOTIFY_USER");
+    toolRegistry.registerTool(createShareFileToPhoneTool(telegramGateway, config.telegramOwnerChatId));
+    permissionService.grant(DEFAULT_USER_ID, "SHARE_FILE_TO_PHONE");
   }
 
   // A paired device's "Hey JARVIS" wake-word channel gets its own
@@ -573,6 +604,14 @@ function main() {
     );
     const wakeUpTwimlUrl = new URL("/voice/wakeup-connected", config.twilioPublicBaseUrl!).toString();
 
+    // Same account/credentials as outboundCaller above — reuses the same
+    // "outbound call" config group since SMS needs exactly the same
+    // Twilio fields (account sid, auth token, from number) plus somewhere
+    // to send to (ownerPhoneNumber).
+    const smsSender = new TwilioSmsSender(config.twilioAccountSid!, config.twilioAuthToken!, config.twilioFromNumber!);
+    toolRegistry.registerTool(createSendSmsTool(smsSender, config.ownerPhoneNumber!));
+    permissionService.grant(DEFAULT_USER_ID, "SEND_SMS");
+
     // WakeUpCallStore's lastTriggeredDate check makes each tick idempotent
     // ONCE a call has actually completed — but a call stays due for up to
     // two ticks within the same matching minute (checks run every 30s),
@@ -618,6 +657,47 @@ function main() {
           })
           .finally(() => {
             inFlightWakeUpCallIds.delete(call.id);
+          });
+      }
+    }, 30_000);
+  }
+
+  let alarmInterval: ReturnType<typeof setInterval> | undefined;
+  const alarmsEnabled = Boolean(telegramGateway && config.telegramOwnerChatId);
+  if (alarmsEnabled) {
+    toolRegistry.registerTool(createCreateAlarmTool(alarmStore));
+    toolRegistry.registerTool(createListAlarmsTool(alarmStore));
+    toolRegistry.registerTool(createUpdateAlarmTool(alarmStore));
+    toolRegistry.registerTool(createDeleteAlarmTool(alarmStore));
+    permissionService.grant(DEFAULT_USER_ID, "CREATE_ALARM");
+    permissionService.grant(DEFAULT_USER_ID, "UPDATE_ALARM");
+    permissionService.grant(DEFAULT_USER_ID, "DELETE_ALARM");
+
+    // Same in-flight-tracking reasoning as inFlightWakeUpCallIds above —
+    // a slow Telegram send shouldn't get double-fired by the next tick.
+    const inFlightAlarmIds = new Set<string>();
+
+    alarmInterval = setInterval(() => {
+      const now = new Date();
+      const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
+      const todayDateStr = formatDateKey(now, config.timezone);
+      const due = getDueAlarms(alarmStore.list(), nowTimeOfDay, todayDateStr, inFlightAlarmIds);
+
+      for (const alarm of due) {
+        inFlightAlarmIds.add(alarm.id);
+        telegramGateway!
+          .sendMessage(config.telegramOwnerChatId!, `⏰ Alarm${alarm.label ? ` — ${alarm.label}` : ""}`)
+          .then(() => {
+            alarmStore.markTriggered(alarm.id, todayDateStr);
+            activityLog.record(`Alarm fired${alarm.label ? ` (${alarm.label})` : ""}`);
+          })
+          .catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[jarvis] failed to fire alarm ${alarm.id}:`, message);
+            activityLog.record(`Failed to fire alarm${alarm.label ? ` (${alarm.label})` : ""}: ${message}`);
+          })
+          .finally(() => {
+            inFlightAlarmIds.delete(alarm.id);
           });
       }
     }, 30_000);
@@ -890,6 +970,8 @@ function main() {
     webAuthnStore.close();
     wakeUpCallStore.close();
     if (wakeUpInterval) clearInterval(wakeUpInterval);
+    alarmStore.close();
+    if (alarmInterval) clearInterval(alarmInterval);
     if (weeklyDigestInterval) clearInterval(weeklyDigestInterval);
     if (checkinInterval) clearInterval(checkinInterval);
     if (morningBriefingInterval) clearInterval(morningBriefingInterval);

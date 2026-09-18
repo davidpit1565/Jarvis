@@ -58,6 +58,8 @@ export interface JarvisConfig {
   ownerPhoneNumber?: string;
   /** Path to the SQLite database storing recurring wake-up/scheduled-call times. */
   wakeUpCallDbPath: string;
+  /** Path to the SQLite database storing recurring alarms (Telegram-notification, not a phone call). */
+  alarmDbPath: string;
   /** Twilio <Say> voice name (e.g. "Polly.Matthew"); unset uses the gateway's own default. */
   twilioVoice?: string;
   /**
@@ -357,6 +359,7 @@ export function loadConfig(): JarvisConfig {
   const twilioFromNumber = process.env.TWILIO_FROM_NUMBER?.trim() || undefined;
   const ownerPhoneNumber = process.env.JARVIS_OWNER_PHONE_NUMBER?.trim() || undefined;
   const wakeUpCallDbPath = process.env.JARVIS_WAKEUP_CALL_DB_PATH ?? "./data/jarvis-wakeup-calls.sqlite";
+  const alarmDbPath = process.env.JARVIS_ALARM_DB_PATH ?? "./data/jarvis-alarms.sqlite";
 
   const outboundCallFieldsSet = [twilioAccountSid, twilioFromNumber, ownerPhoneNumber].filter(Boolean).length;
   if (outboundCallFieldsSet > 0 && outboundCallFieldsSet < 3) {
@@ -483,6 +486,7 @@ export function loadConfig(): JarvisConfig {
     twilioFromNumber,
     ownerPhoneNumber,
     wakeUpCallDbPath,
+    alarmDbPath,
     adminToken,
     webSearchEnabled,
     webSearchMaxUses,

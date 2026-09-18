@@ -9,14 +9,19 @@ const GOOGLE_CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calen
 // permission level) is what actually gates when that's allowed to happen,
 // not the OAuth scope.
 //
-// Also requests gmail.readonly in the same consent grant: linking a Google
-// account once covers both Calendar and Gmail (see src/gmail/GmailClient.ts),
-// rather than sending the user through two separate OAuth flows for the
-// same account. gmail.readonly only allows reading/searching — never
-// sending, deleting, or modifying mail — matching the "scoped, not blanket
-// mailbox access" boundary requested for this feature.
+// Also requests gmail.readonly + gmail.send in the same consent grant:
+// linking a Google account once covers both Calendar and Gmail (see
+// src/gmail/GmailClient.ts), rather than sending the user through two
+// separate OAuth flows for the same account. gmail.send is scoped to
+// sending only — it does not grant delete or arbitrary mailbox
+// modification — and was added on the user's own explicit request,
+// reversing this feature's original read-only-by-design boundary.
+// Existing linked accounts need to re-run GET /calendar/oauth/start to
+// pick up the new scope; a stored refresh token minted under the old,
+// narrower scope will keep working for Calendar/read Gmail but Gmail send
+// calls will fail with an insufficient-scope error until they do.
 const GOOGLE_SCOPES =
-  "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.readonly";
+  "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send";
 
 // Refresh a little before actual expiry, so a request never straddles the
 // exact expiry instant and gets rejected mid-flight by Google's clock

@@ -3,6 +3,7 @@ import type { EmailSummary } from "@/types/gmail";
 
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
+const GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 
 // Same margin as GoogleCalendarClient, for the same reason: refresh a
 // little before actual expiry so a request never straddles it.
@@ -12,10 +13,12 @@ const MAX_RESULTS_CAP = 10;
 const MAX_BODY_LENGTH = 4000;
 
 /**
- * Gmail access via raw fetch calls to the Gmail v1 REST API — read/search
- * only (the OAuth scope requested is gmail.readonly; there is no send,
- * delete, or modify capability here at all, by design, matching the
- * "scoped, not blanket mailbox access" boundary this feature was built to).
+ * Gmail access via raw fetch calls to the Gmail v1 REST API. Originally
+ * read/search only; sendMessage/replyToMessage below were added on the
+ * user's own explicit request (gmail.send scope, see GoogleCalendarClient's
+ * GOOGLE_SCOPES) — still no delete or arbitrary mailbox-modify capability,
+ * so the boundary is now "read + send, never delete/modify" rather than
+ * fully read-only.
  *
  * Shares its OAuth tokens with GoogleCalendarClient (same CalendarTokenStore,
  * same Google account, one consent screen covering both scopes) rather than
@@ -223,5 +226,123 @@ export class GmailClient {
 
     const data = (await response.json()) as { resultSizeEstimate?: number };
     return data.resultSizeEstimate ?? 0;
+  }
+
+  /**
+   * Strips CR/LF from a value that goes into a raw email header — without
+   * this, a `to` or `subject` string containing a newline could inject
+   * extra headers (e.g. a second `Bcc:` line) into the raw RFC 2822
+   * message this builds. Gmail's own API almost certainly rejects a raw
+   * message with malformed headers, but this is the actual boundary, not
+   * "Gmail probably catches it."
+   */
+  private sanitizeHeaderValue(value: string): string {
+    return value.replace(/[\r\n]+/g, " ").trim();
+  }
+
+  /** Base64url — required for Gmail's `raw` message field, distinct from Buffer's plain base64. */
+  private toBase64Url(input: string): string {
+    return Buffer.from(input, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  private buildRawMessage(params: {
+    to: string;
+    subject: string;
+    body: string;
+    inReplyTo?: string;
+    references?: string;
+  }): string {
+    const to = this.sanitizeHeaderValue(params.to);
+    const subject = this.sanitizeHeaderValue(params.subject);
+    const headers = [`To: ${to}`, `Subject: ${subject}`, "MIME-Version: 1.0", 'Content-Type: text/plain; charset="UTF-8"'];
+    if (params.inReplyTo) headers.push(`In-Reply-To: ${this.sanitizeHeaderValue(params.inReplyTo)}`);
+    if (params.references) headers.push(`References: ${this.sanitizeHeaderValue(params.references)}`);
+    return `${headers.join("\r\n")}\r\n\r\n${params.body}`;
+  }
+
+  /** Sends a brand-new email (not a reply to anything). Returns the new message's Gmail id. */
+  async sendMessage(to: string, subject: string, body: string): Promise<{ id: string }> {
+    const accessToken = await this.getValidAccessToken();
+    const raw = this.toBase64Url(this.buildRawMessage({ to, subject, body }));
+
+    const response = await fetch(GMAIL_SEND_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ raw }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gmail send failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+
+    const data = (await response.json()) as { id: string };
+    return { id: data.id };
+  }
+
+  /**
+   * Replies within an existing thread: fetches the original message's
+   * `From`/`Subject`/`Message-ID`/`References` headers and its `threadId`
+   * first, so the reply lands in the same Gmail thread and email clients
+   * recognize it as a reply (`In-Reply-To`/`References` set correctly),
+   * rather than sending a disconnected new message that merely mentions
+   * the original.
+   */
+  async replyToMessage(messageId: string, body: string): Promise<{ id: string }> {
+    const accessToken = await this.getValidAccessToken();
+
+    const url = new URL(`${GMAIL_MESSAGES_URL}/${encodeURIComponent(messageId)}`);
+    url.searchParams.set("format", "metadata");
+    url.searchParams.append("metadataHeaders", "Subject");
+    url.searchParams.append("metadataHeaders", "From");
+    url.searchParams.append("metadataHeaders", "Message-ID");
+    url.searchParams.append("metadataHeaders", "References");
+
+    const originalResponse = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!originalResponse.ok) {
+      throw new Error(
+        `Gmail message fetch failed (${originalResponse.status}): ${await originalResponse.text().catch(() => "")}`
+      );
+    }
+
+    const original = (await originalResponse.json()) as {
+      threadId?: string;
+      payload?: { headers?: Array<{ name: string; value: string }> };
+    };
+    const header = (name: string) =>
+      original.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
+
+    const originalFrom = header("From");
+    if (!originalFrom) {
+      throw new Error(`Could not determine the original message's sender (message ${messageId}) — cannot reply.`);
+    }
+    const originalSubject = header("Subject") || "(no subject)";
+    const replySubject = /^re:/i.test(originalSubject) ? originalSubject : `Re: ${originalSubject}`;
+    const originalMessageIdHeader = header("Message-ID");
+    const references = [header("References"), originalMessageIdHeader].filter(Boolean).join(" ").trim();
+
+    const raw = this.toBase64Url(
+      this.buildRawMessage({
+        to: originalFrom,
+        subject: replySubject,
+        body,
+        inReplyTo: originalMessageIdHeader || undefined,
+        references: references || undefined,
+      })
+    );
+
+    const response = await fetch(GMAIL_SEND_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ raw, threadId: original.threadId }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gmail reply failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+
+    const data = (await response.json()) as { id: string };
+    return { id: data.id };
   }
 }
