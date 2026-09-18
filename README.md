@@ -115,7 +115,9 @@ memory store (`src/memory/MemoryStore.ts`) that survives restarts:
   before answering.
 - **`DELETE_MEMORY`** (`src/tools/memory/DeleteMemoryTool.ts`) —
   `SAFE_ACTION`, standing-granted. Actually forgets a fact by key, for when
-  it's no longer true and there's nothing to replace it with.
+  it's no longer true and there's nothing to replace it with. Undoable
+  via `UNDO_LAST_ACTION` (see below) — its value is fetched right before
+  the delete so "undo that" can restore it.
 
 This is the first real step toward "JARVIS knows things about you between
 conversations" rather than only within a single session.
@@ -711,16 +713,17 @@ automated from here):
   in that check (rather than the create itself) is swallowed, since it's
   a nice-to-have warning, not something worth failing the whole request over.
 - **`UNDO_LAST_ACTION`** (`SAFE_ACTION`, standing-granted, registered
-  unconditionally — reminders don't require a calendar link) — "undo
-  that" right after JARVIS creates/updates/deletes a calendar event, or
-  deletes a reminder, actually reverses it, via a single-slot `UndoStore`
-  (`src/core/undo/UndoStore.ts`) that tracks only the one most recent
-  reversible action, not a full history to walk back through. Each
-  action is only actually reversible because something remembered what
-  it changed right before acting — `DELETE_CALENDAR_EVENT`/
-  `UPDATE_CALENDAR_EVENT`/`DELETE_REMINDER` all fetch first, act second.
-  In-memory only, like `PermissionService`'s grants; recording a new
-  action always replaces whatever was there.
+  unconditionally — reminders/memory don't require a calendar link) —
+  "undo that" right after JARVIS creates/updates/deletes a calendar
+  event, or deletes a reminder or a saved fact, actually reverses it, via
+  a single-slot `UndoStore` (`src/core/undo/UndoStore.ts`) that tracks
+  only the one most recent reversible action, not a full history to walk
+  back through. Each action is only actually reversible because
+  something remembered what it changed right before acting —
+  `DELETE_CALENDAR_EVENT`/`UPDATE_CALENDAR_EVENT`/`DELETE_REMINDER`/
+  `DELETE_MEMORY` all fetch first, act second. In-memory only, like
+  `PermissionService`'s grants; recording a new action always replaces
+  whatever was there.
 - **`SEARCH_EMAIL`** (`READ`) — searches the linked Gmail inbox using
   Gmail's own search syntax (`from:x`, `is:unread`, `subject:invoice`,
   `newer_than:2d`, ...) and returns matching messages' subject, sender,

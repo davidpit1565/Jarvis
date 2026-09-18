@@ -2,6 +2,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { ReminderStore } from "@/reminders/ReminderStore";
+import { MemoryStore } from "@/memory/MemoryStore";
 import { UndoStore } from "@/core/undo/UndoStore";
 import { createUndoLastActionTool } from "@/tools/undo/UndoLastActionTool";
 import { PermissionLevel } from "@/types/permissions";
@@ -163,5 +164,27 @@ describe("UNDO_LAST_ACTION tool", () => {
     const result = await tool.execute({}, context);
     expect(result.success).toBe(false);
     reminderStore.close();
+  });
+
+  test("restores a just-deleted memory fact", async () => {
+    const memoryStore = new MemoryStore(":memory:");
+    const undoStore = new UndoStore();
+    undoStore.record({ type: "memory_deleted", key: "user.oldJob", value: "Acme Corp" });
+    const tool = createUndoLastActionTool(undoStore, undefined, undefined, memoryStore);
+
+    const result = await tool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    expect(memoryStore.getByKey("user.oldJob")?.value).toBe("Acme Corp");
+    memoryStore.close();
+  });
+
+  test("fails to undo a memory deletion when no memoryStore was given", async () => {
+    const undoStore = new UndoStore();
+    undoStore.record({ type: "memory_deleted", key: "user.oldJob", value: "Acme Corp" });
+    const tool = createUndoLastActionTool(undoStore);
+
+    const result = await tool.execute({}, context);
+    expect(result.success).toBe(false);
   });
 });

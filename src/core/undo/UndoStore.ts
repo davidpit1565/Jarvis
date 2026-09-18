@@ -28,11 +28,18 @@ export interface UndoableReminderDeletion {
   recurrence: ReminderRecurrence | null;
 }
 
+export interface UndoableMemoryDeletion {
+  type: "memory_deleted";
+  key: string;
+  value: string;
+}
+
 export type UndoableAction =
   | UndoableCalendarEventCreation
   | UndoableCalendarEventDeletion
   | UndoableCalendarEventUpdate
-  | UndoableReminderDeletion;
+  | UndoableReminderDeletion
+  | UndoableMemoryDeletion;
 
 /**
  * Tracks exactly one undoable action — the most recent one — so "undo

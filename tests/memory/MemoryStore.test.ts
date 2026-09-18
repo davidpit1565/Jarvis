@@ -78,6 +78,20 @@ describe("MemoryStore", () => {
     store.close();
   });
 
+  test("getByKey returns the matching record", () => {
+    const store = new MemoryStore(":memory:");
+    store.save({ key: "user.name", value: "David" });
+
+    expect(store.getByKey("user.name")?.value).toBe("David");
+    store.close();
+  });
+
+  test("getByKey returns null for an unknown key", () => {
+    const store = new MemoryStore(":memory:");
+    expect(store.getByKey("missing")).toBeNull();
+    store.close();
+  });
+
   test("a file-backed store uses WAL journal mode", () => {
     const dbPath = `/tmp/jarvis-memory-test-${crypto.randomUUID()}.sqlite`;
     const store = new MemoryStore(dbPath);

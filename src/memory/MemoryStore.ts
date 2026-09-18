@@ -68,6 +68,14 @@ export class MemoryStore {
     return row ?? null;
   }
 
+  /** Exact key lookup — the natural handle Claude/the user actually has, unlike the opaque internal id. */
+  getByKey(key: string): MemoryRecord | null {
+    const row = this.db
+      .query(`SELECT id, key, value, created_at as createdAt FROM memory_records WHERE key = ?`)
+      .get(key) as MemoryRecord | null;
+    return row ?? null;
+  }
+
   search(keyFragment: string): MemoryRecord[] {
     const rows = this.db
       .query(

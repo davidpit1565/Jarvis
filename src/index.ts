@@ -165,7 +165,7 @@ function main() {
   // calendar link required), and reminder_deleted is one of the
   // undoable action types UNDO_LAST_ACTION itself already knows how to
   // reverse.
-  toolRegistry.registerTool(createUndoLastActionTool(undoStore, calendarClient, reminderStore));
+  toolRegistry.registerTool(createUndoLastActionTool(undoStore, calendarClient, reminderStore, memoryStore));
 
   // Shares the same Google account link as Calendar (one OAuth consent
   // screen, two scopes) rather than a second separate account link.
@@ -199,7 +199,7 @@ function main() {
   toolRegistry.registerTool(openUrlTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
-  toolRegistry.registerTool(createDeleteMemoryTool(memoryStore));
+  toolRegistry.registerTool(createDeleteMemoryTool(memoryStore, undoStore));
   toolRegistry.registerTool(createCreateReminderTool(reminderStore));
   toolRegistry.registerTool(createListRemindersTool(reminderStore));
   toolRegistry.registerTool(createCompleteReminderTool(reminderStore));
