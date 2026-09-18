@@ -13,6 +13,7 @@ import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationToo
 import { openApplicationTool } from "@/tools/system/OpenApplicationTool";
 import { quitApplicationTool } from "@/tools/system/QuitApplicationTool";
 import { openUrlTool } from "@/tools/system/OpenUrlTool";
+import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
@@ -213,6 +214,7 @@ function main() {
   }
 
   const deviceRegistry = new DeviceRegistry(config.deviceRegistryDbPath);
+  toolRegistry.registerTool(createListDevicesTool(deviceRegistry));
 
   // Device-scoped SAFE_ACTION tools a device automatically gets once it's
   // trusted as "primary" — that trust decision (a human approving its
