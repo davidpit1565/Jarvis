@@ -273,16 +273,6 @@
   </div>
 
 <script src="./three.min.js"></script>
-<script src="./headmodel/BufferGeometryUtils.js"></script>
-<script src="./headmodel/GLTFLoader.js"></script>
-<script src="./headmodel/SimplifyModifier.js"></script>
-<!-- Base64 of LeePerrySmith.glb (also kept as a plain file alongside it,
-     for reference/regeneration) — GLTFLoader.load(url) uses fetch(),
-     which Chromium blocks under file:// (unlike <script src>, which is
-     exempt), so the model is parsed from this embedded copy instead of
-     fetched, keeping the base page's "just open the file" promise intact
-     without requiring a local server for anything except face tracking. -->
-<script src="./headmodel/LeePerrySmith.b64.js"></script>
 <script>
 (function () {
   "use strict";
@@ -410,22 +400,14 @@
   }, { passive: false });
 
   /* ---------------------------------------------------------------
-   * 2b. A real human head — not sculpted geometry. After several rounds
-   *     of procedurally deforming a sphere (taper curves, brow/nose/
-   *     cheek bumps, hand-drawn eye/nose/cheek contour lines) kept
-   *     re-introducing "alien" cues one at a time (a bulbous crown, a
-   *     funnel chin, no real ears, wrong proportions), the actual fix is
-   *     to stop approximating a human head and use one: LeePerrySmith, a
-   *     real facial-capture scan distributed with Three.js's own official
-   *     examples (vendored locally under headmodel/, same offline-first
-   *     approach as three.min.js — no CDN dependency). It's decimated
-   *     down from its native ~17,700 triangles to a clean, sparse
-   *     wireframe (via SimplifyModifier) and rendered as glowing feature
-   *     edges (THREE.EdgesGeometry, which keeps only edges between faces
-   *     whose normals differ by more than ~20° — this is what makes the
-   *     nose bridge, eye socket rims, lips, and jawline read as clean
-   *     contour lines instead of a busy triangulated mesh) plus a bright
-   *     node dot at every remaining vertex.
+   * 2b. THE CORE — see the full explanation further down (section "2c"),
+   *     right before it's actually built. In short: this used to be a
+   *     real human 3D face scan (LeePerrySmith, from Three.js's own
+   *     examples); after many rounds trying to close the gap between a
+   *     real scan's anatomical specifics and a synthetic cinematic
+   *     reference render, it was replaced entirely with an abstract,
+   *     activity-reactive energy core — the actual norm for real
+   *     shipped voice-AI interfaces, not a compromise.
    * ------------------------------------------------------------- */
   // Soft round sprite so points read as glowing dots, not hard squares.
   const spriteCanvas = document.createElement("canvas");
@@ -460,13 +442,6 @@
 
   const faceGroup = new THREE.Group();
   scene.add(faceGroup);
-
-  // Populated once the model below finishes loading — animate()/
-  // audioLoop() (further down) guard every access with `if (mouth)` /
-  // `if (brain)` so they run safely from frame 1 while this loads.
-  let mouth = null;
-  let brain = null;
-  let faceDotsMat = null;
 
   // Makes a PointsMaterial's dots individually grow/shrink over time via a
   // per-vertex random phase (a "aPhase" attribute on its geometry) instead
@@ -555,524 +530,128 @@
     };
   }
 
-  /* Mouth line — two thin curved lines (upper/lower lip) whose vertical
-     separation is driven every frame by the real audio level (see
-     audioLoop() further down), so the mouth visibly opens while speech/
-     mic input is loud and closes to a flat line at silence — genuine lip
-     movement tied to sound, positioned at the model's real mouth
-     coordinates (found by raycasting the source mesh — see dev notes in
-     the PR), not a projected approximation like the old sphere-based
-     version needed. */
-  function buildMouth(cx, cy, cz, width) {
-    const segs = 8;
-    function makeLine() {
-      const positions = new Float32Array((segs + 1) * 3);
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      return geo;
-    }
-    const upperGeo = makeLine();
-    const lowerGeo = makeLine();
-    const mouthMat = new THREE.LineBasicMaterial({
-      color: 0xdfffff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
-    });
-    const group = new THREE.Group();
-    group.add(new THREE.Line(upperGeo, mouthMat), new THREE.Line(lowerGeo, mouthMat.clone()));
-    return { group, upperGeo, lowerGeo, cx, cy, cz, width, segs };
-  }
-  function updateMouth(level) {
-    if (!mouth) return;
-    const open = level * 0.5;
-    const upPos = mouth.upperGeo.attributes.position;
-    const loPos = mouth.lowerGeo.attributes.position;
-    for (let i = 0; i <= mouth.segs; i++) {
-      const t = i / mouth.segs;
-      const x = mouth.cx + (t - 0.5) * mouth.width;
-      const curve = Math.sin(t * Math.PI) * 0.06;
-      upPos.setXYZ(i, x, mouth.cy + curve + open, mouth.cz);
-      loPos.setXYZ(i, x, mouth.cy - curve - open, mouth.cz);
-    }
-    upPos.needsUpdate = true;
-    loPos.needsUpdate = true;
-  }
+  /* ---------------------------------------------------------------
+   * 2c. THE CORE — an abstract, real-activity-reactive energy core.
+   *
+   *     This replaces an earlier real-human-3D-face-scan avatar
+   *     (LeePerrySmith, from Three.js's own examples) entirely. That
+   *     approach went through many rounds - density/brightness, a real
+   *     computed lat/long grid, cropped shoulders, a measured
+   *     crown-vs-face proportion fix - and kept closing individual gaps
+   *     without closing the overall one: direct user feedback was "this
+   *     looks like a fake of the original," because a real face scan
+   *     carries real anatomical specifics (one person's exact
+   *     asymmetry, separately-sculpted eyeball spheres, a literal open
+   *     mouth with teeth) that a synthetic cinematic reference render
+   *     simply doesn't have to reconcile. No amount of grid tuning
+   *     closes a gap that's actually about what kind of object the two
+   *     renders are.
+   *
+   *     Researched what real, shipped voice-AI interfaces actually look
+   *     like before rebuilding (see the PR description for sources):
+   *     ChatGPT's Advanced Voice Mode, documented voice-orb design
+   *     systems (idle/listening/thinking/speaking as the standard state
+   *     model), and open-source Iron-Man-style "Arc Reactor" builds that
+   *     hook the Web Audio API up to TTS output to pulse a procedural
+   *     core. None of them use a real human face - an abstract core is
+   *     the actual norm for this kind of interface, not a compromise.
+   *
+   *     Three real signals drive it, all already wired elsewhere on this
+   *     page rather than invented for this: brainPulse/brainIntensity
+   *     (real brain.request/brain.response activity from the observer
+   *     feed - "thinking"), audioGlow (the real Web Audio analyser
+   *     level, fed by the mic today and ready for real Core TTS output
+   *     later - "speaking"/voice-reactive), and face-tracking (real
+   *     face-api.js detection, unchanged - orients the whole core toward
+   *     you). There's no honest signal yet for a "listening" state
+   *     (that needs real speech detection in Core, which doesn't exist)
+   *     - deliberately not faked; see README.
+   * ------------------------------------------------------------- */
 
-  // A deliberate, clean set of vertical accent lines over the mouth/chin
-  // region excluded from the real-mesh lat/long grid (see the exclusion
-  // zones above) — comparison against the reference showed that area
-  // needs to read as "still part of the gridded face," matching the
-  // reference's own continuous fine vertical lines there, not a blank
-  // gap. Flat (constant z per line, not curved to the real surface) —
-  // a deliberate simplification: a small, mostly front-facing patch, and
-  // "flat but clean" reads far better here than "curved but tangled,"
-  // which is what using the real mesh geometry there actually produced.
-  function buildMouthGridPatch(cx, cy, cz, width, height, cols) {
-    const group = new THREE.Group();
-    const mat = new THREE.LineBasicMaterial({
-      color: 0xcdf3ff, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending,
-    });
-    for (let i = 0; i <= cols; i++) {
-      const x = cx + (i / cols - 0.5) * width;
-      const bow = Math.cos(((i / cols) - 0.5) * Math.PI) * 0.12; // slight outward curve, cheeks vs. center
-      const positions = new Float32Array([
-        x, cy + height / 2, cz - 0.12, x, cy - height / 2, cz - 0.12 + bow,
-      ]);
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      group.add(new THREE.Line(geo, mat));
-    }
-    return group;
-  }
+  // Outer shell — the "body": brightens, grows, and spins faster with
+  // real voice activity (audioGlow, in animate()/audioLoop() below).
+  const outerGeo = new THREE.SphereGeometry(1.7, 26, 20);
+  const outerWire = new THREE.WireframeGeometry(outerGeo);
+  const outerMat = new THREE.LineBasicMaterial({
+    color: 0xe8fbff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending,
+  });
+  const outerShell = new THREE.LineSegments(outerWire, outerMat);
+  faceGroup.add(outerShell);
+  // A second, larger + dimmer copy of the same shell for a cheap "poor
+  // man's bloom" — no EffectComposer/UnrealBloomPass in this vendored
+  // r128 setup, so the glow is faked by re-drawing the shell bigger and
+  // fainter underneath, same technique used throughout this page.
+  const outerGlowMat = new THREE.LineBasicMaterial({
+    color: 0xafeeff, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending,
+  });
+  const outerGlow = new THREE.LineSegments(outerWire, outerGlowMat);
+  faceGroup.add(outerGlow);
 
-  // Draws a real latitude/longitude grid wrapped onto the *actual* mesh
-  // surface (not a parametric sphere) by walking every triangle and
-  // interpolating where it crosses each iso-value of a computed spherical
-  // angle around `center`. This replaces THREE.EdgesGeometry for the head
-  // wireframe: EdgesGeometry follows the mesh's own (irregular, post-
-  // decimation) triangulation, which reads as a chaotic tangle around the
-  // eyes/nose/mouth once dense enough to cover the whole face — comparison
-  // against the reference showed its grid is a smooth, evenly-spaced
-  // lat/long wrap, not sharp feature contours. The model's own UV atlas
-  // can't be used for this directly (checked first): LeePerrySmith's UVs
-  // are a multi-island unwrap (eyes/nose/mouth/ears/scalp all separate
-  // radial charts), which would draw as fragmented concentric loops per
-  // island instead of one continuous grid across the whole head.
-  // `exclusionZones` (ellipsoids in the same raw mesh space) drop any
-  // triangle whose centroid falls inside them — used to cut the eye
-  // sockets and mouth cavity, where this mesh's real open-mouth/eye-socket
-  // geometry makes the spherical angle non-monotonic (concave depth folds
-  // back on itself) and produces a tangle no angle threshold fixes; the
-  // existing custom eye spheres/glow and mouth line already cover those
-  // spots, same as how the reference's own eyes/mouth read as distinct
-  // bright features rather than more grid.
-  // Drops any triangle with a vertex inside one of `exclusionZones`
-  // (ellipsoids in raw mesh space: {c:[x,y,z], r:[rx,ry,rz]}) — used to
-  // cut the eye-socket, mouth, and nostril cavities out of BOTH the solid
-  // fill mesh and the lat/long grid built on top of it (see both call
-  // sites below). A depth-tube variant (cut only what's behind a z
-  // threshold, keeping the front skin) was tried and reverted — the real
-  // mesh's front surface z varies enough across the mouth/eye curvature
-  // that a flat threshold cut unevenly, sometimes removing more of the
-  // visible skin than intended. A full ellipsoid is a cruder cut but a
-  // predictable one; the resulting gap is covered by a deliberately
-  // simple accent (the existing eye sphere/glow, the mouth line) rather
-  // than a decorative "patch" trying to look like real geometry — the
-  // patch approach read as a hole with bars over it, not simpler than
-  // the problem it was covering. Checking every vertex, not just the
-  // triangle centroid, matters: a long triangle spanning from deep
-  // inside the cavity to well outside it can average to a centroid
-  // outside the zone while still being exactly the triangle causing
-  // visual mess.
-  function excludeTriangles(geometry, exclusionZones) {
-    const pos = geometry.attributes.position;
-    const index = geometry.index;
-    const rawTriCount = index ? index.count / 3 : pos.count / 3;
-    function rawIdx(t, k) { return index ? index.getX(t * 3 + k) : t * 3 + k; }
-    function rawPos(i) { return new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)); }
-    function inExclusion(p) {
-      for (const z of exclusionZones) {
-        const dx = (p.x - z.c[0]) / z.r[0];
-        const dy = (p.y - z.c[1]) / z.r[1];
-        const dz = (p.z - z.c[2]) / z.r[2];
-        if (dx * dx + dy * dy + dz * dz < 1) return true;
-      }
-      return false;
-    }
-    const keptTris = [];
-    for (let t = 0; t < rawTriCount; t++) {
-      const ia = rawIdx(t, 0), ib = rawIdx(t, 1), ic = rawIdx(t, 2);
-      if (inExclusion(rawPos(ia)) || inExclusion(rawPos(ib)) || inExclusion(rawPos(ic))) continue;
-      keptTris.push(ia, ib, ic);
-    }
-    const out = new THREE.BufferGeometry();
-    out.setAttribute("position", pos);
-    out.setIndex(keptTris);
-    return out;
-  }
+  // Individually pulsing dots on the outer shell (see addSizePulse
+  // above) — every dot grows/shrinks on its own random phase instead of
+  // a fixed size, the "always alive" look.
+  const outerDotsMat = new THREE.PointsMaterial({
+    size: 0.045, map: spriteTex, transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending, color: 0x6fd8e8, opacity: 0.7,
+  });
+  const outerPhases = new Float32Array(outerGeo.attributes.position.count);
+  for (let i = 0; i < outerPhases.length; i++) outerPhases[i] = Math.random() * Math.PI * 2;
+  outerGeo.setAttribute("aPhase", new THREE.BufferAttribute(outerPhases, 1));
+  addSizePulse(outerDotsMat, 1.6, 0.45);
+  const faceDotsMat = outerDotsMat;
+  faceGroup.add(new THREE.Points(outerGeo, outerDotsMat));
 
-  function buildLatLongOnMesh(geometry, latDivisions, lonDivisions, center) {
-    const pos = geometry.attributes.position;
-    const index = geometry.index;
-    const triCount = index ? index.count / 3 : pos.count / 3;
-    function rawPos(i) { return new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)); }
-    function getIdx(t, k) { return index ? index.getX(t * 3 + k) : t * 3 + k; }
+  // Inner shell — the "mind": brightens, grows, and spins faster while
+  // actively thinking (real brain.request/brain.response activity).
+  const innerGeo = new THREE.SphereGeometry(1.0, 18, 14);
+  const innerWire = new THREE.WireframeGeometry(innerGeo);
+  const innerMat = new THREE.LineBasicMaterial({
+    color: 0xffb15c, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending,
+  });
+  const innerShell = new THREE.LineSegments(innerWire, innerMat);
+  faceGroup.add(innerShell);
 
-    const phiCache = new Map();
-    const thetaCache = new Map();
-    function phiOf(idx) {
-      if (phiCache.has(idx)) return phiCache.get(idx);
-      const x = pos.getX(idx) - center.x, y = pos.getY(idx) - center.y, z = pos.getZ(idx) - center.z;
-      const r = Math.sqrt(x * x + y * y + z * z) || 1e-6;
-      const v = Math.acos(Math.max(-1, Math.min(1, y / r)));
-      phiCache.set(idx, v);
-      return v;
-    }
-    function thetaOf(idx) {
-      if (thetaCache.has(idx)) return thetaCache.get(idx);
-      const x = pos.getX(idx) - center.x, z = pos.getZ(idx) - center.z;
-      const v = Math.atan2(x, z);
-      thetaCache.set(idx, v);
-      return v;
-    }
+  // The bright particle "mind" inside it — reuses buildBrain's
+  // point-cloud + synapse-line machinery (continuous drift, periodic
+  // re-wiring, brain.request/response pulse) unchanged from the earlier
+  // head build, just centered in the core instead of inside a skull.
+  const brain = buildBrain(0, 0, 0, 0.82, 0.82, 0.82);
+  faceGroup.add(brain.group);
 
-    const segPositions = [];
-    function addIsoLines(divisions, fn, wrap) {
-      for (let d = 1; d < divisions; d++) {
-        const iso = wrap ? -Math.PI + d * ((2 * Math.PI) / divisions) : (d / divisions) * Math.PI;
-        for (let t = 0; t < triCount; t++) {
-          const idxs = [getIdx(t, 0), getIdx(t, 1), getIdx(t, 2)];
-          const vals = idxs.map(fn);
-          const crossings = [];
-          for (let e = 0; e < 3; e++) {
-            const i1 = idxs[e], i2 = idxs[(e + 1) % 3];
-            const v1 = vals[e], v2 = vals[(e + 1) % 3];
-            if (wrap && Math.abs(v1 - v2) > Math.PI) continue; // skip the seam wrap itself
-            if ((v1 - iso) * (v2 - iso) < 0) {
-              const tt = (iso - v1) / (v2 - v1);
-              crossings.push(rawPos(i1).lerp(rawPos(i2), tt));
-            }
-          }
-          if (crossings.length === 2) segPositions.push(crossings[0], crossings[1]);
-        }
-      }
-    }
-    addIsoLines(latDivisions, phiOf, false);
-    addIsoLines(lonDivisions, thetaOf, true);
-    return new THREE.BufferGeometry().setFromPoints(segPositions);
-  }
+  // Two crossing orbit rings, continuously and independently rotating —
+  // this page's own identity now, not echoing one shot of a reference
+  // video. Spin faster with voice activity, same as the outer shell.
+  const ringsGroup = new THREE.Group();
+  const orbitRingGeo = new THREE.RingGeometry(2.05, 2.09, 80);
+  const orbitRing1 = new THREE.Mesh(orbitRingGeo, new THREE.MeshBasicMaterial({
+    color: 0x6fd8e8, transparent: true, opacity: 0.45, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+  }));
+  orbitRing1.rotation.x = Math.PI / 2 + 0.35;
+  ringsGroup.add(orbitRing1);
+  const orbitRing2 = new THREE.Mesh(orbitRingGeo, new THREE.MeshBasicMaterial({
+    color: 0xffb15c, transparent: true, opacity: 0.4, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+  }));
+  orbitRing2.rotation.x = Math.PI / 2 - 0.35;
+  orbitRing2.rotation.y = 0.6;
+  ringsGroup.add(orbitRing2);
+  faceGroup.add(ringsGroup);
 
-  // The LeePerrySmith scan includes real, wide bust/shoulders — comparison
-  // against the reference showed its figure is a slender neck fading to
-  // almost nothing near the bottom of frame, not a wide torso. Cropping
-  // the geometry itself (rather than just the camera framing) keeps this
-  // working regardless of viewport/orbit angle. Drops any triangle with a
-  // vertex below minY (used for solid meshes / line-grid input, where a
-  // triangle needs all 3 vertices intact) or any vertex below minY
-  // outright (used for THREE.Points, which ignores the index buffer
-  // entirely and draws one point per position regardless of triangles).
-  function clipTrianglesByY(geometry, minY) {
-    const pos = geometry.attributes.position;
-    const index = geometry.index;
-    const triCount = index ? index.count / 3 : pos.count / 3;
-    function idx(t, k) { return index ? index.getX(t * 3 + k) : t * 3 + k; }
-    const kept = [];
-    for (let t = 0; t < triCount; t++) {
-      const ia = idx(t, 0), ib = idx(t, 1), ic = idx(t, 2);
-      if (pos.getY(ia) < minY || pos.getY(ib) < minY || pos.getY(ic) < minY) continue;
-      kept.push(ia, ib, ic);
-    }
-    const out = new THREE.BufferGeometry();
-    out.setAttribute("position", pos);
-    out.setIndex(kept);
-    return out;
-  }
-  function clipPointsByY(geometry, minY) {
-    const pos = geometry.attributes.position;
-    const kept = [];
-    for (let i = 0; i < pos.count; i++) {
-      if (pos.getY(i) < minY) continue;
-      kept.push(pos.getX(i), pos.getY(i), pos.getZ(i));
-    }
-    const out = new THREE.BufferGeometry();
-    out.setAttribute("position", new THREE.Float32BufferAttribute(kept, 3));
-    return out;
-  }
+  // Soft outward bloom halo — same gradual-falloff texture as the
+  // earlier head build's, for the same reason: the small accent-dot
+  // sprite texture shows a visible hard-edged circle at this large a
+  // scale.
+  const coreHalo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: haloTex, color: 0x6fd8e8, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.4,
+  }));
+  coreHalo.scale.set(6.5, 6.5, 1);
+  faceGroup.add(coreHalo);
 
-  function base64ToArrayBuffer(b64) {
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes.buffer;
-  }
-
-  const gltfLoader = new THREE.GLTFLoader();
-  gltfLoader.parse(
-    base64ToArrayBuffer(window.__LEE_PERRY_SMITH_B64),
-    "",
-    (gltf) => {
-      let sourceMesh = null;
-      gltf.scene.traverse((o) => { if (o.isMesh) sourceMesh = o; });
-
-      const merged = THREE.BufferGeometryUtils.mergeVertices(sourceMesh.geometry);
-      // Denser than the first pass (3000) — direct comparison against the
-      // reference showed its grid fully covers the face at high density,
-      // not a sparse low-poly facet look.
-      const targetTris = 9000;
-      const currentTris = (merged.index ? merged.index.count : merged.attributes.position.count) / 3;
-      const removeCount = Math.max(
-        0,
-        merged.attributes.position.count - Math.floor(merged.attributes.position.count * (targetTris / currentTris))
-      );
-      const simplified = new THREE.SimplifyModifier().modify(merged, removeCount);
-
-      // Measured, not eyeballed: overlaying a pixel grid on the reference
-      // frame and on our own render showed the reference's face (brow to
-      // chin) fills ~66% of the total head height (crown to chin), while
-      // this raw scan's own proportions put the face at only ~53% — a
-      // proportionally much taller forehead/crown than the reference. A
-      // uniform vertical scale (tried in an earlier round) can't fix a
-      // *ratio* problem — it stretches the wrong-proportioned forehead
-      // right along with everything else, which is what made the face
-      // read as "short" relative to a now-taller skull, a real
-      // regression flagged directly. This compresses only the geometry
-      // above the brow line (`pivotY`) toward it, leaving the face and
-      // everything below completely untouched, to hit the measured
-      // target ratio instead of guessing at a single scale number again.
-      function compressAboveY(geometry, pivotY, factor) {
-        const pos = geometry.attributes.position;
-        for (let i = 0; i < pos.count; i++) {
-          const y = pos.getY(i);
-          if (y > pivotY) pos.setY(i, pivotY + (y - pivotY) * factor);
-        }
-        pos.needsUpdate = true;
-      }
-      compressAboveY(simplified, 1.78, 0.56);
-
-      // Crop off the scan's real wide shoulders (see clipTrianglesByY
-      // above) — the reference is a slender neck fading to almost nothing,
-      // not a wide torso, and this was the single biggest silhouette
-      // mismatch once the head shape/grid/fill were otherwise settled.
-      const shoulderCutoffY = -1.4;
-      const trimmedTris = clipTrianglesByY(simplified, shoulderCutoffY);
-      const trimmedPoints = clipPointsByY(simplified, shoulderCutoffY);
-
-      const modelGroup = new THREE.Group();
-      // The source scan is natively ~8 units across; scale it down to
-      // this scene's existing camera-distance/panel/plinth proportions.
-      // Narrower in x only now — direct side-by-side comparison against
-      // the reference showed this real scan reads as noticeably wider
-      // than the reference's more slender oval face even after the
-      // camera-lens fix above; also pulls the ears in rather than needing
-      // separate treatment for them. The vertical stretch tried in an
-      // earlier round (1.12y) is gone — it stretched the whole head
-      // uniformly, including the already-too-tall forehead/crown region,
-      // making the face read as proportionally *shorter* relative to a
-      // now-taller skull, a real regression. compressAboveY (above) fixes
-      // the actual crown/face ratio directly instead; this scale is back
-      // to a neutral 1.0 in y.
-      modelGroup.scale.set(0.384 * 0.86, 0.384, 0.384 * 0.97);
-
-      // Eye, mouth, and nostril ellipsoids (raw mesh space). A *hard*
-      // triangle cut at these was tried for the solid fill mesh and
-      // reverted either way it went: cutting the fill left the cut's own
-      // boundary edge visible as a distinct bright contour (you're seeing
-      // the inside rim of the hole), and NOT cutting it let this scan's
-      // real sculpted eyeball geometry show straight through — either way
-      // read as "visible circles in the face," small or large. The actual
-      // fix is a **soft fade**, not a hard cut: `aFade` (see
-      // computeFadeAttribute below) smoothly dims the fill's opacity to
-      // zero approaching each zone's center instead of an abrupt edge, so
-      // there's no boundary contour to see at all. The grid still uses a
-      // hard cut (`excludeTriangles`, below) — thin dangling line stubs
-      // at a cut boundary read far less badly than a solid shape's edge.
-      const softZones = [
-        { c: [-0.5, 1.78, 1.75], r: [0.55, 0.42, 0.75] },
-        { c: [0.5, 1.78, 1.75], r: [0.55, 0.42, 0.75] },
-        { c: [0, -0.1, 1.8], r: [1.35, 1.2, 1.35] },
-        { c: [0, 1.2, 2.0], r: [0.4, 0.42, 0.5] },
-      ];
-      function computeFadeAttribute(geometry, zones) {
-        const pos = geometry.attributes.position;
-        const fade = new Float32Array(pos.count);
-        for (let i = 0; i < pos.count; i++) {
-          let minDist = Infinity;
-          for (const z of zones) {
-            const dx = (pos.getX(i) - z.c[0]) / z.r[0];
-            const dy = (pos.getY(i) - z.c[1]) / z.r[1];
-            const dz = (pos.getZ(i) - z.c[2]) / z.r[2];
-            minDist = Math.min(minDist, Math.sqrt(dx * dx + dy * dy + dz * dz));
-          }
-          // smoothstep: fully hidden inside the zone (dist < 0.55),
-          // fully visible past its edge (dist > 1.5), smooth in between.
-          const t = Math.max(0, Math.min(1, (minDist - 0.55) / (1.5 - 0.55)));
-          fade[i] = t * t * (3 - 2 * t);
-        }
-        geometry.setAttribute("aFade", new THREE.BufferAttribute(fade, 1));
-      }
-      computeFadeAttribute(trimmedTris, softZones);
-
-      const gridTris = excludeTriangles(trimmedTris, softZones);
-
-      // A soft, glowing translucent fill of the whole head/neck volume —
-      // comparison against the reference showed its head reads as a solid
-      // glowing mass with a grid on top, not a hollow wireframe cage
-      // around empty black space. Brighter and more saturated than the
-      // first attempt at this (0x1c4a5c/0.16) — the reference's glow reads
-      // as much more intense/blown-out than a subtle tint.
-      const fillMat = new THREE.MeshBasicMaterial({
-        color: 0x2f7a94, transparent: true, opacity: 0.24,
-        side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
-      });
-      // Multiplies the fragment alpha by the per-vertex `aFade` computed
-      // above — patches the one stable `gl_FragColor = vec4( outgoingLight,
-      // diffuseColor.a );` line MeshBasicMaterial's fragment shader ends
-      // with, same onBeforeCompile technique as addSizePulse.
-      fillMat.onBeforeCompile = (shader) => {
-        shader.vertexShader = "attribute float aFade;\nvarying float vFade;\n" + shader.vertexShader;
-        shader.vertexShader = shader.vertexShader.replace(
-          "#include <begin_vertex>",
-          "#include <begin_vertex>\nvFade = aFade;"
-        );
-        shader.fragmentShader = "varying float vFade;\n" + shader.fragmentShader;
-        shader.fragmentShader = shader.fragmentShader.replace(
-          "gl_FragColor = vec4( outgoingLight, diffuseColor.a );",
-          "gl_FragColor = vec4( outgoingLight, diffuseColor.a * vFade );"
-        );
-      };
-      modelGroup.add(new THREE.Mesh(trimmedTris, fillMat));
-
-      // A large, soft, blurred radial sprite behind the whole head fakes
-      // the outward bloom halo the reference has (real bloom needs
-      // EffectComposer/UnrealBloomPass, not available in this vendored
-      // r128 setup) — without this the head reads as a crisp, contained
-      // shape against pure black, not a glowing light source in a dark
-      // room.
-      const haloMat = new THREE.SpriteMaterial({
-        map: haloTex, color: 0x6fd8e8, transparent: true,
-        blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.3,
-      });
-      const halo = new THREE.Sprite(haloMat);
-      halo.scale.set(6.5, 7.5, 1);
-      // Well behind the face (z=-1.6, vs. brain at z=-0.9 and face front
-      // around z=2) — the first placement (z=-0.5) sat close enough to
-      // the brain that the cyan halo washed its amber out toward white.
-      halo.position.set(0, 1.2, -1.6);
-      modelGroup.add(halo);
-
-      // A real lat/long grid computed on the actual (already
-      // eye/mouth/nostril-excluded, via gridTris above) mesh surface
-      // instead of THREE.EdgesGeometry — the reference's wireframe is a smooth,
-      // evenly-spaced wrap, and EdgesGeometry on this mesh's own
-      // (irregular) triangulation reads as a tangle once dense enough to
-      // cover the whole face. Center is near eye-height, slightly behind
-      // the face front, so the computed radius is roughly even
-      // front-to-back.
-      const latLongCenter = new THREE.Vector3(0, 1.9, 0.2);
-      // Finer than the first pass (22x20) — side-by-side comparison
-      // against the reference showed our grid cells read as chunky,
-      // blocky checkerboard squares on the forehead, vs. the reference's
-      // much finer texture.
-      const edgesGeo = buildLatLongOnMesh(gridTris, 30, 28, latLongCenter);
-      const edgesMat = new THREE.LineBasicMaterial({
-        color: 0xe8fbff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending,
-      });
-      modelGroup.add(new THREE.LineSegments(edgesGeo, edgesMat));
-      // A second and third, progressively larger + dimmer copy of the same
-      // edges gives a cheap "bloom" halo around every line without needing
-      // a real post-processing pass (no EffectComposer loaded here) — one
-      // extra layer wasn't enough glow spread compared to the reference.
-      const glowMat = new THREE.LineBasicMaterial({
-        color: 0xafeeff, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending,
-      });
-      const glowLines = new THREE.LineSegments(edgesGeo, glowMat);
-      glowLines.scale.setScalar(1.03);
-      modelGroup.add(glowLines);
-      const glowMat2 = new THREE.LineBasicMaterial({
-        color: 0xafeeff, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending,
-      });
-      const glowLines2 = new THREE.LineSegments(edgesGeo, glowMat2);
-      glowLines2.scale.setScalar(1.07);
-      modelGroup.add(glowLines2);
-
-      // Cyan-blue, not white — the original particle-based build (before
-      // any of the "alien" head-shape rounds) used this same cyan
-      // (0x6fd8e8) for its face dots, and the user asked specifically to
-      // bring that "blue dots" character back now that the head shape
-      // itself is settled. Kept below the size/opacity that fused into a
-      // solid mass at this vertex density in an earlier round (~4500
-      // vertices) — enough to read as glowing blue dots, not a blob.
-      const nodeMat = new THREE.PointsMaterial({
-        size: 0.03, map: spriteTex, transparent: true, depthWrite: false,
-        blending: THREE.AdditiveBlending, color: 0x6fd8e8, opacity: 0.65,
-      });
-      // Individually growing/shrinking dots (see addSizePulse above) —
-      // per direct user request that the face read as "alive" (Iron
-      // Man/real-Jarvis-style HUD), not a field of fixed-size dots.
-      const facePhases = new Float32Array(trimmedPoints.attributes.position.count);
-      for (let i = 0; i < facePhases.length; i++) facePhases[i] = Math.random() * Math.PI * 2;
-      trimmedPoints.setAttribute("aPhase", new THREE.BufferAttribute(facePhases, 1));
-      addSizePulse(nodeMat, 1.6, 0.45);
-      faceDotsMat = nodeMat;
-      modelGroup.add(new THREE.Points(trimmedPoints, nodeMat));
-
-      // Bright pupil glints — the real eye sockets are already correct
-      // via the mesh's own geometry; this adds the glowing "iris" accent
-      // the reference video has. Positions found by raycasting the
-      // source mesh at the visually-identified eye locations. A soft
-      // sprite billboard behind each solid pupil fakes the halo/bloom the
-      // reference's eyes have — a plain sphere alone reads as a flat dot.
-      // Sized up from the first attempt (0.2) and stretched horizontally
-      // (almond-shaped, not round) — the reference's eyes are the single
-      // brightest, most eye-catching feature on the whole face, and the
-      // first pass read as too small/subtle to be a focal point. The
-      // pupil sphere itself is small and additively blended, not a big
-      // opaque ball — an earlier, bigger, fully-opaque sphere is what
-      // read as "a visible circle stuck in the face" rather than an eye;
-      // it should be a bright core inside the glow, not its own shape.
-      const eyeGeo = new THREE.SphereGeometry(0.055, 12, 12);
-      const eyeMat = new THREE.MeshBasicMaterial({
-        color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
-      });
-      const eyeGlowMat = new THREE.SpriteMaterial({
-        map: spriteTex, color: 0xeaffff, transparent: true,
-        blending: THREE.AdditiveBlending, depthWrite: false, opacity: 1,
-      });
-      for (const ex of [-0.5, 0.5]) {
-        const glow = new THREE.Sprite(eyeGlowMat);
-        glow.scale.set(0.2, 0.14, 1);
-        glow.position.set(ex, 1.78, 1.98);
-        modelGroup.add(glow);
-        const eye = new THREE.Mesh(eyeGeo, eyeMat);
-        eye.position.set(ex, 1.78, 1.98);
-        modelGroup.add(eye);
-      }
-
-      // A small bright highlight right at the nose tip — the wireframe/
-      // fill on this page is flat, unlit line art with no real light-and-
-      // shadow to make a protruding surface read as protruding, which is
-      // what made the nose look flat despite the real geometry actually
-      // sticking out. A single deliberate glint here (the same trick as
-      // the eyes above, just smaller/dimmer since it's an accent, not a
-      // focal point) mimics the specular highlight a protruding tip would
-      // catch, giving it a depth cue no amount of grid/fill tuning alone
-      // provides.
-      const noseGlow = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: spriteTex, color: 0xdfffff, transparent: true,
-        blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.85,
-      }));
-      noseGlow.scale.set(0.16, 0.16, 1);
-      noseGlow.position.set(0, 1.42, 2.35);
-      modelGroup.add(noseGlow);
-
-      mouth = buildMouth(0, -0.11, 2.32, 1.05);
-      modelGroup.add(mouth.group);
-
-      // Sized to fill most of the cranial cavity between the brow
-      // (y=1.78, the compressAboveY pivot — unaffected) and the new,
-      // compressed crown (was y=3.97, now 1.78+(3.97-1.78)*0.56≈3.0) —
-      // recomputed to match after compressAboveY shortened the available
-      // vertical space above the brow; kept sized to still read as large
-      // per earlier direct feedback that it looked "really small," while
-      // staying inside the now-shorter cavity.
-      brain = buildBrain(0, 2.1, -0.75, 0.9, 0.3, 0.95);
-      modelGroup.add(brain.group);
-
-      faceGroup.add(modelGroup);
-    },
-    undefined,
-    (err) => {
-      console.error("[jarvis-hologram] failed to load head model:", err);
-    }
-  );
-
-  /* Thin wireframe ring beneath the head, like a scan plane. */
-  const ringGeo = new THREE.RingGeometry(1.55, 1.58, 64);
+  /* Thin wireframe ring beneath the core, like a scan/base plane. */
+  const ringGeo = new THREE.RingGeometry(2.3, 2.34, 64);
   const ringMat = new THREE.MeshBasicMaterial({ color: 0x6fd8e8, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
   const ring = new THREE.Mesh(ringGeo, ringMat);
   ring.rotation.x = Math.PI / 2 - 0.15;
-  // Raised from -1.55 to sit just under the now-cropped, shorter neck
-  // (see shoulderCutoffY above) instead of leaving a large empty gap
-  // where the wide shoulders used to be.
-  ring.position.y = -0.85;
+  ring.position.y = -2.0;
   scene.add(ring);
 
   /* ---------------------------------------------------------------
@@ -1093,10 +672,20 @@
   let lastFaceSeenAt = 0;
   // Bumped by pushActivityLine() below on brain.request/brain.response
   // events (real ones from Core, or the labeled demo feed) and decayed
-  // every frame in animate() to brighten the brain visualization while
-  // Jarvis is actually "thinking" instead of a fixed idle pulse.
+  // every frame in animate() to brighten/grow the core's inner "mind"
+  // shell while Jarvis is actually "thinking" instead of a fixed idle
+  // pulse. brainIntensity tracks *how much* thinking (real messageCount/
+  // toolCallCount from the event payload, not just whether) so a bigger
+  // real thought grows the core more than a small one, not just longer.
   let brainPulse = 0;
+  let brainIntensity = 0;
   let nextBrainRewireAt = 0;
+  // Declared here (before animate() first runs) rather than down by
+  // audioLoop() below, for the same reason as the `let`s above — a
+  // variable referenced inside animate() must already exist the first
+  // time animate() runs, since that first call happens synchronously
+  // before any `let` declared later in the script has executed.
+  let audioGlow = 0;
   const rgbSplit = document.getElementById("rgb-split");
   const banner = document.getElementById("glitch-banner");
   const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1129,34 +718,56 @@
     const inGlitch = t < glitchUntil;
     if (!inGlitch) rgbSplit.style.opacity = String(Math.max(0, parseFloat(rgbSplit.style.opacity || "0") - 0.06));
 
-    // Brain glow: a small idle breathing base, brightened by real (or
-    // labeled-demo) brain.request/brain.response activity and decaying
-    // back down — never a fixed animation pretending to be "thinking".
-    // Guarded on `brain` since the head model (and everything built once
-    // it loads) is async — this runs safely before it's ready.
+    // Inner "mind" shell + particle brain: a small idle breathing base,
+    // brightened/grown by real (or labeled-demo) brain.request/
+    // brain.response activity and decaying back down — never a fixed
+    // animation pretending to be "thinking". brainIntensity (how big the
+    // real thought was — messageCount/toolCallCount, see
+    // pushActivityLine below) scales how much it grows, not just whether.
     brainPulse = Math.max(0, brainPulse - 0.012);
-    if (brain) {
+    brainIntensity = Math.max(0, brainIntensity - 0.01);
+    {
       const brainGlow = 0.55 + Math.sin(t * 1.3) * 0.1 + brainPulse * 0.45;
       brain.pointsMat.opacity = Math.min(1, brainGlow);
       brain.lineMat.opacity = Math.min(0.55, 0.15 + brainPulse * 0.4);
-      // The brain itself physically grows while actively "thinking" (real
-      // brain.request/brain.response activity), not just brightening —
-      // per direct user request. Never fully static even at rest (a slow
-      // idle breathing term), same principle as every other motion source
-      // on this page.
-      const brainScale = 1 + brainPulse * 0.4 + (REDUCED_MOTION ? 0 : Math.sin(t * 0.5) * 0.035);
-      brain.group.scale.setScalar(brainScale);
+      innerMat.opacity = Math.min(0.85, 0.4 + brainPulse * 0.45);
+      // The inner shell + brain physically grow while actively "thinking"
+      // (real brain.request/brain.response activity), not just
+      // brightening — per direct user request, with the growth amount
+      // itself scaled by how big the real thought was (brainIntensity).
+      // Never fully static even at rest (a slow idle breathing term),
+      // same principle as every other motion source on this page.
+      const thinkScale = 1 + brainPulse * (0.2 + brainIntensity * 0.35) + (REDUCED_MOTION ? 0 : Math.sin(t * 0.5) * 0.035);
+      brain.group.scale.setScalar(thinkScale);
+      innerShell.scale.setScalar(thinkScale);
+      if (!REDUCED_MOTION) innerShell.rotation.y = t * (0.1 + brainPulse * 0.5);
       if (brain.pointsMat.userData.shader) brain.pointsMat.userData.shader.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
     }
-    if (faceDotsMat && faceDotsMat.userData.shader) {
+    if (faceDotsMat.userData.shader) {
       faceDotsMat.userData.shader.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
+    }
+
+    // Outer "body" shell + orbit rings: brighten, grow, and spin faster
+    // with real voice activity (audioGlow — fed by the mic today via
+    // audioLoop() below, ready for real Core TTS output later, same
+    // hooks that used to drive the old head's mouth-open animation).
+    {
+      const voiceScale = 1 + audioGlow * 0.35;
+      outerShell.scale.setScalar(voiceScale);
+      outerGlow.scale.setScalar(1.035 * voiceScale);
+      outerMat.opacity = Math.min(1, 0.7 + audioGlow * 0.3);
+      if (!REDUCED_MOTION) {
+        outerShell.rotation.y = t * (0.08 + audioGlow * 0.4);
+        ringsGroup.rotation.z = t * (0.12 + audioGlow * 0.35);
+        ringsGroup.rotation.x = Math.sin(t * 0.2) * 0.15;
+      }
     }
 
     // Continuous per-particle drift — "always thinking", not a structure
     // that only moves when a real event bumps brainPulse. Amplitude grows
     // a little further while brainPulse is high, so real activity still
     // reads as "moving more," but it's never fully static at rest.
-    if (!REDUCED_MOTION && brain) {
+    if (!REDUCED_MOTION) {
       const jitterAmp = 0.05 + brainPulse * 0.05;
       const bp = brain.posAttr.array;
       for (let i = 0; i < brain.n; i++) {
@@ -1185,10 +796,10 @@
 
     if (!REDUCED_MOTION) {
       // Face-tracking (webcam) overrides the idle drift while a real face
-      // was seen recently — smoothly turns toward the tracked position
-      // instead of the ambient sine-wave sway. Falls back to idle drift
-      // the instant tracking is off or the face has been lost for >1.5s,
-      // rather than freezing at the last tracked angle.
+      // was seen recently — smoothly turns the whole core toward the
+      // tracked position instead of the ambient sine-wave sway. Falls
+      // back to idle drift the instant tracking is off or the face has
+      // been lost for >1.5s, rather than freezing at the last angle.
       if (faceTrackingActive && performance.now() - lastFaceSeenAt < 1500) {
         faceGroup.rotation.y += (targetYaw - faceGroup.rotation.y) * 0.08;
         faceGroup.rotation.x += (targetPitch - faceGroup.rotation.x) * 0.08;
@@ -1198,10 +809,11 @@
         faceGroup.rotation.x = Math.sin(t * 0.15) * 0.07;
         faceGroup.rotation.z = Math.sin(t * 0.09) * 0.025;
       }
-      // Subtle continuous "breathing" scale, a little stronger while the
-      // brain is actively pulsing — reinforces that this is alive and
-      // thinking, not a static prop, even when facing straight ahead.
-      const breathe = 1 + Math.sin(t * 0.7) * 0.012 + brainPulse * 0.01;
+      // Subtle continuous "breathing" scale on the whole core, a little
+      // stronger while actively thinking or speaking — reinforces that
+      // this is alive, not a static prop, even when facing straight
+      // ahead and silent.
+      const breathe = 1 + Math.sin(t * 0.7) * 0.012 + brainPulse * 0.01 + audioGlow * 0.015;
       faceGroup.scale.setScalar(breathe);
     }
     if (!REDUCED_MOTION) ring.rotation.z = t * 0.15;
@@ -1362,7 +974,17 @@
     activityLinesEl.innerHTML = activityQueue
       .map((l) => `<div class="line"><span class="t">${l.time}</span>  <span class="${l.kind}">${l.text}</span></div>`)
       .join("");
-    if (type === "brain.request" || type === "brain.response") brainPulse = 1;
+    if (type === "brain.request" || type === "brain.response") {
+      brainPulse = 1;
+      // How big was this real thought? messageCount for a request, tool
+      // calls for a response — a longer conversation or more tool calls
+      // grows the core more than a trivial one, not just for the same
+      // fixed duration. Takes the larger of the two if both have fired
+      // recently, decaying independently in animate().
+      const p = payload || {};
+      const magnitude = type === "brain.request" ? (p.messageCount || 1) / 6 : ((p.toolCallCount || 0) + 1) / 4;
+      brainIntensity = Math.max(brainIntensity, Math.min(1, magnitude));
+    }
   }
 
   function setActivityStatus(isLive) {
@@ -1499,7 +1121,6 @@
     return Math.min(1, (sum / audioData.length / 255) * 2.2);
   }
 
-  let audioGlow = 0;
   (function audioLoop() {
     requestAnimationFrame(audioLoop);
     const level = sampleAudioLevel();
@@ -1508,7 +1129,6 @@
     voiceRing.style.borderColor = `rgba(111,216,232,${(glow * 0.8).toFixed(2)})`;
     voiceRing.style.transform = `scale(${1 + glow * 0.15})`;
     voiceRing.style.boxShadow = glow > 0.05 ? `0 0 ${20 + glow * 60}px rgba(111,216,232,${glow * 0.5})` : "none";
-    updateMouth(glow);
     drawVoiceBars(analyser ? level : 0);
   })();
 
