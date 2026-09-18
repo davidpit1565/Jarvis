@@ -1383,19 +1383,23 @@ conversations too, not just the current one.
 - Every phone webhook request's Twilio signature is verified against the
   configured public URL before it reaches the Orchestrator; unsigned,
   tampered, or wrong-route requests are rejected with `403`.
-- Optional phone caller allowlist (`TWILIO_ALLOWED_CALLERS`): when set, a
-  call from any other number is turned away with a spoken message before
-  it reaches the Orchestrator — signature verification alone only proves
-  the request came from Twilio, not who's on the call.
+- Phone caller allowlist (`TWILIO_ALLOWED_CALLERS`): a call from any other
+  number is turned away with a spoken message before it reaches the
+  Orchestrator — signature verification alone only proves the request
+  came from Twilio, not who's on the call. Required, not just
+  recommended: the phone gateway refuses to start at all with the token
+  and public URL configured but no allowlist, unless
+  `TWILIO_ALLOW_OPEN_ACCESS=true` explicitly opts into taking calls from
+  anyone.
 - Every Telegram webhook request's secret token is verified against
   `TELEGRAM_WEBHOOK_SECRET` before it reaches the Orchestrator; a missing
   or wrong secret is rejected with `403`, and rate-limited per client IP
   (same `RateLimiter` as pairing/login/backup) so guessing the secret
   isn't free — past the limit, `429` without even checking the token.
-  Optional chat allowlist
-  (`TELEGRAM_ALLOWED_CHAT_IDS`), same reasoning as the phone caller
-  allowlist above: secret-token verification alone only proves the
-  request came from Telegram, not which chat it's from.
+  Chat allowlist (`TELEGRAM_ALLOWED_CHAT_IDS`), same reasoning and same
+  required-unless-opted-out (`TELEGRAM_ALLOW_OPEN_ACCESS=true`) behavior
+  as the phone caller allowlist above: secret-token verification alone
+  only proves the request came from Telegram, not which chat it's from.
 - Optional Face ID/Touch ID lock for the dashboard (see below): real
   WebAuthn, not a custom biometric integration; registering the first
   credential requires `JARVIS_ADMIN_TOKEN` so setup can't be hijacked.

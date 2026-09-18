@@ -425,8 +425,23 @@ function main() {
     ? new URL("/voice/audio-stream", config.twilioPublicBaseUrl!.replace(/^http/, "ws")).toString()
     : undefined;
 
+  // An unset/empty TWILIO_ALLOWED_CALLERS used to only log a warning and
+  // start the gateway anyway — anyone who called the number reached full
+  // JARVIS, including tools like SAVE_MEMORY, with nothing stopping them
+  // but a server log line nobody was watching. Now it refuses to start
+  // the gateway at all unless the caller explicitly opts into that via
+  // TWILIO_ALLOW_OPEN_ACCESS.
+  const phoneGatewayAllowlistOk =
+    (config.twilioAllowedCallers && config.twilioAllowedCallers.length > 0) || config.twilioAllowOpenAccess;
+  if (config.twilioAuthToken && config.twilioPublicBaseUrl && !phoneGatewayAllowlistOk) {
+    console.error(
+      "[jarvis] Phone gateway NOT started: TWILIO_AUTH_TOKEN/TWILIO_PUBLIC_BASE_URL are set but " +
+        "TWILIO_ALLOWED_CALLERS is empty. Set TWILIO_ALLOWED_CALLERS to the E.164 numbers that may call in, " +
+        "or set TWILIO_ALLOW_OPEN_ACCESS=true to intentionally accept calls from anyone."
+    );
+  }
   const phoneGateway =
-    config.twilioAuthToken && config.twilioPublicBaseUrl
+    config.twilioAuthToken && config.twilioPublicBaseUrl && phoneGatewayAllowlistOk
       ? new TwilioVoiceGateway(
           createPhoneSession,
           config.twilioVoice,
@@ -481,8 +496,20 @@ function main() {
     };
   }
 
+  // Same reasoning as phoneGatewayAllowlistOk above — an empty
+  // TELEGRAM_ALLOWED_CHAT_IDS used to only warn, not block, leaving the
+  // bot open to any chat that found and messaged it.
+  const telegramGatewayAllowlistOk =
+    (config.telegramAllowedChatIds && config.telegramAllowedChatIds.length > 0) || config.telegramAllowOpenAccess;
+  if (config.telegramBotToken && config.telegramWebhookSecret && !telegramGatewayAllowlistOk) {
+    console.error(
+      "[jarvis] Telegram gateway NOT started: TELEGRAM_BOT_TOKEN/TELEGRAM_WEBHOOK_SECRET are set but " +
+        "TELEGRAM_ALLOWED_CHAT_IDS is empty. Set TELEGRAM_ALLOWED_CHAT_IDS to the chat IDs that may message the " +
+        "bot, or set TELEGRAM_ALLOW_OPEN_ACCESS=true to intentionally accept messages from any chat."
+    );
+  }
   const telegramGateway =
-    config.telegramBotToken && config.telegramWebhookSecret
+    config.telegramBotToken && config.telegramWebhookSecret && telegramGatewayAllowlistOk
       ? new TelegramGateway(config.telegramBotToken, createTelegramSession, config.telegramAllowedChatIds)
       : undefined;
 
@@ -812,11 +839,15 @@ function main() {
   if (audioLevelBroadcaster) {
     console.log("Audio waveform: enabled (Twilio Media Streams — extra cost ~$0.004/min on the Twilio account)");
   }
+  // Only reachable via the explicit TWILIO_ALLOW_OPEN_ACCESS opt-in now —
+  // an empty allowlist with no opt-in never gets this far (see
+  // phoneGatewayAllowlistOk above), so this is a reminder of a choice
+  // already made, not a warning about an accidental gap.
   if (phoneGateway && (!config.twilioAllowedCallers || config.twilioAllowedCallers.length === 0)) {
     console.warn(
-      "[jarvis] WARNING: phone gateway is enabled with no TWILIO_ALLOWED_CALLERS set — " +
-        "anyone who calls the configured number reaches full JARVIS, including tools like SAVE_MEMORY. " +
-        "Set TWILIO_ALLOWED_CALLERS before giving the number to anyone but yourself."
+      "[jarvis] WARNING: phone gateway is running open (TWILIO_ALLOW_OPEN_ACCESS=true, no " +
+        "TWILIO_ALLOWED_CALLERS) — anyone who calls the configured number reaches full JARVIS, " +
+        "including tools like SAVE_MEMORY."
     );
   }
   console.log(
@@ -824,11 +855,13 @@ function main() {
       ? "Telegram gateway: enabled (POST /telegram/webhook)"
       : "Telegram gateway: disabled (set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET to enable)"
   );
+  // Only reachable via the explicit TELEGRAM_ALLOW_OPEN_ACCESS opt-in now
+  // — see the phone gateway comment above.
   if (telegramGateway && (!config.telegramAllowedChatIds || config.telegramAllowedChatIds.length === 0)) {
     console.warn(
-      "[jarvis] WARNING: Telegram gateway is enabled with no TELEGRAM_ALLOWED_CHAT_IDS set — " +
-        "anyone who finds and messages the bot reaches full JARVIS, including tools like SAVE_MEMORY. " +
-        "Set TELEGRAM_ALLOWED_CHAT_IDS before sharing the bot with anyone but yourself."
+      "[jarvis] WARNING: Telegram gateway is running open (TELEGRAM_ALLOW_OPEN_ACCESS=true, no " +
+        "TELEGRAM_ALLOWED_CHAT_IDS) — anyone who finds and messages the bot reaches full JARVIS, " +
+        "including tools like SAVE_MEMORY."
     );
   }
 

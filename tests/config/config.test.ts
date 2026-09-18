@@ -274,6 +274,17 @@ describe("loadConfig", () => {
     expect(config.twilioAllowedCallers).toBeUndefined();
   });
 
+  test("defaults twilioAllowOpenAccess to false", () => {
+    const config = loadConfig();
+    expect(config.twilioAllowOpenAccess).toBe(false);
+  });
+
+  test("reads TWILIO_ALLOW_OPEN_ACCESS=true", () => {
+    process.env.TWILIO_ALLOW_OPEN_ACCESS = "true";
+    const config = loadConfig();
+    expect(config.twilioAllowOpenAccess).toBe(true);
+  });
+
   test("reads TWILIO_VOICE when set", () => {
     process.env.TWILIO_VOICE = "Google.en-US-Chirp3-HD-Charon";
     const config = loadConfig();
@@ -410,6 +421,17 @@ describe("loadConfig", () => {
     expect(config.telegramBotToken).toBeUndefined();
     expect(config.telegramWebhookSecret).toBeUndefined();
     expect(config.telegramAllowedChatIds).toBeUndefined();
+  });
+
+  test("defaults telegramAllowOpenAccess to false", () => {
+    const config = loadConfig();
+    expect(config.telegramAllowOpenAccess).toBe(false);
+  });
+
+  test("reads TELEGRAM_ALLOW_OPEN_ACCESS=true", () => {
+    process.env.TELEGRAM_ALLOW_OPEN_ACCESS = "true";
+    const config = loadConfig();
+    expect(config.telegramAllowOpenAccess).toBe(true);
   });
 
   test("throws when only the Telegram bot token is set, without the webhook secret", () => {

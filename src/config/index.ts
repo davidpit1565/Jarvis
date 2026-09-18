@@ -37,8 +37,14 @@ export interface JarvisConfig {
    * the public one Twilio actually signed.
    */
   twilioPublicBaseUrl?: string;
-  /** E.164 numbers allowed to call JARVIS; empty/unset means any caller is let through. */
+  /** E.164 numbers allowed to call JARVIS; empty/unset disables the gateway unless twilioAllowOpenAccess is set. */
   twilioAllowedCallers?: string[];
+  /**
+   * Explicit opt-in to run the phone gateway with no caller allowlist at
+   * all — required now that an empty twilioAllowedCallers refuses to
+   * start the gateway rather than silently letting any caller through.
+   */
+  twilioAllowOpenAccess: boolean;
   /**
    * Twilio Account SID, the Twilio phone number to call FROM, and the
    * owner's own phone number to call — all three required together to
@@ -87,8 +93,14 @@ export interface JarvisConfig {
   telegramBotToken?: string;
   /** Verifies incoming webhook requests actually came from Telegram (the `X-Telegram-Bot-Api-Secret-Token` header Telegram echoes back, set via setWebhook's own `secret_token` field). */
   telegramWebhookSecret?: string;
-  /** Numeric Telegram chat IDs allowed to talk to the bot; empty/unset means any chat that finds/adds the bot can. */
+  /** Numeric Telegram chat IDs allowed to talk to the bot; empty/unset disables the gateway unless telegramAllowOpenAccess is set. */
   telegramAllowedChatIds?: string[];
+  /**
+   * Explicit opt-in to run the Telegram gateway with no chat allowlist at
+   * all — required now that an empty telegramAllowedChatIds refuses to
+   * start the gateway rather than silently letting any chat through.
+   */
+  telegramAllowOpenAccess: boolean;
   /**
    * The owner's own Telegram chat ID — required for NOTIFY_USER to have
    * somewhere to push a proactive message to. Distinct from
@@ -262,6 +274,13 @@ export function loadConfig(): JarvisConfig {
   const twilioAllowedCallers = process.env.TWILIO_ALLOWED_CALLERS?.split(",")
     .map((n) => n.trim())
     .filter((n) => n.length > 0);
+  // Deliberately opt-in: an empty TWILIO_ALLOWED_CALLERS used to just log
+  // a warning and open the gateway to any caller anyway — anyone who
+  // called the number reached full JARVIS, including tools like
+  // SAVE_MEMORY, with nothing to stop them but a line in the server logs
+  // nobody was watching. Now that gap requires this explicit flag instead
+  // of silently falling through.
+  const twilioAllowOpenAccess = process.env.TWILIO_ALLOW_OPEN_ACCESS?.trim().toLowerCase() === "true";
   const twilioVoice = process.env.TWILIO_VOICE?.trim() || undefined;
   const twilioVoiceHebrew = process.env.TWILIO_VOICE_HEBREW?.trim() || undefined;
   const twilioGatherLanguage = process.env.TWILIO_GATHER_LANGUAGE?.trim() || undefined;
@@ -361,6 +380,10 @@ export function loadConfig(): JarvisConfig {
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
   const telegramOwnerChatId = process.env.TELEGRAM_OWNER_CHAT_ID?.trim() || undefined;
+  // Same reasoning as twilioAllowOpenAccess above — an empty
+  // TELEGRAM_ALLOWED_CHAT_IDS used to silently leave the bot open to
+  // anyone who found and messaged it.
+  const telegramAllowOpenAccess = process.env.TELEGRAM_ALLOW_OPEN_ACCESS?.trim().toLowerCase() === "true";
 
   const telegramFieldsSet = [telegramBotToken, telegramWebhookSecret].filter(Boolean).length;
   if (telegramFieldsSet > 0 && telegramFieldsSet < 2) {
@@ -450,6 +473,7 @@ export function loadConfig(): JarvisConfig {
     twilioAuthToken,
     twilioPublicBaseUrl,
     twilioAllowedCallers,
+    twilioAllowOpenAccess,
     twilioVoice,
     twilioVoiceHebrew,
     twilioGatherLanguage,
@@ -479,6 +503,7 @@ export function loadConfig(): JarvisConfig {
     telegramBotToken,
     telegramWebhookSecret,
     telegramAllowedChatIds,
+    telegramAllowOpenAccess,
     telegramOwnerChatId,
     weatherLatitude,
     weatherLongitude,
