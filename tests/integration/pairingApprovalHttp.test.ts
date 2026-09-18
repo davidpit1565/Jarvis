@@ -419,4 +419,21 @@ describe("Pairing approval with an admin token configured", () => {
 
     ws.close();
   });
+
+  test("repeated failed pairing-approve attempts from the same client are rate-limited with 429", async () => {
+    const { handle, port } = setupServer();
+    activeHandle = handle;
+
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const response = await fetch(`http://localhost:${port}/pairing/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deviceId: "nonexistent", code: "000000" }),
+      });
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
+  });
 });

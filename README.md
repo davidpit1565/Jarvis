@@ -645,6 +645,13 @@ contain no language-detection logic, by design.
   self-approve it into a trusted device with no human involved. Found
   and fixed during this session's own review, once the new `Dockerfile`/
   `fly.toml` made this endpoint publicly reachable for the first time.
+- `POST /pairing/approve` and `POST /auth/login` are rate-limited (10
+  attempts per 5 minutes, per client IP — `src/communication/websocket/RateLimiter.ts`):
+  every attempt counts against the limit whether it succeeds or fails, so
+  a 6-digit pairing code (or repeated WebAuthn verification attempts)
+  can't be brute-forced by hammering the endpoint. In-memory and
+  per-process, resetting on restart — a deliberate simplicity tradeoff for
+  a single-instance personal assistant.
 - Device-scoped permission grants: authorizing a tool on one device never
   authorizes it on another.
 - `CONFIRM`/`DANGEROUS` tools require a fresh, per-call human confirmation

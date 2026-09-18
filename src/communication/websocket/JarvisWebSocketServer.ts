@@ -1,4 +1,4 @@
-import type { ServerWebSocket } from "bun";
+import type { Server, ServerWebSocket } from "bun";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import type { EventBus } from "@/core/events/EventBus";
@@ -13,6 +13,7 @@ import { DASHBOARD_HTML, LOCK_HTML } from "./dashboard";
 import type { WebAuthnService } from "@/auth/WebAuthnService";
 import type { SessionStore } from "@/auth/SessionStore";
 import { AudioLevelBroadcaster } from "./AudioLevelBroadcaster";
+import { RateLimiter } from "./RateLimiter";
 import { computeAudioLevel } from "@/communication/phone/audioLevel";
 import {
   makeEnvelope,
@@ -27,6 +28,7 @@ type SocketData =
   | { kind: "audio-viewer" };
 
 type DeviceSocket = ServerWebSocket<Extract<SocketData, { kind: "device" }>>;
+type BunServer = Server<SocketData>;
 
 export interface JarvisWebSocketServerDependencies {
   deviceRegistry: DeviceRegistry;
@@ -110,6 +112,14 @@ function getOriginAndRpID(req: Request, url: URL): { origin: string; rpID: strin
 export class JarvisWebSocketServer {
   /** Sockets that have sent device.register but aren't authenticated yet, keyed by deviceId. */
   private pendingConnections: Map<string, DeviceSocket> = new Map();
+  /**
+   * Guards the two endpoints with a brute-forceable secret behind them (a
+   * pairing code, a WebAuthn assertion) — 10 attempts per 5 minutes per
+   * (IP, route) is generous for a genuine user (nobody fat-fingers a
+   * pairing code or retries a failed Face ID prompt 10 times in 5 minutes)
+   * but far too slow to brute-force a 6-digit code or hammer verification.
+   */
+  private readonly rateLimiter = new RateLimiter(10, 5 * 60 * 1000);
 
   constructor(private readonly deps: JarvisWebSocketServerDependencies) {}
 
@@ -121,7 +131,7 @@ export class JarvisWebSocketServer {
           const url = new URL(req.url);
 
           if (req.method === "POST" && url.pathname === "/pairing/approve") {
-            return await this.handleApproveHttp(req);
+            return await this.handleApproveHttp(req, server);
           }
 
           if (req.method === "POST" && url.pathname.startsWith("/voice/")) {
@@ -151,7 +161,7 @@ export class JarvisWebSocketServer {
           }
 
           if (!isUpgradeRequest && url.pathname.startsWith("/auth/")) {
-            return await this.handleAuthRoute(req, url);
+            return await this.handleAuthRoute(req, url, server);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
@@ -497,12 +507,16 @@ export class JarvisWebSocketServer {
    * "the owner." Login requires no secret: the platform authenticator
    * ceremony itself is the proof.
    */
-  private async handleAuthRoute(req: Request, url: URL): Promise<Response> {
+  private async handleAuthRoute(req: Request, url: URL, server: BunServer): Promise<Response> {
     const { webAuthnService, sessionStore, adminToken } = this.deps;
     if (!webAuthnService || !sessionStore) {
       return new Response("Not found", { status: 404 });
     }
     const { origin, rpID } = getOriginAndRpID(req, url);
+
+    if (url.pathname === "/auth/login" && !this.rateLimiter.attempt(rateLimitKey(req, server, "auth-login"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
 
     if (req.method === "POST" && url.pathname === "/auth/register-options") {
       if (!adminToken || !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
@@ -545,7 +559,11 @@ export class JarvisWebSocketServer {
     return new Response("Not found", { status: 404 });
   }
 
-  private async handleApproveHttp(req: Request): Promise<Response> {
+  private async handleApproveHttp(req: Request, server: BunServer): Promise<Response> {
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "pairing-approve"))) {
+      return Response.json({ success: false, error: "Too many attempts, try again later" }, { status: 429 });
+    }
+
     const { adminToken } = this.deps;
     if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
       return Response.json({ success: false, error: "Missing or invalid admin token" }, { status: 401 });
@@ -586,6 +604,18 @@ export class JarvisWebSocketServer {
   ): void {
     ws.send(JSON.stringify(makeEnvelope(type, payload, deviceId, randomUUID())));
   }
+}
+
+/**
+ * Keys the rate limiter by (route, client IP) — falling back to a single
+ * shared bucket for that route when the IP can't be determined (e.g. in a
+ * test harness with no real socket) rather than throwing, since a fallback
+ * that's slightly too strict is a far safer failure mode here than one
+ * that silently disables the limit entirely.
+ */
+function rateLimitKey(req: Request, server: BunServer, route: string): string {
+  const ip = server.requestIP(req)?.address ?? "unknown";
+  return `${route}:${ip}`;
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
