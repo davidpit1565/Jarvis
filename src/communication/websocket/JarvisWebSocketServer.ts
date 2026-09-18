@@ -133,6 +133,11 @@ export interface JarvisWebSocketServerDependencies {
 
 const SESSION_COOKIE = "jarvis_session";
 const HOLOGRAM_ASSET_PATH = join(import.meta.dir, "assets", "hologram.jpg");
+// Generous for a real, one-time, deliberate action (nobody takes 10
+// minutes to click through Google's consent screen), short enough that
+// an abandoned/repeated /calendar/oauth/start never leaves state entries
+// accumulating for long.
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 function readCookie(req: Request, name: string): string | null {
   const header = req.headers.get("cookie");
@@ -170,13 +175,17 @@ export class JarvisWebSocketServer {
   private readonly rateLimiter = new RateLimiter(10, 5 * 60 * 1000);
   /**
    * OAuth `state` values issued by GET /calendar/oauth/start and not yet
-   * redeemed — CSRF protection for the callback, since Google's redirect
-   * carries no way to re-prove the admin token that gated /start. Each
-   * value is single-use (removed once redeemed) and this being in-memory
-   * (not persisted) is fine: a restart mid-flow just means starting the
-   * link again, which is a rare, deliberate, one-time action.
+   * redeemed, mapped to when they were issued — CSRF protection for the
+   * callback, since Google's redirect carries no way to re-prove the
+   * admin token that gated /start. Each value is single-use (removed once
+   * redeemed) and expires after OAUTH_STATE_TTL_MS: an abandoned or
+   * repeated /start (a probe, a retry) would otherwise leave entries
+   * accumulating in memory forever, since nothing else ever removes an
+   * unredeemed one. In-memory (not persisted) is fine regardless: a
+   * restart mid-flow just means starting the link again, a rare,
+   * deliberate, one-time action.
    */
-  private readonly pendingOAuthStates: Set<string> = new Set();
+  private readonly pendingOAuthStates: Map<string, number> = new Map();
 
   constructor(private readonly deps: JarvisWebSocketServerDependencies) {}
 
@@ -759,9 +768,18 @@ export class JarvisWebSocketServer {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
     }
 
+    this.purgeExpiredOAuthStates();
     const state = randomUUID();
-    this.pendingOAuthStates.add(state);
+    this.pendingOAuthStates.set(state, Date.now());
     return Response.redirect(calendarClient.buildAuthUrl(state), 302);
+  }
+
+  /** Drops any issued-but-never-redeemed OAuth state past its TTL, so an abandoned/repeated /start never accumulates entries forever. */
+  private purgeExpiredOAuthStates(): void {
+    const cutoff = Date.now() - OAUTH_STATE_TTL_MS;
+    for (const [state, issuedAt] of this.pendingOAuthStates) {
+      if (issuedAt < cutoff) this.pendingOAuthStates.delete(state);
+    }
   }
 
   /** GET /calendar/oauth/callback — Google redirects here once the user grants (or denies) access. */
@@ -778,7 +796,8 @@ export class JarvisWebSocketServer {
 
     const state = url.searchParams.get("state");
     const code = url.searchParams.get("code");
-    if (!state || !this.pendingOAuthStates.has(state) || !code) {
+    const issuedAt = state ? this.pendingOAuthStates.get(state) : undefined;
+    if (!state || issuedAt === undefined || issuedAt < Date.now() - OAUTH_STATE_TTL_MS || !code) {
       return new Response("Invalid or expired OAuth state", { status: 400 });
     }
     this.pendingOAuthStates.delete(state);

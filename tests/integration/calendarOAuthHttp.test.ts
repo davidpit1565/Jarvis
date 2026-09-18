@@ -9,10 +9,12 @@ import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 
 const ADMIN_TOKEN = "test-admin-secret";
 const originalFetch = global.fetch;
+const originalDateNow = Date.now;
 
 let activeHandle: { stop: () => void } | undefined;
 
 afterEach(() => {
+  Date.now = originalDateNow;
   activeHandle?.stop();
   activeHandle = undefined;
   global.fetch = originalFetch;
@@ -134,5 +136,22 @@ describe("GET /calendar/oauth/callback", () => {
     const secondAttempt = await fetch(`http://localhost:${handle.port}/calendar/oauth/callback?code=auth-code&state=${state}`);
 
     expect(secondAttempt.status).toBe(400);
+  });
+
+  test("rejects a callback whose state has expired (past the 10-minute TTL)", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    const calendarClient = new GoogleCalendarClient("id", "secret", "https://example.com/calendar/oauth/callback", tokenStore);
+    const handle = setupServer({ adminToken: ADMIN_TOKEN, calendarClient });
+
+    const startResponse = await fetch(`http://localhost:${handle.port}/calendar/oauth/start?token=${ADMIN_TOKEN}`, {
+      redirect: "manual",
+    });
+    const state = new URL(startResponse.headers.get("Location")!).searchParams.get("state")!;
+
+    const realNow = Date.now();
+    Date.now = () => realNow + 11 * 60 * 1000; // 11 minutes later — past the TTL
+
+    const response = await fetch(`http://localhost:${handle.port}/calendar/oauth/callback?code=auth-code&state=${state}`);
+    expect(response.status).toBe(400);
   });
 });
