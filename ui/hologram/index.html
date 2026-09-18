@@ -342,6 +342,33 @@
   }
   #chat-form button[type="submit"]:hover { background: rgba(111,216,232,0.25); }
   #chat-form button[type="submit"]:focus-visible { outline: 2px solid #6fd8e8; outline-offset: 1px; }
+
+  #chat-voice-toggle {
+    background: rgba(255,177,92,0.1); border: 1px solid rgba(255,177,92,0.35);
+    color: #ffb15c; font-family: inherit; font-size: 10px; letter-spacing: 1px;
+    padding: 0 10px; border-radius: 3px; cursor: pointer;
+  }
+  #chat-voice-toggle.hidden { display: none; }
+  #chat-voice-toggle:hover { background: rgba(255,177,92,0.2); }
+  #chat-voice-toggle:focus-visible { outline: 2px solid #6fd8e8; outline-offset: 1px; }
+  /* Listening: a slow amber pulse — "it's actively hearing you." */
+  #chat-voice-toggle[aria-pressed="true"] {
+    color: #8bffb0; border-color: rgba(139,255,176,0.5); background: rgba(139,255,176,0.12);
+    animation: chat-voice-pulse 1.6s ease-in-out infinite;
+  }
+  /* Speaking: a faster cyan pulse — visually distinct from "listening" so
+     you can tell at a glance which side of the conversation is active,
+     without needing to read the status text. */
+  #chat-voice-toggle[data-speaking="1"] {
+    color: #6fd8e8; border-color: rgba(111,216,232,0.6); background: rgba(111,216,232,0.14);
+    animation: chat-voice-pulse 0.7s ease-in-out infinite;
+  }
+  @keyframes chat-voice-pulse {
+    0%, 100% { opacity: 0.75; } 50% { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #chat-voice-toggle[aria-pressed="true"], #chat-voice-toggle[data-speaking="1"] { animation: none; }
+  }
   @media (max-width: 600px) {
     #chat-toggle { font-size: 8px; padding: 5px 8px; top: 1.5%; right: 3%; }
   }
@@ -471,6 +498,13 @@
       </div>
       <div id="chat-log"></div>
       <form id="chat-form">
+        <!-- Real hands-free voice conversation (Web Speech API), not just
+             text — per direct request, "like ChatGPT's voice mode." Only
+             offered when the browser actually supports SpeechRecognition
+             (desktop Chrome today; iOS/macOS Safari does not), so it's
+             never a dead button promising something that can't work —
+             see setupChat() below, which hides this entirely otherwise. -->
+        <button id="chat-voice-toggle" type="button" class="hidden" aria-pressed="false">🎙️ VOICE MODE</button>
         <input id="chat-input" type="text" autocomplete="off" placeholder="Type a message…" />
         <button type="submit">SEND</button>
       </form>
@@ -2509,6 +2543,16 @@
     const TOKEN_KEY = "jarvis_admin_token";
     let socket = null;
     let opened = false;
+    // Set by the SpeechRecognitionCtor block below (only when voice mode
+    // is actually supported) so the socket's "message" handler can speak
+    // a real assistant reply back — kept as one shared hook rather than
+    // the message handler reaching into voice-mode internals directly,
+    // since that block may not exist at all (Safari).
+    let onAssistantMessage = null;
+    // Set by the SpeechRecognitionCtor block below when voice mode is
+    // supported, so closing the panel can reliably stop it without the
+    // outer scope needing to know whether that block ran at all.
+    let stopVoiceModeImpl = () => {};
 
     function appendMessage(who, text, cls) {
       const div = document.createElement("div");
@@ -2544,8 +2588,13 @@
       socket.addEventListener("message", (ev) => {
         try {
           const data = JSON.parse(ev.data);
-          if (data.type === "assistant") appendMessage("JARVIS", data.text, "jarvis");
-          else if (data.type === "error") appendMessage("SYSTEM", data.message || "Error", "error");
+          if (data.type === "assistant") {
+            appendMessage("JARVIS", data.text, "jarvis");
+            if (onAssistantMessage) onAssistantMessage(data.text);
+          } else if (data.type === "error") {
+            appendMessage("SYSTEM", data.message || "Error", "error");
+            if (onAssistantMessage) onAssistantMessage(null);
+          }
         } catch (e) { /* ignore a malformed frame rather than crash the socket */ }
       });
       socket.addEventListener("close", () => {
@@ -2582,23 +2631,156 @@
       input.focus();
       if (!socket || socket.readyState === WebSocket.CLOSED) ensureTokenThenConnect();
     });
-    closeBtn.addEventListener("click", () => panel.classList.add("hidden"));
+    closeBtn.addEventListener("click", () => {
+      panel.classList.add("hidden");
+      stopVoiceMode();
+    });
     panel.addEventListener("click", (e) => {
-      if (e.target === panel) panel.classList.add("hidden");
+      if (e.target === panel) {
+        panel.classList.add("hidden");
+        stopVoiceMode();
+      }
     });
 
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const text = input.value.trim();
-      if (!text) return;
+    function sendText(text) {
       if (!socket || socket.readyState !== WebSocket.OPEN) {
         appendMessage("SYSTEM", "Not connected yet — wait a moment and try again.", "error");
         return;
       }
       appendMessage("YOU", text, "you");
       socket.send(JSON.stringify({ text }));
+    }
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      sendText(text);
       input.value = "";
     });
+
+    /* -------------------------------------------------------------
+     * Real hands-free voice conversation — "like ChatGPT's voice mode,"
+     * per direct request: speak, JARVIS hears you (SpeechRecognition),
+     * sends it, speaks the reply back (SpeechSynthesis), then listens
+     * again automatically. No typing needed once it's on.
+     *
+     * SpeechRecognition (the *listening* half) is a real, known Safari
+     * gap — Chrome/Edge on desktop support it; iOS/macOS Safari does
+     * not (Apple ships no SpeechRecognition implementation at all,
+     * an Apple platform limitation, not something fixable from this
+     * page). SpeechSynthesis (*speaking* the reply back) works fine in
+     * Safari. So on Safari this feature simply doesn't appear (the
+     * voice-mode button stays hidden, per its default `.hidden` class
+     * in the HTML) rather than showing a control that can't work —
+     * text chat with spoken replies isn't offered as a separate mode
+     * here since the two halves are meant to work together; typed
+     * chat without voice remains fully available everywhere via the
+     * text input above regardless.
+     * ------------------------------------------------------------- */
+    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const voiceBtn = document.getElementById("chat-voice-toggle");
+    if (SpeechRecognitionCtor && voiceBtn && "speechSynthesis" in window) {
+      voiceBtn.classList.remove("hidden");
+
+      const recognition = new SpeechRecognitionCtor();
+      recognition.continuous = false; // one utterance per turn — restarted manually, see below
+      recognition.interimResults = false;
+      recognition.lang = navigator.language || "en-US";
+
+      let voiceModeOn = false;
+      let speaking = false;
+      let awaitingReply = false;
+      let recognitionActive = false;
+
+      function startListening() {
+        if (!voiceModeOn || speaking || awaitingReply || recognitionActive) return;
+        try {
+          recognition.start();
+          recognitionActive = true;
+          setStatus("LISTENING…", "live");
+        } catch (e) {
+          // start() throws if already started (a race with a just-fired
+          // 'end' event) — harmless, the next natural retry covers it.
+        }
+      }
+
+      function speak(text) {
+        speaking = true;
+        voiceBtn.dataset.speaking = "1";
+        setStatus("SPEAKING…", "live");
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = recognition.lang;
+        utterance.onend = utterance.onerror = () => {
+          speaking = false;
+          delete voiceBtn.dataset.speaking;
+          if (voiceModeOn) startListening();
+        };
+        speechSynthesis.speak(utterance);
+      }
+
+      recognition.addEventListener("result", (ev) => {
+        const text = ev.results[ev.results.length - 1][0].transcript.trim();
+        recognitionActive = false;
+        if (!text) return;
+        awaitingReply = true;
+        setStatus("THINKING…", "demo");
+        sendText(text);
+      });
+      recognition.addEventListener("end", () => {
+        recognitionActive = false;
+        // The browser stops listening on its own after a pause even
+        // mid-conversation (not just after a result) — restart unless
+        // we're mid-reply or voice mode has since been turned off.
+        if (voiceModeOn && !speaking && !awaitingReply) startListening();
+      });
+      recognition.addEventListener("error", (ev) => {
+        recognitionActive = false;
+        // "no-speech"/"aborted" are routine (silence, or stop() called
+        // deliberately) — anything else still just retries via 'end'
+        // rather than surfacing every transient mic hiccup as an error.
+        if (ev.error !== "no-speech" && ev.error !== "aborted") {
+          appendMessage("SYSTEM", "Voice recognition error: " + ev.error, "error");
+        }
+      });
+
+      // Speak JARVIS's real replies back only while voice mode is on —
+      // otherwise this is silent, unchanged text-only chat behavior.
+      // `text` is null on an error frame (nothing to speak); still need
+      // to clear awaitingReply and resume listening in that case.
+      onAssistantMessage = (text) => {
+        awaitingReply = false;
+        if (voiceModeOn && text) speak(text);
+        else if (voiceModeOn) startListening();
+      };
+
+      voiceBtn.addEventListener("click", () => {
+        voiceModeOn = !voiceModeOn;
+        voiceBtn.setAttribute("aria-pressed", String(voiceModeOn));
+        if (voiceModeOn) {
+          voiceBtn.textContent = "🎙️ VOICE MODE (ON)";
+          startListening();
+        } else {
+          voiceBtn.textContent = "🎙️ VOICE MODE";
+          stopVoiceMode();
+        }
+      });
+
+      stopVoiceModeImpl = () => {
+        voiceModeOn = false;
+        awaitingReply = false;
+        voiceBtn.setAttribute("aria-pressed", "false");
+        voiceBtn.textContent = "🎙️ VOICE MODE";
+        try { recognition.stop(); } catch (e) {}
+        speechSynthesis.cancel();
+        speaking = false;
+        delete voiceBtn.dataset.speaking;
+      };
+    }
+
+    function stopVoiceMode() {
+      stopVoiceModeImpl();
+    }
   })();
 })();
 </script>
