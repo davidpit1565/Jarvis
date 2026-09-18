@@ -10,6 +10,7 @@ import { DeviceConnectionManager, type DeviceConnection } from "@/communication/
 import { parseDeviceToCoreMessage, type ToolResultMessage } from "@/communication/websocket/protocol";
 import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { DeviceTool, LocalTool } from "@/types/tools";
+import { LockdownService } from "@/core/lockdown/LockdownService";
 
 /** Scripted mock brain: returns queued responses in order, one per call. */
 class ScriptedBrain implements Brain {
@@ -56,7 +57,11 @@ function makeDeviceTool(id: string, requiredPermission: DeviceTool["requiredPerm
 function setup(
   brain: Brain,
   tools: (LocalTool | DeviceTool)[] = [],
-  options: { deviceRegistry?: DeviceRegistry; deviceConnectionManager?: DeviceConnectionManager } = {}
+  options: {
+    deviceRegistry?: DeviceRegistry;
+    deviceConnectionManager?: DeviceConnectionManager;
+    lockdownService?: LockdownService;
+  } = {}
 ) {
   const eventBus = new EventBus();
   const toolRegistry = new ToolRegistry();
@@ -72,6 +77,7 @@ function setup(
     eventBus,
     deviceRegistry: options.deviceRegistry,
     deviceConnectionManager: options.deviceConnectionManager,
+    lockdownService: options.lockdownService,
   });
   return { orchestrator, conversation, eventBus, toolRegistry, permissionService };
 }
@@ -185,6 +191,64 @@ describe("Orchestrator integration", () => {
     const parsed = JSON.parse((toolResult as { content: string }).content);
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/Permission denied/);
+  });
+
+  test("emergency lockdown refuses a SAFE_ACTION tool even with a standing grant", async () => {
+    const safeTool = makeEchoTool("SAFE_TOOL", PermissionLevel.SAFE_ACTION);
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "safe_tool", input: {} }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const lockdownService = new LockdownService();
+    lockdownService.activate("test");
+    const { orchestrator, conversation, permissionService } = setup(brain, [safeTool], { lockdownService });
+    permissionService.grant("user-1", safeTool.id);
+
+    await orchestrator.handleUserMessage("user-1", "do the safe thing");
+
+    const toolResult = conversation.getMessages().find((m) => m.role === "tool");
+    const parsed = JSON.parse((toolResult as { content: string }).content);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toMatch(/lockdown/i);
+  });
+
+  test("emergency lockdown does not block a READ tool", async () => {
+    const readTool = makeEchoTool("READ_TOOL");
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "read_tool", input: {} }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const lockdownService = new LockdownService();
+    lockdownService.activate();
+    const { orchestrator, conversation } = setup(brain, [readTool], { lockdownService });
+
+    await orchestrator.handleUserMessage("user-1", "just read something");
+
+    const toolResult = conversation.getMessages().find((m) => m.role === "tool");
+    const parsed = JSON.parse((toolResult as { content: string }).content);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("lifting lockdown restores normal tool execution", async () => {
+    const safeTool = makeEchoTool("SAFE_TOOL2", PermissionLevel.SAFE_ACTION);
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "safe_tool2", input: {} }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const lockdownService = new LockdownService();
+    lockdownService.activate();
+    lockdownService.deactivate();
+    const { orchestrator, conversation, permissionService } = setup(brain, [safeTool], { lockdownService });
+    permissionService.grant("user-1", safeTool.id);
+
+    await orchestrator.handleUserMessage("user-1", "do the safe thing");
+
+    const toolResult = conversation.getMessages().find((m) => m.role === "tool");
+    const parsed = JSON.parse((toolResult as { content: string }).content);
+    expect(parsed.success).toBe(true);
   });
 
   test("appends channelContext to the system prompt for a channel-specific Orchestrator", async () => {

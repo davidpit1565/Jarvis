@@ -9,8 +9,9 @@ import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import type { ConfirmationService } from "@/core/confirmation/ConfirmationService";
 import type { DeviceTool, LocalTool, Tool, ToolResult } from "@/types/tools";
-import type { PermissionCheckResult } from "@/types/permissions";
+import { PermissionLevel, type PermissionCheckResult } from "@/types/permissions";
 import { JARVIS_SYSTEM_PROMPT } from "@/core/brain/systemPrompt";
+import type { LockdownService } from "@/core/lockdown/LockdownService";
 
 export interface OrchestratorDependencies {
   brain: Brain;
@@ -41,6 +42,15 @@ export interface OrchestratorDependencies {
    * exactly what was asked.
    */
   contextProvider?: () => string | undefined | Promise<string | undefined>;
+  /**
+   * Optional break-glass kill switch. When active, every tool above READ
+   * is refused before it reaches a permission check or confirmation
+   * prompt — a single flag that stops JARVIS from taking any action at
+   * all (writing, sending, calling, touching a device) while it keeps
+   * answering questions normally. Omitted means the feature doesn't
+   * exist for this Orchestrator (never locked down).
+   */
+  lockdownService?: LockdownService;
 }
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -111,7 +121,7 @@ export class Orchestrator {
   }
 
   private async runToolCall(userId: string, toolCall: ToolCallRequest): Promise<void> {
-    const { toolRegistry, eventBus } = this.deps;
+    const { toolRegistry, eventBus, lockdownService } = this.deps;
 
     eventBus.emit("tool.requested", { toolCall });
 
@@ -119,6 +129,14 @@ export class Orchestrator {
 
     if (!tool) {
       this.completeToolCall(toolCall, { success: false, error: `Unknown tool: ${toolCall.toolName}` });
+      return;
+    }
+
+    if (lockdownService?.isActive() && tool.requiredPermission !== PermissionLevel.READ) {
+      this.completeToolCall(toolCall, {
+        success: false,
+        error: "JARVIS is in emergency lockdown right now — only read-only actions are available.",
+      });
       return;
     }
 

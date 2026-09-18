@@ -981,6 +981,33 @@ conversations too, not just the current one.
   cosmetic waveform — it cannot inject text into the Orchestrator or
   trigger any tool call.
 
+## Emergency lockdown (break-glass kill switch)
+
+A single admin-gated switch that stops JARVIS from *doing* anything —
+writing, sending, calling, touching a device — while it keeps answering
+questions normally. For a stolen phone, a device behaving unexpectedly, or
+just wanting to be sure nothing can act while you sort something out.
+
+- **`POST /emergency/lockdown`** (optional JSON body `{"reason": "..."}`)
+  activates it. **`POST /emergency/lockdown/lift`** deactivates it. Both
+  admin-token-gated and rate-limited the same way as `/pairing/approve`/
+  `/pairing/revoke`.
+- While active, `Orchestrator` refuses every tool whose permission level
+  is above `READ` — before it ever reaches a permission check or a
+  confirmation prompt — with a clear error Claude can relay back to
+  whichever channel asked (phone, Telegram, terminal). `READ` tools
+  (searching memory, checking the calendar, reading email) keep working,
+  so JARVIS doesn't go completely silent, it just can't act.
+- Applies everywhere at once: the terminal, phone calls, and Telegram all
+  share the one `LockdownService` instance, so there's no channel where a
+  lockdown quietly doesn't apply.
+- `GET /status` reports current lockdown state (`active`/`reason`/
+  `activatedAt`) so the dashboard can show it.
+- In-memory only, like `PermissionService`'s grants — resets on restart,
+  which is the right default for an emergency measure meant to be lifted
+  deliberately, not something that should survive a crash-loop as a
+  permanent, forgotten lockdown.
+
 ## Tool audit trail
 
 Every tool JARVIS actually runs — its name, the exact input, who ran it,

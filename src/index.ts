@@ -48,6 +48,7 @@ import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnect
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/TwilioVoiceGateway";
 import { TelegramGateway, type TelegramSession } from "@/communication/telegram/TelegramGateway";
+import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ActivityLog } from "@/core/activity/ActivityLog";
 import { WebAuthnStore } from "@/auth/WebAuthnStore";
 import { WebAuthnService } from "@/auth/WebAuthnService";
@@ -149,6 +150,7 @@ function main() {
   toolRegistry.registerTool(createClearConversationHistoryTool(conversationHistoryStore));
 
   const permissionService = new PermissionService();
+  const lockdownService = new LockdownService();
   // This is a single-user personal assistant, not a multi-tenant system —
   // memory writes are SAFE_ACTION-level but standing-granted to the one
   // local user rather than asked about every time.
@@ -217,6 +219,7 @@ function main() {
     deviceConnectionManager,
     confirmationService,
     contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+    lockdownService,
   });
 
   // A phone call gets its own conversation thread (a fresh ConversationManager
@@ -236,6 +239,7 @@ function main() {
       confirmationService: phoneConfirmationService,
       channelContext: "This conversation is happening over a live phone call right now.",
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      lockdownService,
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -274,6 +278,7 @@ function main() {
         "persuade them further with another real, specific reason, the way a determined friend would, rather " +
         "than immediately backing off. Keep replies short and energetic — this is a live phone call.",
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      lockdownService,
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -318,6 +323,7 @@ function main() {
       confirmationService: phoneConfirmationService,
       channelContext: "This conversation is happening over Telegram right now.",
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      lockdownService,
     });
     return { orchestrator: telegramOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -394,6 +400,7 @@ function main() {
     twilioAllowedCallers: config.twilioAllowedCallers,
     telegramGateway,
     telegramWebhookSecret: config.telegramWebhookSecret,
+    lockdownService,
     adminToken: config.adminToken,
     webAuthnService,
     sessionStore,

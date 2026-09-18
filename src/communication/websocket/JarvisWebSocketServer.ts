@@ -21,6 +21,7 @@ import type { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import type { TelegramGateway } from "@/communication/telegram/TelegramGateway";
+import type { LockdownService } from "@/core/lockdown/LockdownService";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
 import { DASHBOARD_HTML, LOCK_HTML } from "./dashboard";
 import type { WebAuthnService } from "@/auth/WebAuthnService";
@@ -139,6 +140,13 @@ export interface JarvisWebSocketServerDependencies {
    */
   telegramGateway?: TelegramGateway;
   telegramWebhookSecret?: string;
+  /**
+   * Optional break-glass kill switch. When set, enables POST
+   * /emergency/lockdown and POST /emergency/lockdown/lift (both admin-token
+   * gated) and includes lockdown status in GET /status. Without it, both
+   * routes 404 and the feature doesn't exist for this instance.
+   */
+  lockdownService?: LockdownService;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -255,6 +263,14 @@ export class JarvisWebSocketServer {
 
           if (req.method === "POST" && url.pathname === "/pairing/revoke") {
             return await this.handleRevokeHttp(req, server);
+          }
+
+          if (req.method === "POST" && url.pathname === "/emergency/lockdown") {
+            return await this.handleLockdownHttp(req, server, "activate");
+          }
+
+          if (req.method === "POST" && url.pathname === "/emergency/lockdown/lift") {
+            return await this.handleLockdownHttp(req, server, "lift");
           }
 
           if (req.method === "POST" && url.pathname.startsWith("/voice/")) {
@@ -691,6 +707,7 @@ export class JarvisWebSocketServer {
       reminderStore,
       memoryStore,
       conversationHistoryStore,
+      lockdownService,
     } = this.deps;
 
     const devices = deviceRegistry.listDevices().map((device) => ({
@@ -714,6 +731,7 @@ export class JarvisWebSocketServer {
       tools,
       phoneGatewayEnabled: Boolean(phoneGateway),
       telegramGatewayEnabled: Boolean(telegramGateway),
+      lockdown: lockdownService?.status() ?? { active: false, reason: null, activatedAt: null },
       activity: activityLog?.list() ?? [],
       webAuthnConfigured: webAuthnService?.hasCredentials() ?? true,
       audioWaveformEnabled: Boolean(audioLevelBroadcaster),
@@ -1001,6 +1019,46 @@ export class JarvisWebSocketServer {
     const { deviceId } = body as { deviceId: string };
     this.revokeDevice(deviceId);
     return Response.json({ success: true, deviceId });
+  }
+
+  /**
+   * The break-glass kill switch. Same admin-token gate and rate limit as
+   * /pairing/approve /pairing/revoke — anyone who can flip this can stop
+   * JARVIS from acting at all, which is exactly the point in an emergency
+   * (a stolen phone, a device behaving unexpectedly) but must never be
+   * reachable without the admin token.
+   */
+  private async handleLockdownHttp(req: Request, server: BunServer, action: "activate" | "lift"): Promise<Response> {
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "emergency-lockdown"))) {
+      return Response.json({ success: false, error: "Too many attempts, try again later" }, { status: 429 });
+    }
+
+    const { adminToken, lockdownService } = this.deps;
+    if (!lockdownService) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ success: false, error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    if (action === "lift") {
+      lockdownService.deactivate();
+      console.log("[jarvis] emergency lockdown lifted");
+      return Response.json({ success: true, status: lockdownService.status() });
+    }
+
+    let reason: string | undefined;
+    try {
+      const body = (await req.json()) as { reason?: string } | null;
+      reason = typeof body?.reason === "string" ? body.reason : undefined;
+    } catch {
+      // A bare POST with no body is fine — reason is optional.
+    }
+
+    lockdownService.activate(reason);
+    console.error(`[jarvis] EMERGENCY LOCKDOWN ACTIVATED${reason ? `: ${reason}` : ""}`);
+    return Response.json({ success: true, status: lockdownService.status() });
   }
 
   private send(
