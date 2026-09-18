@@ -92,8 +92,8 @@ function main() {
   permissionService.grant(DEFAULT_USER_ID, "CREATE_REMINDER");
   permissionService.grant(DEFAULT_USER_ID, "COMPLETE_REMINDER");
 
-  const deviceRegistry = new DeviceRegistry();
-  const pairingService = new PairingService();
+  const deviceRegistry = new DeviceRegistry(config.deviceRegistryDbPath);
+  const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const conversation = new ConversationManager(eventBus);
   const brain = new ClaudeBrain(config.anthropicApiKey, {
@@ -257,6 +257,8 @@ function main() {
     reminderStore.close();
     conversationHistoryStore.close();
     activityLog.close();
+    deviceRegistry.close();
+    pairingService.close();
     webAuthnStore.close();
     rl.close();
     process.exit(0);

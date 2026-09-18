@@ -686,6 +686,20 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   in `ClaudeBrain`) rather than left at the SDK's own defaults, so a
   transient 429/5xx gets more chances to recover before a phone call or
   chat turn gives up.
+- **A paired device survives a restart** — `PairingService` and
+  `DeviceRegistry` are now both optionally SQLite-backed
+  (`JARVIS_PAIRING_DB_PATH`, `JARVIS_DEVICE_REGISTRY_DB_PATH`). Before
+  this, both were purely in-memory: a real gap where every server
+  restart/redeploy would forget every approved device's credential *and*
+  its assigned role, forcing a full re-pair (a new code, a human approving
+  it again) even though nothing about the device had changed. `status`/
+  `lastSeen` are deliberately never persisted — a reloaded device starts
+  `unknown` until it actually reconnects and proves it, never assumed
+  online just because it was before the restart. Verified live end to
+  end: registered and paired a simulated device, sent the server a real
+  `SIGTERM`, booted a fresh process against the same database files, and
+  confirmed the device reconnected with its existing credential (no new
+  pairing code needed) with its `primary` role still intact.
 - `GET /health` — unauthenticated, independent of Face ID lock/admin
   token/phone gateway config — wired into both `fly.toml`'s own health
   check and a Dockerfile `HEALTHCHECK`.
@@ -710,10 +724,12 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   as Anthropic's own server-side `web_search`/`web_fetch` tools (opt-in via
   `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not through this
   registry — see "Real internet search" / "Real URL reading" above.
-- DeviceRegistry, PermissionService, and PairingService are all in-memory
-  and reset on restart. Every SQLite-backed store — memory, reminders,
-  activity log, conversation history, WebAuthn credentials — persists
-  across restarts.
+- `PermissionService` is the one remaining in-memory registry (its two
+  standing grants are re-applied at every startup in `src/index.ts`, so
+  this has no practical effect today). Every other store — memory,
+  reminders, activity log, conversation history, WebAuthn credentials,
+  paired-device credentials, and device identity/role — persists across
+  restarts.
 - The phone gateway's caller allowlist (`TWILIO_ALLOWED_CALLERS`) is
   optional and off by default — if you don't set it, anyone who calls the
   configured Twilio number reaches the same JARVIS conversation as the

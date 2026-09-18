@@ -103,3 +103,43 @@ describe("PairingService", () => {
     expect(secret.length).toBeGreaterThan(0);
   });
 });
+
+describe("PairingService persistence", () => {
+  test("an approved credential survives across instances backed by the same SQLite file", () => {
+    const dbPath = `/tmp/jarvis-pairing-test-${crypto.randomUUID()}.sqlite`;
+
+    const first = new PairingService(undefined, undefined, dbPath);
+    first.requestPairing("imac-1");
+    const pending = first.getPendingPairing("imac-1")!;
+    const { secret } = first.approvePairing("imac-1", pending.code);
+    first.close();
+
+    const second = new PairingService(undefined, undefined, dbPath);
+    expect(second.verifyCredential("imac-1", secret)).toBe(true);
+    expect(second.hasCredential("imac-1")).toBe(true);
+    second.close();
+  });
+
+  test("revoking a credential removes it from the backing store too", () => {
+    const dbPath = `/tmp/jarvis-pairing-test-${crypto.randomUUID()}.sqlite`;
+
+    const first = new PairingService(undefined, undefined, dbPath);
+    first.requestPairing("imac-1");
+    const pending = first.getPendingPairing("imac-1")!;
+    first.approvePairing("imac-1", pending.code);
+    first.revoke("imac-1");
+    first.close();
+
+    const second = new PairingService(undefined, undefined, dbPath);
+    expect(second.hasCredential("imac-1")).toBe(false);
+    second.close();
+  });
+
+  test("with no dbPath, behaves purely in-memory (no persistence)", () => {
+    const service = new PairingService();
+    service.requestPairing("imac-1");
+    const pending = service.getPendingPairing("imac-1")!;
+    service.approvePairing("imac-1", pending.code);
+    service.close(); // must not throw with no backing db
+  });
+});

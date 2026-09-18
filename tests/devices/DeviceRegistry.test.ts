@@ -121,3 +121,42 @@ describe("DeviceRegistry", () => {
     expect(() => registry.setRole("missing", "primary")).toThrow();
   });
 });
+
+describe("DeviceRegistry persistence", () => {
+  test("a device and its assigned role survive across instances backed by the same SQLite file", () => {
+    const dbPath = `/tmp/jarvis-devices-test-${crypto.randomUUID()}.sqlite`;
+
+    const first = new DeviceRegistry(dbPath);
+    first.registerDevice({ id: "imac-1", name: "David's iMac", type: DeviceType.MAC, platform: "macos", ...baseInput });
+    first.setRole("imac-1", "primary");
+    first.close();
+
+    const second = new DeviceRegistry(dbPath);
+    const device = second.getDevice("imac-1");
+    expect(device?.role).toBe("primary");
+    expect(device?.name).toBe("David's iMac");
+    expect(second.getPrimaryDevice()?.id).toBe("imac-1");
+    second.close();
+  });
+
+  test("a reloaded device starts UNKNOWN/not-seen, never assumed online from before the restart", () => {
+    const dbPath = `/tmp/jarvis-devices-test-${crypto.randomUUID()}.sqlite`;
+
+    const first = new DeviceRegistry(dbPath);
+    first.registerDevice({ id: "imac-1", name: "David's iMac", type: DeviceType.MAC, platform: "macos", ...baseInput });
+    first.updateStatus("imac-1", DeviceStatus.ONLINE);
+    first.close();
+
+    const second = new DeviceRegistry(dbPath);
+    const device = second.getDevice("imac-1");
+    expect(device?.status).toBe(DeviceStatus.UNKNOWN);
+    expect(device?.lastSeen).toBeNull();
+    second.close();
+  });
+
+  test("with no dbPath, behaves purely in-memory (no persistence)", () => {
+    const registry = new DeviceRegistry();
+    registry.registerDevice({ id: "imac-1", name: "iMac", type: DeviceType.MAC, platform: "macos", ...baseInput });
+    registry.close(); // must not throw with no backing db
+  });
+});

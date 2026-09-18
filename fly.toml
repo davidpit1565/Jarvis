@@ -35,6 +35,8 @@ primary_region = "iad"
   JARVIS_REMINDERS_DB_PATH = "/data/jarvis-reminders.sqlite"
   JARVIS_ACTIVITY_LOG_DB_PATH = "/data/jarvis-activity.sqlite"
   JARVIS_CONVERSATION_HISTORY_DB_PATH = "/data/jarvis-conversation-history.sqlite"
+  JARVIS_PAIRING_DB_PATH = "/data/jarvis-pairing.sqlite"
+  JARVIS_DEVICE_REGISTRY_DB_PATH = "/data/jarvis-devices.sqlite"
 
 [http_service]
   internal_port = 4770
