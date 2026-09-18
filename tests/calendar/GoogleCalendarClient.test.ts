@@ -26,7 +26,9 @@ describe("GoogleCalendarClient.buildAuthUrl", () => {
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("prompt")).toBe("consent");
     expect(url.searchParams.get("state")).toBe("csrf-token-123");
-    expect(url.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/calendar");
+    expect(url.searchParams.get("scope")).toBe(
+      "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.readonly"
+    );
   });
 });
 

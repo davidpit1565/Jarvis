@@ -593,13 +593,15 @@ another reminder notification.
 - Real Twilio per-minute cost applies to every call actually placed —
   same pricing as the inbound gateway, just outbound-initiated.
 
-## Calendar integration (Google Calendar)
+## Calendar & Gmail integration (Google account)
 
 Lets JARVIS answer "what's on my calendar" / "am I free at 3pm" with your
 actual Google Calendar, lets reminders/wake-up calls reference real
-meetings instead of only what's been manually typed in, and lets you
-actually ask it to add or remove events — "add a dentist appointment
-tomorrow at 3pm" really puts it on your calendar.
+meetings instead of only what's been manually typed in, lets you actually
+ask it to add or remove events — "add a dentist appointment tomorrow at
+3pm" really puts it on your calendar — and lets it search your real Gmail
+inbox ("did I get an email from the bank today"), all from one linked
+Google account.
 
 **Setup** (Google Cloud Console, one-time, done manually — this can't be
 automated from here):
@@ -619,9 +621,11 @@ automated from here):
    `JARVIS_PUBLIC_BASE_URL` (plus `JARVIS_ADMIN_TOKEN`, required once
    Calendar is configured — see "Security controls" below).
 5. Visit `<JARVIS_PUBLIC_BASE_URL>/calendar/oauth/start?token=<JARVIS_ADMIN_TOKEN>`
-   in a browser, approve Google's consent screen, and you're linked —
-   `LIST_CALENDAR_EVENTS` and the proactive calendar context below start
-   working immediately, no restart needed.
+   in a browser, approve Google's consent screen — the same one-time
+   consent screen covers both Calendar and Gmail read access, requested
+   together — and you're linked. `LIST_CALENDAR_EVENTS`, `SEARCH_EMAIL`,
+   and the proactive calendar context below all start working immediately,
+   no restart needed.
 
 **What's implemented:**
 
@@ -639,6 +643,16 @@ automated from here):
   **`UNLINK_CALENDAR`** (`DANGEROUS`, like `CLEAR_CONVERSATION_HISTORY`)
   actually disconnects the linked account on request — before this, the
   only way to undo a link was manually deleting the SQLite file.
+- **`SEARCH_EMAIL`** (`READ`) — searches the linked Gmail inbox using
+  Gmail's own search syntax (`from:x`, `is:unread`, `subject:invoice`,
+  `newer_than:2d`, ...) and returns matching messages' subject, sender,
+  date, and a short snippet (`src/gmail/GmailClient.ts`, same raw-`fetch`
+  style, sharing the same linked account and token store as Calendar — no
+  separate OAuth flow). The OAuth scope requested is `gmail.readonly` —
+  deliberately read/search only, never send, delete, or modify — and only
+  whatever a specific query matches, not a dump of the whole mailbox. This
+  is the scoped alternative to "give JARVIS access to all my messages":
+  real, working email search, without a blanket mailbox grant.
 - OAuth tokens (the refresh token and current access token) are persisted
   to their own SQLite database (`src/calendar/CalendarTokenStore.ts`,
   `JARVIS_CALENDAR_TOKEN_DB_PATH`) — access tokens are refreshed
@@ -1090,8 +1104,8 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
 
 - Local tools: `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION`/
   `OPEN_APPLICATION` (device — app name/bundle ID only, and launching a
-  named app), memory/reminder/conversation-history/calendar/wake-up-call
-  tools (see their own sections above). Real internet search/URL reading
+  named app), memory/reminder/conversation-history/calendar/wake-up-call/
+  `SEARCH_EMAIL` tools (see their own sections above). Real internet search/URL reading
   exist separately, as Anthropic's own server-side `web_search`/`web_fetch`
   tools (opt-in via `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not
   through this registry — see "Real internet search" / "Real URL reading"

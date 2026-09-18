@@ -8,7 +8,15 @@ const GOOGLE_CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calen
 // event on request is a real, requested feature; the tool layer (CONFIRM
 // permission level) is what actually gates when that's allowed to happen,
 // not the OAuth scope.
-const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar";
+//
+// Also requests gmail.readonly in the same consent grant: linking a Google
+// account once covers both Calendar and Gmail (see src/gmail/GmailClient.ts),
+// rather than sending the user through two separate OAuth flows for the
+// same account. gmail.readonly only allows reading/searching — never
+// sending, deleting, or modifying mail — matching the "scoped, not blanket
+// mailbox access" boundary requested for this feature.
+const GOOGLE_SCOPES =
+  "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.readonly";
 
 // Refresh a little before actual expiry, so a request never straddles the
 // exact expiry instant and gets rejected mid-flight by Google's clock
@@ -36,7 +44,7 @@ export class GoogleCalendarClient {
     url.searchParams.set("client_id", this.clientId);
     url.searchParams.set("redirect_uri", this.redirectUri);
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", CALENDAR_SCOPE);
+    url.searchParams.set("scope", GOOGLE_SCOPES);
     // offline + consent: without both, Google may not issue a refresh
     // token at all on a repeat authorization, silently leaving JARVIS
     // unable to refresh access after the short-lived access token expires.

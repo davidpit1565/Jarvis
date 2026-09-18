@@ -40,6 +40,8 @@ import { createListCalendarEventsTool } from "@/tools/calendar/ListCalendarEvent
 import { createUnlinkCalendarTool } from "@/tools/calendar/UnlinkCalendarTool";
 import { createCreateCalendarEventTool } from "@/tools/calendar/CreateCalendarEventTool";
 import { createDeleteCalendarEventTool } from "@/tools/calendar/DeleteCalendarEventTool";
+import { GmailClient } from "@/gmail/GmailClient";
+import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -120,6 +122,15 @@ function main() {
     toolRegistry.registerTool(createCreateCalendarEventTool(calendarClient));
     toolRegistry.registerTool(createDeleteCalendarEventTool(calendarClient));
     toolRegistry.registerTool(createUnlinkCalendarTool(calendarTokenStore));
+  }
+
+  // Shares the same Google account link as Calendar (one OAuth consent
+  // screen, two scopes) rather than a second separate account link.
+  const gmailClient = calendarEnabled
+    ? new GmailClient(config.googleClientId!, config.googleClientSecret!, calendarTokenStore)
+    : undefined;
+  if (gmailClient) {
+    toolRegistry.registerTool(createSearchEmailTool(gmailClient));
   }
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
