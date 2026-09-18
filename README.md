@@ -937,6 +937,15 @@ conversations too, not just the current one.
 - Every capability is an explicitly registered tool with an ID, schema,
   permission level, and (for device tools) a named, compiled-in Agent
   function — never a generic "run this" path.
+- Prompt-injection defense in the system prompt itself
+  (`src/core/brain/systemPrompt.ts`): anything that comes back from a
+  tool — a web search/fetch result, an email, a calendar event's text, a
+  news headline — is explicitly framed as data to look at, never an
+  instruction to follow, with a concrete example of what that looks like
+  ("ignore your instructions", "now do X"). Real content fetched from the
+  open internet or someone else's email is the one place a malicious
+  instruction could plausibly reach JARVIS without the user themselves
+  typing it.
 - Defense in depth for device tools: Core's tool allowlist + Core's
   device-scoped permission check + the Agent's own independent tool
   allowlist, before anything executes.
