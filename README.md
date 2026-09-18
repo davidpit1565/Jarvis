@@ -728,7 +728,12 @@ contain no language-detection logic, by design.
   spamming fake device registrations to fill `DeviceRegistry` with junk)
   can't be brute-forced or spammed by hammering the endpoint. In-memory
   and per-process, resetting on restart — a deliberate simplicity tradeoff
-  for a single-instance personal assistant.
+  for a single-instance personal assistant. "Per client IP" actually means
+  the `Fly-Client-IP` header when present, falling back to the raw socket
+  address otherwise — found and fixed during this session's own review:
+  behind Fly.io's proxy, the raw socket address is Fly's own internal hop,
+  the same for every request, which had been silently collapsing every
+  caller into one shared rate-limit bucket per route in production.
 - Device-scoped permission grants: authorizing a tool on one device never
   authorizes it on another.
 - `CONFIRM`/`DANGEROUS` tools require a fresh, per-call human confirmation

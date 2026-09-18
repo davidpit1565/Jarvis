@@ -291,7 +291,7 @@ export class JarvisWebSocketServer {
 
           if (
             server.upgrade(req, {
-              data: { kind: "device", deviceId: null, ip: server.requestIP(req)?.address ?? null },
+              data: { kind: "device", deviceId: null, ip: clientIp(req, server) },
             })
           ) {
             return undefined;
@@ -826,6 +826,22 @@ export class JarvisWebSocketServer {
 }
 
 /**
+ * The real caller's IP, not the address the app's socket actually sees.
+ * Fly.io's edge proxy terminates the client connection and forwards to
+ * this app over its own internal network — `server.requestIP()` returns
+ * *that* internal hop, which is the same for every request when deployed,
+ * collapsing per-IP rate limiting into one shared bucket for every caller.
+ * Fly always sets `Fly-Client-IP` to the actual origin address on requests
+ * it proxies, so it's trusted here; this only matters once actually
+ * running behind Fly (or a similarly trusted proxy) — locally/in tests,
+ * where the header is never set, this falls straight through to the raw
+ * socket address exactly as before.
+ */
+function clientIp(req: Request, server: BunServer): string | null {
+  return req.headers.get("Fly-Client-IP") ?? server.requestIP(req)?.address ?? null;
+}
+
+/**
  * Keys the rate limiter by (route, client IP) — falling back to a single
  * shared bucket for that route when the IP can't be determined (e.g. in a
  * test harness with no real socket) rather than throwing, since a fallback
@@ -833,8 +849,7 @@ export class JarvisWebSocketServer {
  * that silently disables the limit entirely.
  */
 function rateLimitKey(req: Request, server: BunServer, route: string): string {
-  const ip = server.requestIP(req)?.address ?? "unknown";
-  return `${route}:${ip}`;
+  return `${route}:${clientIp(req, server) ?? "unknown"}`;
 }
 
 /**
