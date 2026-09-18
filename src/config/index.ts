@@ -206,6 +206,9 @@ export interface JarvisConfig {
   spotifyClientSecret?: string;
   /** Path to the SQLite database storing the linked Spotify account's OAuth tokens. */
   spotifyTokenDbPath: string;
+  /** Both required together to enable the video studio integration (reels list, publish, Instagram stats). */
+  studioBaseUrl?: string;
+  studioSecret?: string;
 }
 
 class ConfigError extends Error {}
@@ -320,6 +323,14 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError(
       "JARVIS_ADMIN_TOKEN is required once Spotify integration is configured — GET /spotify/oauth/start starts " +
         "an OAuth flow linking a real Spotify account and must not be triggerable by an unauthenticated request."
+    );
+  }
+
+  const studioBaseUrl = process.env.JARVIS_STUDIO_BASE_URL?.trim() || undefined;
+  const studioSecret = process.env.JARVIS_STUDIO_SECRET?.trim() || undefined;
+  if (Boolean(studioBaseUrl) !== Boolean(studioSecret)) {
+    throw new ConfigError(
+      "JARVIS_STUDIO_BASE_URL and JARVIS_STUDIO_SECRET must be set together (or neither) to enable the video studio integration"
     );
   }
 
@@ -463,6 +474,8 @@ export function loadConfig(): JarvisConfig {
     spotifyClientId,
     spotifyClientSecret,
     spotifyTokenDbPath,
+    studioBaseUrl,
+    studioSecret,
     telegramBotToken,
     telegramWebhookSecret,
     telegramAllowedChatIds,

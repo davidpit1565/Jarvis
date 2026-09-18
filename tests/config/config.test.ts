@@ -33,6 +33,8 @@ const ENV_KEYS = [
   "SPOTIFY_CLIENT_ID",
   "SPOTIFY_CLIENT_SECRET",
   "JARVIS_SPOTIFY_TOKEN_DB_PATH",
+  "JARVIS_STUDIO_BASE_URL",
+  "JARVIS_STUDIO_SECRET",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_WEBHOOK_SECRET",
   "TELEGRAM_ALLOWED_CHAT_IDS",
@@ -224,6 +226,31 @@ describe("loadConfig", () => {
   test("defaults JARVIS_SPOTIFY_TOKEN_DB_PATH", () => {
     const config = loadConfig();
     expect(config.spotifyTokenDbPath).toBe("./data/jarvis-spotify-tokens.sqlite");
+  });
+
+  test("loads studio settings when both are set", () => {
+    process.env.JARVIS_STUDIO_BASE_URL = "https://actually-works.com";
+    process.env.JARVIS_STUDIO_SECRET = "studio-secret";
+
+    const config = loadConfig();
+    expect(config.studioBaseUrl).toBe("https://actually-works.com");
+    expect(config.studioSecret).toBe("studio-secret");
+  });
+
+  test("leaves studio settings undefined when neither is set", () => {
+    const config = loadConfig();
+    expect(config.studioBaseUrl).toBeUndefined();
+    expect(config.studioSecret).toBeUndefined();
+  });
+
+  test("throws when only JARVIS_STUDIO_BASE_URL is set", () => {
+    process.env.JARVIS_STUDIO_BASE_URL = "https://actually-works.com";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("throws when only JARVIS_STUDIO_SECRET is set", () => {
+    process.env.JARVIS_STUDIO_SECRET = "studio-secret";
+    expect(() => loadConfig()).toThrow(ConfigError);
   });
 
   test("defaults JARVIS_WAKEUP_CALL_DB_PATH", () => {

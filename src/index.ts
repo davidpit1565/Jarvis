@@ -55,6 +55,10 @@ import { UndoStore } from "@/core/undo/UndoStore";
 import { createUndoLastActionTool } from "@/tools/undo/UndoLastActionTool";
 import { GmailClient } from "@/gmail/GmailClient";
 import { SpotifyClient } from "@/spotify/SpotifyClient";
+import { StudioClient } from "@/studio/StudioClient";
+import { createListReelsTool } from "@/tools/studio/ListReelsTool";
+import { createGetInstagramStatsTool } from "@/tools/studio/GetInstagramStatsTool";
+import { createPublishReelTool } from "@/tools/studio/PublishReelTool";
 import { SpotifyTokenStore } from "@/spotify/SpotifyTokenStore";
 import { createGetCurrentlyPlayingTool } from "@/tools/spotify/GetCurrentlyPlayingTool";
 import { createPlayMusicTool } from "@/tools/spotify/PlayMusicTool";
@@ -205,6 +209,14 @@ function main() {
     toolRegistry.registerTool(createUnlinkSpotifyTool(spotifyTokenStore));
   }
 
+  const studioClient =
+    config.studioBaseUrl && config.studioSecret ? new StudioClient(config.studioBaseUrl, config.studioSecret) : undefined;
+  if (studioClient) {
+    toolRegistry.registerTool(createListReelsTool(studioClient));
+    toolRegistry.registerTool(createGetInstagramStatsTool(studioClient));
+    toolRegistry.registerTool(createPublishReelTool(studioClient));
+  }
+
   const weatherEnabled = config.weatherLatitude !== undefined && config.weatherLongitude !== undefined;
   const weatherClient = weatherEnabled ? new OpenMeteoClient(config.weatherLatitude!, config.weatherLongitude!) : undefined;
   if (weatherClient) {
@@ -254,10 +266,24 @@ function main() {
   permissionService.grant(DEFAULT_USER_ID, "CLEAR_CONVERSATION_HISTORY");
   if (calendarClient) {
     permissionService.grant(DEFAULT_USER_ID, "CREATE_CALENDAR_EVENT");
+    permissionService.grant(DEFAULT_USER_ID, "UPDATE_CALENDAR_EVENT");
     permissionService.grant(DEFAULT_USER_ID, "DELETE_CALENDAR_EVENT");
     // Same DANGEROUS reasoning as CLEAR_CONVERSATION_HISTORY above.
     permissionService.grant(DEFAULT_USER_ID, "UNLINK_CALENDAR");
     permissionService.grant(DEFAULT_USER_ID, "UNDO_LAST_ACTION");
+  }
+  if (spotifyClient) {
+    permissionService.grant(DEFAULT_USER_ID, "PLAY_MUSIC");
+    permissionService.grant(DEFAULT_USER_ID, "PAUSE_MUSIC");
+    permissionService.grant(DEFAULT_USER_ID, "SKIP_TRACK");
+    // Same DANGEROUS reasoning as CLEAR_CONVERSATION_HISTORY/UNLINK_CALENDAR above.
+    permissionService.grant(DEFAULT_USER_ID, "UNLINK_SPOTIFY");
+  }
+  if (studioClient) {
+    // DANGEROUS: granted so the tool is askable at all, but PermissionService
+    // still forces a fresh per-invocation confirmation regardless of this
+    // grant — publishing to a real public account never happens silently.
+    permissionService.grant(DEFAULT_USER_ID, "PUBLISH_REEL");
   }
 
   const deviceRegistry = new DeviceRegistry(config.deviceRegistryDbPath);

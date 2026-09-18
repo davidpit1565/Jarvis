@@ -981,6 +981,45 @@ to configure here.
   and `user-read-currently-playing` — playback control only, never
   library or playlist management.
 
+## Video studio integration
+
+Connects JARVIS to David's separate "actually-works" video studio
+project (a Next.js app, repo `davidpit1565/videos-ai`) — the pipeline
+that renders his Instagram/Facebook reels. Lets JARVIS answer "what
+reels are ready," "how's the Instagram account doing," and actually
+publish a reel on request, instead of him clicking the studio's own
+button every time.
+
+**Setup:**
+
+1. Set `JARVIS_STUDIO_SECRET` (any long random value) as an env var on
+   both this project's deployment *and* the studio's own deployment —
+   it has to be the same value on both sides.
+2. Set `JARVIS_STUDIO_BASE_URL` here to the studio's deployed URL (e.g.
+   `https://actually-works.com`).
+
+**What's implemented:**
+
+- **`LIST_REELS`** (`READ`) — the reels the studio has rendered, with
+  episode number, title, caption, and whether each passed the studio's
+  own quality gate.
+- **`GET_INSTAGRAM_STATS`** (`READ`) — the account's real follower count
+  and per-post views/reach/saves/shares/likes/comments, pulled from the
+  studio's own Instagram Graph API integration.
+- **`PUBLISH_REEL`** (`DANGEROUS`, like `UNLINK_CALENDAR`/
+  `UNLINK_SPOTIFY`, but for a strictly higher-stakes reason: those undo
+  a private account link, this creates a real, public, irreversible
+  post) — triggers the exact same publish action (Instagram, then
+  Facebook) the studio's own button calls, given a reel's `file` name
+  from a prior `LIST_REELS` call.
+- On the studio's side (`davidpit1565/videos-ai`, see its own PR): three
+  new endpoints under `/api/jarvis/*`, classified as a machine-to-machine
+  caller in its route system (bypasses the studio's browser-only PIN
+  gate) and authenticated with `JARVIS_STUDIO_SECRET` as a bearer token —
+  never the PIN cookie, which JARVIS has no way to hold. The studio's own
+  browser-triggered publish button is untouched; JARVIS calls a
+  dedicated mirror of the same publish logic.
+
 ## Live audio waveform (see JARVIS's voice on a call)
 
 Setting `JARVIS_AUDIO_WAVEFORM=true` adds a live waveform to the
