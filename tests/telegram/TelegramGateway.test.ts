@@ -170,6 +170,55 @@ describe("TelegramGateway.awaitConfirmation", () => {
   });
 });
 
+describe("TelegramGateway /start and /help commands", () => {
+  test("/start replies with a canned greeting, never reaching the orchestrator", async () => {
+    const { calls } = stubSendMessage();
+    let orchestratorCalls = 0;
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => {
+        orchestratorCalls++;
+        return "unused";
+      }),
+      userId: "local-user",
+    }));
+
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "/start" } });
+
+    expect(orchestratorCalls).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.text).toMatch(/JARVIS/i);
+  });
+
+  test("/help replies with a canned help message, never reaching the orchestrator", async () => {
+    const { calls } = stubSendMessage();
+    let orchestratorCalls = 0;
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => {
+        orchestratorCalls++;
+        return "unused";
+      }),
+      userId: "local-user",
+    }));
+
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "/help" } });
+
+    expect(orchestratorCalls).toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a message that merely contains /start is still dispatched to the orchestrator normally", async () => {
+    const { calls } = stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "reply"),
+      userId: "local-user",
+    }));
+
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "can you /start the coffee machine" } });
+
+    expect(calls).toEqual([{ chatId: "123", text: "reply" }]);
+  });
+});
+
 describe("TelegramGateway.isChatAllowed", () => {
   test("allows any chat when no allowlist is configured", () => {
     const gateway = new TelegramGateway("bot-token", () => ({

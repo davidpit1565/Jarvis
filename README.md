@@ -774,6 +774,11 @@ anything outside a chat this specific bot was added to, and (once
 - Only plain text messages are handled — photos, stickers, and other
   message types are silently ignored, since there's nothing meaningful for
   JARVIS to do with them today.
+- `/start` and `/help` are answered locally with a canned greeting/help
+  message, never reaching the brain — so tapping "start" on a new chat
+  doesn't burn a real API call on a message the bot can answer itself.
+  Only an exact `/start`/`/help` message triggers this; a message that
+  merely contains those words elsewhere is dispatched normally.
 - **`NOTIFY_USER`** (`SAFE_ACTION`, standing-granted) — lets JARVIS push a
   text notification to your phone from *any* channel it's currently
   talking to you on, most usefully the terminal/Mac: "tell me on my phone

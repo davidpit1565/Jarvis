@@ -32,6 +32,11 @@ const ERROR_MESSAGE = "Sorry, something went wrong on my end. Please try again."
 const YES_PATTERN = /^\s*(yes|y|כן|אישור|confirm)\s*$/i;
 const NO_PATTERN = /^\s*(no|n|לא|ביטול|cancel)\s*$/i;
 
+const HELP_MESSAGE =
+  "I'm JARVIS. Just message me normally — no special syntax needed. I can help with reminders, your " +
+  "calendar, email search, weather, news, and more, depending on what's been configured.";
+const START_MESSAGE = `Hi, I'm JARVIS. ${HELP_MESSAGE}`;
+
 export class TelegramGateway {
   private sessions: Map<string, TelegramSession> = new Map();
   private pendingConfirmations: Map<string, (answer: boolean) => void> = new Map();
@@ -125,6 +130,19 @@ export class TelegramGateway {
         return;
       }
       await this.sendMessage(chatIdStr, "Please reply yes or no.").catch(() => {});
+      return;
+    }
+
+    // Telegram's own bot commands (BotFather-registered or not) — answered
+    // locally, with no brain call, so a new chat's "/start" tap doesn't
+    // burn a real API request on a canned greeting.
+    const trimmedText = text.trim();
+    if (trimmedText === "/start") {
+      await this.sendMessage(chatIdStr, START_MESSAGE).catch(() => {});
+      return;
+    }
+    if (trimmedText === "/help") {
+      await this.sendMessage(chatIdStr, HELP_MESSAGE).catch(() => {});
       return;
     }
 
