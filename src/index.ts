@@ -37,6 +37,31 @@ const DEFAULT_USER_ID = "local-user";
 // never concurrently with the loop's own next question() call.
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 
+// Set once main() creates the real ActivityLog; the handlers below are
+// registered immediately (before config loading or any store is opened)
+// so a crash during startup itself is still caught, not just one after
+// everything is up — they just log to the console alone until then.
+let activityLogForCrashHandlers: { record: (message: string) => void } | undefined;
+
+// A single uncaught throw or rejected promise anywhere in the process (a
+// timer callback, a stray `.then()` with no `.catch()`, a bug in code this
+// handler doesn't directly touch) would otherwise crash the entire Bun
+// process — taking down every open phone call and device connection over
+// one unrelated bug. Logging and continuing is the right tradeoff for a
+// personal assistant that should stay reachable; genuinely fatal errors (a
+// corrupted SQLite file, a full disk) still surface loudly in the logs and
+// in the dashboard's activity feed, they just don't take the whole process
+// down with them.
+process.on("uncaughtException", (error) => {
+  console.error("[jarvis] uncaught exception (process continuing):", error);
+  activityLogForCrashHandlers?.record(`Uncaught exception: ${error.message}`);
+});
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  console.error("[jarvis] unhandled promise rejection (process continuing):", reason);
+  activityLogForCrashHandlers?.record(`Unhandled rejection: ${message}`);
+});
+
 function main() {
   const config = loadConfig();
 
@@ -213,6 +238,8 @@ function main() {
         "Set TWILIO_ALLOWED_CALLERS before giving the number to anyone but yourself."
     );
   }
+
+  activityLogForCrashHandlers = activityLog;
 
   // SIGTERM is what Fly.io/Docker/Kubernetes actually send for a normal
   // stop or redeploy — SIGINT (Ctrl+C) was the only signal handled before,

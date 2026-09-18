@@ -677,17 +677,39 @@ contain no language-detection logic, by design.
   cosmetic waveform — it cannot inject text into the Orchestrator or
   trigger any tool call.
 
+## Reliability
+
+A handful of additions aimed specifically at "survives a real cloud
+restart/redeploy, not just a dev sandbox" rather than new capabilities:
+
+- The Anthropic client is tuned explicitly (`maxRetries: 4`, `timeout: 30s`
+  in `ClaudeBrain`) rather than left at the SDK's own defaults, so a
+  transient 429/5xx gets more chances to recover before a phone call or
+  chat turn gives up.
+- `GET /health` — unauthenticated, independent of Face ID lock/admin
+  token/phone gateway config — wired into both `fly.toml`'s own health
+  check and a Dockerfile `HEALTHCHECK`.
+- Both `SIGINT` and `SIGTERM` (what Fly.io/Docker/Kubernetes actually send
+  for a normal stop/redeploy) trigger the same graceful shutdown: stop
+  accepting connections, close every SQLite store, then exit.
+- A top-level `uncaughtException`/`unhandledRejection` handler logs and
+  keeps the process running instead of a single unrelated bug crashing
+  every open phone call and device connection at once.
+
 ## Current limitations
 
-- Only four registry-based tools exist: `READ_ONLY_FILE_INFO` (local),
-  `GET_ACTIVE_APPLICATION` (device — app name/bundle ID only),
-  `SAVE_MEMORY` and `SEARCH_MEMORY` (local, persistent key/value memory).
-  Real internet search exists separately, as Anthropic's own server-side
-  `web_search` tool (opt-in via `JARVIS_WEB_SEARCH=true`), not through this
-  registry — see "Real internet search" above.
+- Local tools: `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION` (device —
+  app name/bundle ID only), `SAVE_MEMORY`/`SEARCH_MEMORY` (persistent
+  key/value memory), `CREATE_REMINDER`/`LIST_REMINDERS`/`COMPLETE_REMINDER`
+  (persistent tasks), and `SEARCH_CONVERSATION_HISTORY` (persistent
+  transcript search). Real internet search/URL reading exist separately,
+  as Anthropic's own server-side `web_search`/`web_fetch` tools (opt-in via
+  `JARVIS_WEB_SEARCH=true`/`JARVIS_WEB_FETCH=true`), not through this
+  registry — see "Real internet search" / "Real URL reading" above.
 - DeviceRegistry, PermissionService, and PairingService are all in-memory
-  and reset on restart. (`MemoryStore` is the one exception — it is
-  SQLite-backed and persists across restarts.)
+  and reset on restart. Every SQLite-backed store — memory, reminders,
+  activity log, conversation history, WebAuthn credentials — persists
+  across restarts.
 - The phone gateway's caller allowlist (`TWILIO_ALLOWED_CALLERS`) is
   optional and off by default — if you don't set it, anyone who calls the
   configured Twilio number reaches the same JARVIS conversation as the
