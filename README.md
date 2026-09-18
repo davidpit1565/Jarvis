@@ -845,20 +845,36 @@ automated from here):
   `newer_than:2d`, ...) and returns matching messages' subject, sender,
   date, and a short snippet (`src/gmail/GmailClient.ts`, same raw-`fetch`
   style, sharing the same linked account and token store as Calendar — no
-  separate OAuth flow). The OAuth scope requested is `gmail.readonly` —
-  deliberately read/search only, never send, delete, or modify — and only
-  whatever a specific query matches, not a dump of the whole mailbox. This
-  is the scoped alternative to "give JARVIS access to all my messages":
-  real, working email search, without a blanket mailbox grant.
+  separate OAuth flow). Only whatever a specific query matches, not a dump
+  of the whole mailbox.
 - **`GET_EMAIL`** (`READ`) — fetches one message's full plain-text body by
   id (from a prior `search_email` result), for when the user asks what an
-  email actually says rather than just whether it exists. Same
-  `gmail.readonly` boundary as search; walks a multipart message's parts
-  preferring `text/plain` over `text/html`.
+  email actually says rather than just whether it exists. Walks a
+  multipart message's parts preferring `text/plain` over `text/html`.
 - **`GET_UNREAD_EMAIL_COUNT`** (`READ`) — just the unread count via
   Gmail's `resultSizeEstimate`, no per-message summary fetch — meaningfully
   cheaper than `search_email("is:unread")` for "do I have unread emails,"
   which only ever needs a number.
+- **`SEND_EMAIL`** (`SAFE_ACTION`, standing-granted) — sends a real,
+  brand-new email from the linked account. Added later, on explicit
+  request, reversing this feature's original read-only-by-design
+  boundary — the OAuth scope now requests `gmail.send` alongside
+  `gmail.readonly` (see `GOOGLE_SCOPES` in `GoogleCalendarClient.ts`).
+  **An account linked before this scope was added needs to re-run
+  `GET /calendar/oauth/start` once** to pick it up; until then, `SEND_EMAIL`
+  fails with an insufficient-scope error while everything else keeps
+  working. Header values (`to`/`subject`) are sanitized against CR/LF
+  injection before the raw message is built.
+- **`REPLY_EMAIL`** (`SAFE_ACTION`, standing-granted) — replies within an
+  existing thread, given a `messageId` from a prior `search_email`/
+  `get_email` call. The recipient, subject (`Re:` prefix), and threading
+  headers (`In-Reply-To`/`References`) are all derived from the original
+  message server-side, never supplied by the caller — this can't be
+  redirected to send to someone other than whoever the original message
+  actually came from.
+- Still no `DELETE`/mailbox-modify capability of any kind — `SEND_EMAIL`/
+  `REPLY_EMAIL` only ever add a new sent message, never touch an existing
+  one.
 - OAuth tokens (the refresh token and current access token) are persisted
   to their own SQLite database (`src/calendar/CalendarTokenStore.ts`,
   `JARVIS_CALENDAR_TOKEN_DB_PATH`) — access tokens are refreshed
@@ -1006,6 +1022,39 @@ done in this environment. What's covered by real tests
 reuse per chat, error-reply fallback) and HTTP routing (secret-token
 verification, malformed JSON, disabled-gateway 404) against the actual
 `Bun.serve` server.
+
+## Vision (attach an image to a chat message) and image generation
+
+- **Attaching a photo actually works as real vision**, not a filename
+  JARVIS is told about. The hologram UI's 💬 chat panel (`ui/hologram/index.html`)
+  has a 📎 attach button (file picker, `accept="image/*"` so it opens the
+  camera directly on a phone) and accepts a pasted image straight from the
+  clipboard. The image is read client-side as base64 and sent over the
+  same `ws(s)://.../chat` connection as `{ text, image: { mediaType, data } }`
+  (or `images: [...]` for more than one). `JarvisWebSocketServer.handleWebChatMessage`
+  validates the shape (`isValidWebChatImage`) before it ever reaches the
+  Orchestrator, which caps it at 4 images per message and ~5MB (base64)
+  per image (`MAX_IMAGES_PER_MESSAGE`/`MAX_IMAGE_BASE64_LENGTH` in
+  `Orchestrator.ts`) before it's added to the conversation
+  (`ConversationManager.addUserMessage`'s new `images` parameter) and
+  turned into a real Anthropic `image` content block
+  (`ClaudeBrain.toAnthropicMessages`) — Claude genuinely sees the pixels,
+  the same way it would in claude.ai. An image-only message (no caption
+  text) is a valid turn.
+- **`GENERATE_IMAGE`** (`SAFE_ACTION`, standing-granted, always
+  registered) — generates a real image from a text prompt via
+  [Pollinations.ai](https://pollinations.ai) (`image.pollinations.ai/prompt/...`),
+  which is free and requires no API key or signup — verified live during
+  development (fetched an actual generated JPEG with zero auth of any
+  kind). `src/images/PollinationsImageClient.ts` just builds the URL;
+  nothing is generated or fetched by Core itself. The tool result always
+  includes the URL, and when a Telegram owner chat is configured, also
+  pushes it there as a real inline photo via `TelegramGateway.sendPhoto` —
+  Telegram fetches the URL itself server-side, so the image bytes never
+  pass through Core's own process. The hologram chat panel also renders a
+  `generate_image` URL inline as an actual image in JARVIS's reply, not a
+  bare link, when it recognizes the Pollinations domain in the response
+  text.
 
 ## Weather
 

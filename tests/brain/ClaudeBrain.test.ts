@@ -1,6 +1,13 @@
 import { describe, test, expect } from "bun:test";
-import { ClaudeBrain, buildAnthropicTools, fromAnthropicResponse, isRetryableWithFallback } from "@/core/brain/ClaudeBrain";
+import {
+  ClaudeBrain,
+  buildAnthropicTools,
+  fromAnthropicResponse,
+  isRetryableWithFallback,
+  toAnthropicMessages,
+} from "@/core/brain/ClaudeBrain";
 import type { ToolDefinition } from "@/types/tools";
+import type { ConversationMessage } from "@/types/conversation";
 import Anthropic from "@anthropic-ai/sdk";
 
 describe("ClaudeBrain reliability tuning", () => {
@@ -168,5 +175,78 @@ describe("fromAnthropicResponse", () => {
     const response = makeResponse([{ type: "text", text: "hi" }]);
     const result = fromAnthropicResponse(response);
     expect(result.serverToolUses).toBeUndefined();
+  });
+});
+
+describe("toAnthropicMessages (vision/image support)", () => {
+  test("sends a plain string for a text-only user turn, unchanged from before images existed", () => {
+    const messages: ConversationMessage[] = [{ role: "user", content: "hello" }];
+    const [result] = toAnthropicMessages(messages);
+    expect(result?.content).toBe("hello");
+  });
+
+  test("builds an image content block plus a trailing text block for a turn with one image", () => {
+    const messages: ConversationMessage[] = [
+      {
+        role: "user",
+        content: "what's in this photo?",
+        images: [{ mediaType: "image/png", data: "base64data" }],
+      },
+    ];
+    const [result] = toAnthropicMessages(messages);
+
+    expect(Array.isArray(result?.content)).toBe(true);
+    const content = result!.content as Anthropic.ContentBlockParam[];
+    expect(content).toHaveLength(2);
+    expect(content[0]).toEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "base64data" },
+    });
+    expect(content[1]).toEqual({ type: "text", text: "what's in this photo?" });
+  });
+
+  test("omits the trailing text block when the turn has an image but no caption text", () => {
+    const messages: ConversationMessage[] = [
+      { role: "user", content: "", images: [{ mediaType: "image/jpeg", data: "abc" }] },
+    ];
+    const [result] = toAnthropicMessages(messages);
+
+    const content = result!.content as Anthropic.ContentBlockParam[];
+    expect(content).toHaveLength(1);
+    expect(content[0]?.type).toBe("image");
+  });
+
+  test("builds one image block per attached image, in order", () => {
+    const messages: ConversationMessage[] = [
+      {
+        role: "user",
+        content: "compare these",
+        images: [
+          { mediaType: "image/jpeg", data: "first" },
+          { mediaType: "image/webp", data: "second" },
+        ],
+      },
+    ];
+    const [result] = toAnthropicMessages(messages);
+
+    const content = result!.content as Anthropic.ContentBlockParam[];
+    expect(content).toHaveLength(3);
+    expect((content[0] as Anthropic.ImageBlockParam).source).toEqual({
+      type: "base64",
+      media_type: "image/jpeg",
+      data: "first",
+    });
+    expect((content[1] as Anthropic.ImageBlockParam).source).toEqual({
+      type: "base64",
+      media_type: "image/webp",
+      data: "second",
+    });
+    expect(content[2]).toEqual({ type: "text", text: "compare these" });
+  });
+
+  test("an empty images array behaves the same as no images at all", () => {
+    const messages: ConversationMessage[] = [{ role: "user", content: "hi", images: [] }];
+    const [result] = toAnthropicMessages(messages);
+    expect(result?.content).toBe("hi");
   });
 });

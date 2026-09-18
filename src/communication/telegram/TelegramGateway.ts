@@ -119,6 +119,28 @@ export class TelegramGateway {
     }
   }
 
+  /**
+   * Sends a photo given a public URL — used by GENERATE_IMAGE to deliver a
+   * Pollinations-generated image. Telegram fetches the URL itself
+   * server-side (a plain JSON POST, not multipart), so the image bytes
+   * never pass through this process at all — distinct from sendDocument
+   * above, which uploads bytes Core already has in hand.
+   */
+  async sendPhoto(chatId: string, photoUrl: string, caption?: string): Promise<void> {
+    const body: Record<string, string> = { chat_id: chatId, photo: photoUrl };
+    if (caption) body.caption = caption.slice(0, 1024); // Telegram's own caption length limit
+
+    const response = await fetch(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendPhoto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Telegram sendPhoto failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+  }
+
   // 50MB is Telegram's own bot-API document upload limit — this check is
   // defense in depth, not the real cap: ShareFileToPhoneTool's own
   // caller-provided base64Content is realistically already bounded by

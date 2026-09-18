@@ -1,4 +1,4 @@
-import type { AssistantMessage, ConversationMessage, ToolResultMessage } from "@/types/conversation";
+import type { AssistantMessage, ConversationMessage, ToolResultMessage, UserMessageImage } from "@/types/conversation";
 import type { EventBus } from "@/core/events/EventBus";
 
 const DEFAULT_MAX_TURNS = 50;
@@ -27,8 +27,8 @@ export class ConversationManager {
     private readonly maxTurns: number = DEFAULT_MAX_TURNS
   ) {}
 
-  addUserMessage(content: string): void {
-    const message: ConversationMessage = { role: "user", content };
+  addUserMessage(content: string, images?: UserMessageImage[]): void {
+    const message: ConversationMessage = { role: "user", content, images: images?.length ? images : undefined };
     this.turns.push([message]);
     this.trimToMaxTurns();
     this.eventBus?.emit("conversation.message", { message });

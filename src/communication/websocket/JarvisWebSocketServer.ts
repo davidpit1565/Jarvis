@@ -17,6 +17,7 @@ import type { MemoryStore } from "@/memory/MemoryStore";
 import type { ToolAuditLog } from "@/audit/ToolAuditLog";
 import type { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import type { UserMessageImage } from "@/types/conversation";
 import type { SpotifyClient } from "@/spotify/SpotifyClient";
 import type { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
 import type { PermissionService } from "@/permissions/PermissionService";
@@ -665,20 +666,37 @@ export class JarvisWebSocketServer {
     if (!webChatOrchestrator) return; // route already 404s before upgrade if absent — defensive only
 
     let text: string;
+    let images: UserMessageImage[] | undefined;
     try {
       const parsed = JSON.parse(raw);
-      if (typeof parsed?.text !== "string" || !parsed.text.trim()) {
-        ws.send(JSON.stringify({ type: "error", message: "Expected { text: string }" }));
+      const rawText = typeof parsed?.text === "string" ? parsed.text.trim() : "";
+      const rawImages = Array.isArray(parsed?.images) ? parsed.images : parsed?.image ? [parsed.image] : [];
+
+      const parsedImages: UserMessageImage[] = [];
+      for (const candidate of rawImages) {
+        if (!isValidWebChatImage(candidate)) {
+          ws.send(JSON.stringify({ type: "error", message: "Invalid image — expected { mediaType, data } with a supported mediaType" }));
+          return;
+        }
+        parsedImages.push({ mediaType: candidate.mediaType, data: candidate.data });
+      }
+
+      // Text-only turns still require non-empty text (unchanged
+      // behavior); an image-only turn (no caption) is valid — Claude can
+      // see and describe/react to an image with nothing else said.
+      if (!rawText && parsedImages.length === 0) {
+        ws.send(JSON.stringify({ type: "error", message: "Expected non-empty text and/or at least one image" }));
         return;
       }
-      text = parsed.text.trim();
+      text = rawText;
+      images = parsedImages.length ? parsedImages : undefined;
     } catch {
       ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
       return;
     }
 
     webChatOrchestrator
-      .handleUserMessage(defaultUserId ?? "local-user", text)
+      .handleUserMessage(defaultUserId ?? "local-user", text, images)
       .then((response) => {
         ws.send(JSON.stringify({ type: "assistant", text: response }));
       })
@@ -1651,6 +1669,25 @@ function withSecurityHeaders(response: Response): Response {
   response.headers.set("X-Frame-Options", "DENY");
   response.headers.set("Referrer-Policy", "no-referrer");
   return response;
+}
+
+const VALID_WEB_CHAT_IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+/**
+ * Structural validation only (right mediaType, non-empty base64 string) —
+ * size/count limits are Orchestrator.handleUserMessage's job
+ * (MAX_IMAGE_BASE64_LENGTH/MAX_IMAGES_PER_MESSAGE), so they stay in one
+ * place rather than duplicated at every channel that can attach an image.
+ */
+function isValidWebChatImage(candidate: unknown): candidate is UserMessageImage {
+  if (typeof candidate !== "object" || candidate === null) return false;
+  const { mediaType, data } = candidate as Record<string, unknown>;
+  return (
+    typeof mediaType === "string" &&
+    VALID_WEB_CHAT_IMAGE_MEDIA_TYPES.has(mediaType) &&
+    typeof data === "string" &&
+    data.length > 0
+  );
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

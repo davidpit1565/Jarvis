@@ -105,6 +105,8 @@ import { TelegramGateway, type TelegramSession } from "@/communication/telegram/
 import { DeviceVoiceGateway, type DeviceVoiceSession } from "@/communication/voice/DeviceVoiceGateway";
 import { createNotifyUserTool } from "@/tools/telegram/NotifyUserTool";
 import { createShareFileToPhoneTool } from "@/tools/telegram/ShareFileToPhoneTool";
+import { PollinationsImageClient } from "@/images/PollinationsImageClient";
+import { createGenerateImageTool } from "@/tools/images/GenerateImageTool";
 import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ActivityLog } from "@/core/activity/ActivityLog";
 import { WebAuthnStore } from "@/auth/WebAuthnStore";
@@ -548,6 +550,16 @@ function main() {
     toolRegistry.registerTool(createShareFileToPhoneTool(telegramGateway, config.telegramOwnerChatId));
     permissionService.grant(DEFAULT_USER_ID, "SHARE_FILE_TO_PHONE");
   }
+
+  // Always registered, unlike the Telegram-only tools above — the
+  // generated image's URL is useful on any channel (the tool result
+  // itself always carries it); Telegram delivery on top is a bonus when
+  // a owner chat happens to be configured, not a requirement.
+  const pollinationsImageClient = new PollinationsImageClient();
+  toolRegistry.registerTool(
+    createGenerateImageTool(pollinationsImageClient, telegramGateway, config.telegramOwnerChatId)
+  );
+  permissionService.grant(DEFAULT_USER_ID, "GENERATE_IMAGE");
 
   // A paired device's "Hey JARVIS" wake-word channel gets its own
   // conversation thread, exactly like Telegram — kept for the life of the

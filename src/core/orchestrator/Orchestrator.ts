@@ -4,7 +4,7 @@ import type { ConversationManager } from "@/core/conversation/ConversationManage
 import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import type { PermissionService } from "@/permissions/PermissionService";
 import type { EventBus } from "@/core/events/EventBus";
-import type { ToolCallRequest } from "@/types/conversation";
+import type { ToolCallRequest, UserMessageImage } from "@/types/conversation";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import type { ConfirmationService } from "@/core/confirmation/ConfirmationService";
@@ -65,6 +65,17 @@ const MAX_TOOL_ITERATIONS = 5;
 const MAX_USER_MESSAGE_LENGTH = 8_000;
 
 /**
+ * Anthropic's own documented per-image guidance is ~5MB raw; base64
+ * inflates that by ~4/3, and this is checked against the base64 string
+ * length itself (cheaper than decoding first) — generous enough for any
+ * real photo (an Instagram screenshot, a document photo) while still
+ * bounding cost/abuse the same way MAX_USER_MESSAGE_LENGTH bounds text.
+ */
+const MAX_IMAGE_BASE64_LENGTH = 7_000_000;
+/** More than a handful of images in one turn is almost certainly a mistake or abuse, not a real use case. */
+const MAX_IMAGES_PER_MESSAGE = 4;
+
+/**
  * The central JARVIS loop: user message -> Claude -> tool decision ->
  * permission check -> tool execution -> result back to Claude -> final
  * response. Claude only ever *requests* tools; this class is the sole
@@ -75,7 +86,7 @@ const MAX_USER_MESSAGE_LENGTH = 8_000;
 export class Orchestrator {
   constructor(private readonly deps: OrchestratorDependencies) {}
 
-  async handleUserMessage(userId: string, content: string): Promise<string> {
+  async handleUserMessage(userId: string, content: string, images?: UserMessageImage[]): Promise<string> {
     const { brain, conversation, toolRegistry, eventBus, channelContext, contextProvider } = this.deps;
     const extraContext = [channelContext, await contextProvider?.()].filter(Boolean).join("\n\n");
     const systemPrompt = extraContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${extraContext}` : JARVIS_SYSTEM_PROMPT;
@@ -86,8 +97,15 @@ export class Orchestrator {
         "please send something shorter."
       );
     }
+    if (images && images.length > MAX_IMAGES_PER_MESSAGE) {
+      return `Too many images (${images.length}, limit ${MAX_IMAGES_PER_MESSAGE}) — please send fewer at a time.`;
+    }
+    const oversizedImage = images?.find((image) => image.data.length > MAX_IMAGE_BASE64_LENGTH);
+    if (oversizedImage) {
+      return "One of those images is too large — please send a smaller one.";
+    }
 
-    conversation.addUserMessage(content);
+    conversation.addUserMessage(content, images);
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       eventBus.emit("brain.request", { messageCount: conversation.getMessages().length });

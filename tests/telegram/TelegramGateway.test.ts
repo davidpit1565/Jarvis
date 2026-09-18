@@ -195,6 +195,58 @@ describe("TelegramGateway.sendDocument", () => {
   });
 });
 
+describe("TelegramGateway.sendPhoto", () => {
+  test("POSTs the photo URL as JSON, not multipart", async () => {
+    let capturedUrl: string | undefined;
+    let capturedBody: { chat_id: string; photo: string; caption?: string } | undefined;
+    global.fetch = (async (url: unknown, init?: RequestInit) => {
+      capturedUrl = String(url);
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await gateway.sendPhoto("123", "https://image.pollinations.ai/prompt/robot", "a cute robot");
+
+    expect(capturedUrl).toBe("https://api.telegram.org/botbot-token/sendPhoto");
+    expect(capturedBody?.chat_id).toBe("123");
+    expect(capturedBody?.photo).toBe("https://image.pollinations.ai/prompt/robot");
+    expect(capturedBody?.caption).toBe("a cute robot");
+  });
+
+  test("omits caption when not given", async () => {
+    let capturedBody: { chat_id: string; photo: string; caption?: string } | undefined;
+    global.fetch = (async (_url: unknown, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await gateway.sendPhoto("123", "https://image.pollinations.ai/prompt/robot");
+
+    expect(capturedBody?.caption).toBeUndefined();
+  });
+
+  test("propagates a non-ok response as a thrown error", async () => {
+    global.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await expect(gateway.sendPhoto("123", "https://image.pollinations.ai/prompt/robot")).rejects.toThrow("500");
+  });
+});
+
 describe("TelegramGateway.awaitConfirmation", () => {
   test("resolves true when the chat replies yes", async () => {
     const { calls } = stubSendMessage();
