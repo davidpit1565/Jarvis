@@ -141,14 +141,21 @@ reminder has a lifecycle (pending, then completed), a memory doesn't:
 
 - **`CREATE_REMINDER`** (`SAFE_ACTION`, standing-granted) — creates a
   reminder/task, optionally with an ISO 8601 `dueAt` Claude resolves from
-  whatever the user actually said ("remind me at 6pm").
+  whatever the user actually said ("remind me at 6pm"). Optionally pass
+  `recurrence` (`"daily"`/`"weekly"`, requires `dueAt`) for a repeating
+  reminder — "remind me every day to take my medication."
 - **`LIST_REMINDERS`** (`READ`) — pending reminders by default, soonest-due
   first (undated ones last); pass `includeCompleted` to see everything.
 - **`COMPLETE_REMINDER`** (`SAFE_ACTION`, standing-granted) — marks one
-  done by id.
+  done by id. For a recurring reminder with a `dueAt`, this also creates
+  the next occurrence (same text/recurrence, `dueAt` advanced by one day/
+  week) — it keeps recurring instead of vanishing after the first
+  completion. A recurring reminder with no `dueAt` has nothing to advance
+  from, so it completes like a normal one-off.
 - **`UPDATE_REMINDER`** (`SAFE_ACTION`, standing-granted) — edits an
-  existing reminder's text and/or due date in place ("actually make that
-  7pm instead"), without losing its id/createdAt.
+  existing reminder's text, due date, and/or recurrence in place
+  ("actually make that 7pm instead," "stop that reminder from
+  repeating"), without losing its id/createdAt.
 - **`DELETE_REMINDER`** (`SAFE_ACTION`, standing-granted) — permanently
   removes a reminder created by mistake or no longer relevant. Distinct
   from `COMPLETE_REMINDER`: this is for one that should never have

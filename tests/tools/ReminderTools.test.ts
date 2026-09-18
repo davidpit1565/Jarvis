@@ -54,6 +54,32 @@ describe("CREATE_REMINDER tool", () => {
     const result = await tool.execute({ text: "Task", dueAt: "not-a-date" }, context);
     expect(result.success).toBe(false);
   });
+
+  test("creates a recurring reminder with a dueAt", async () => {
+    const tool = createCreateReminderTool(store);
+    const result = await tool.execute(
+      { text: "Take medication", dueAt: "2026-09-19T18:00:00.000Z", recurrence: "daily" },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(store.list()[0]?.recurrence).toBe("daily");
+  });
+
+  test("rejects an invalid recurrence value", async () => {
+    const tool = createCreateReminderTool(store);
+    const result = await tool.execute(
+      { text: "Task", dueAt: "2026-09-19T18:00:00.000Z", recurrence: "hourly" as never },
+      context
+    );
+    expect(result.success).toBe(false);
+  });
+
+  test("rejects a recurrence without a dueAt", async () => {
+    const tool = createCreateReminderTool(store);
+    const result = await tool.execute({ text: "Task", recurrence: "daily" }, context);
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("LIST_REMINDERS tool", () => {
@@ -225,6 +251,33 @@ describe("UPDATE_REMINDER tool", () => {
     const record = store.create({ text: "Task" });
     const tool = createUpdateReminderTool(store);
     const result = await tool.execute({ id: record.id, dueAt: "not-a-date" }, context);
+    expect(result.success).toBe(false);
+  });
+
+  test("sets recurrence on an existing reminder", async () => {
+    const record = store.create({ text: "Task", dueAt: "2026-09-19T18:00:00.000Z" });
+    const tool = createUpdateReminderTool(store);
+
+    const result = await tool.execute({ id: record.id, recurrence: "weekly" }, context);
+
+    expect(result.success).toBe(true);
+    expect(store.get(record.id)?.recurrence).toBe("weekly");
+  });
+
+  test("clears recurrence when passed null — stops it from repeating", async () => {
+    const record = store.create({ text: "Task", dueAt: "2026-09-19T18:00:00.000Z", recurrence: "daily" });
+    const tool = createUpdateReminderTool(store);
+
+    const result = await tool.execute({ id: record.id, recurrence: null }, context);
+
+    expect(result.success).toBe(true);
+    expect(store.get(record.id)?.recurrence).toBeNull();
+  });
+
+  test("rejects an invalid recurrence value", async () => {
+    const record = store.create({ text: "Task" });
+    const tool = createUpdateReminderTool(store);
+    const result = await tool.execute({ id: record.id, recurrence: "hourly" as never }, context);
     expect(result.success).toBe(false);
   });
 });

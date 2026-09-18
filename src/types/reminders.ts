@@ -1,3 +1,5 @@
+export type ReminderRecurrence = "daily" | "weekly";
+
 export interface ReminderRecord {
   id: string;
   text: string;
@@ -5,9 +7,12 @@ export interface ReminderRecord {
   dueAt: string | null;
   completed: boolean;
   createdAt: string;
+  /** null for a one-off reminder. When set, completing it (with a dueAt set) creates the next occurrence automatically. */
+  recurrence: ReminderRecurrence | null;
 }
 
 export interface CreateReminderInput {
   text: string;
   dueAt?: string | null;
+  recurrence?: ReminderRecurrence | null;
 }

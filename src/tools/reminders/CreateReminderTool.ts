@@ -1,11 +1,15 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 import type { ReminderStore } from "@/reminders/ReminderStore";
+import type { ReminderRecurrence } from "@/types/reminders";
 
 export interface CreateReminderInput extends Record<string, unknown> {
   text: string;
   dueAt?: string;
+  recurrence?: ReminderRecurrence;
 }
+
+const VALID_RECURRENCES: ReminderRecurrence[] = ["daily", "weekly"];
 
 function isValidIsoDate(value: string): boolean {
   return !Number.isNaN(Date.parse(value));
@@ -25,12 +29,19 @@ export function createCreateReminderTool(reminderStore: ReminderStore): LocalToo
       "Creates a reminder or task for the user to see later. Use plain, specific text for what needs " +
       'to be done. If the user gave a specific time or date, pass it as an ISO 8601 timestamp in "dueAt" ' +
       "(e.g. from a phrase like \"remind me at 6pm\" or \"tomorrow morning\", resolve it to an actual " +
-      'timestamp yourself); omit "dueAt" entirely for an undated task.',
+      'timestamp yourself); omit "dueAt" entirely for an undated task. For a repeating reminder (e.g. ' +
+      '"remind me every day to take my medication"), pass "recurrence" and a "dueAt" — completing it then ' +
+      "automatically creates the next occurrence, advanced by one day/week.",
     inputSchema: {
       type: "object",
       properties: {
         text: { type: "string", description: "What the reminder/task is, in plain text." },
         dueAt: { type: "string", description: "ISO 8601 timestamp this is due at. Omit for an undated task." },
+        recurrence: {
+          type: "string",
+          enum: VALID_RECURRENCES,
+          description: 'For a repeating reminder: "daily" or "weekly". Requires dueAt. Omit for a one-off reminder.',
+        },
       },
       required: ["text"],
     },
@@ -46,9 +57,24 @@ export function createCreateReminderTool(reminderStore: ReminderStore): LocalToo
           return { success: false, error: "dueAt must be a valid ISO 8601 timestamp" };
         }
       }
+      if (input.recurrence !== undefined) {
+        if (!VALID_RECURRENCES.includes(input.recurrence)) {
+          return { success: false, error: `recurrence must be one of: ${VALID_RECURRENCES.join(", ")}` };
+        }
+        if (input.dueAt === undefined) {
+          return { success: false, error: "recurrence requires dueAt" };
+        }
+      }
 
-      const record = reminderStore.create({ text: input.text, dueAt: input.dueAt ?? null });
-      return { success: true, data: { id: record.id, text: record.text, dueAt: record.dueAt } };
+      const record = reminderStore.create({
+        text: input.text,
+        dueAt: input.dueAt ?? null,
+        recurrence: input.recurrence ?? null,
+      });
+      return {
+        success: true,
+        data: { id: record.id, text: record.text, dueAt: record.dueAt, recurrence: record.recurrence },
+      };
     },
   };
 }
