@@ -841,22 +841,46 @@
   // "brain with waves" envelope from the reference images), then advected
   // by the SAME smooth curl field every frame, so nearby particles swirl
   // together in coherent tendrils rather than independently wobbling.
+  // Shared by buildFlowShell()'s initial seeding (so the shape is already
+  // organic before the first frame, and stays that way under
+  // prefers-reduced-motion, which freezes here rather than animating) and
+  // animate()'s per-frame advection (which just calls this again with a
+  // moving t) — one formula, not two copies that could quietly drift.
+  // Two octaves (a big low-frequency lobe shape, plus finer secondary
+  // bumps) is the standard technique for organic/blob shapes — a single
+  // frequency reads as either "bumpy sphere" (high freq) or just "a
+  // slightly squashed sphere" (low freq alone), not a real amoeba outline.
+  function blobRadius(baseRadius, dx, dy, dz, t) {
+    const blobT = t * 0.05;
+    const lobe = simplex3(dx * 0.55 + blobT, dy * 0.55 - blobT * 0.6, dz * 0.55 + blobT * 0.8);
+    const lobe2 = simplex3(dx * 1.3 - blobT * 1.4, dy * 1.3, dz * 1.3 + blobT * 1.1);
+    return baseRadius * (0.5 + (lobe * 0.5 + 0.5) * 0.85 + (lobe2 * 0.5 + 0.5) * 0.25);
+  }
+
   function buildFlowShell(baseRadius, count, color, lineColor) {
     const n = count;
     const basePositions = new Float32Array(n * 3);
     const positions = new Float32Array(n * 3);
+    const directions = new Float32Array(n * 3);
     const phases = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       const u = Math.random(), v = Math.random();
       const theta = 2 * Math.PI * u;
       const phi = Math.acos(2 * v - 1);
-      // Radius jitter is the actual fix for "looks like a planet" — a
-      // uniform radius is what makes a point cloud read as a perfect
-      // sphere in the first place.
-      const r = baseRadius * (0.82 + Math.random() * 0.34);
-      const x = r * Math.sin(phi) * Math.cos(theta);
-      const y = r * Math.sin(phi) * Math.sin(theta);
-      const z = r * Math.cos(phi);
+      const dx = Math.sin(phi) * Math.cos(theta);
+      const dy = Math.sin(phi) * Math.sin(theta);
+      const dz = Math.cos(phi);
+      directions[i * 3] = dx; directions[i * 3 + 1] = dy; directions[i * 3 + 2] = dz;
+      // The real organic body shape (blobRadius, t=0 — static until
+      // animate() advects it), not a near-uniform radius: this is what's
+      // seen immediately on load and under prefers-reduced-motion (which
+      // freezes here rather than animating), so it needs to already look
+      // like a real amoeba/cell outline, not "a sphere that happens to
+      // move later." A uniform-ish radius here is exactly why direct
+      // feedback was "still looks like a planet/galaxy" — a round
+      // silhouette reads as a sphere regardless of surface texture.
+      const r = blobRadius(baseRadius, dx, dy, dz, 0) * (0.97 + Math.random() * 0.06);
+      const x = dx * r, y = dy * r, z = dz * r;
       basePositions[i * 3] = x; basePositions[i * 3 + 1] = y; basePositions[i * 3 + 2] = z;
       positions[i * 3] = x; positions[i * 3 + 1] = y; positions[i * 3 + 2] = z;
       phases[i] = Math.random() * Math.PI * 2;
@@ -892,7 +916,7 @@
     const group = new THREE.Group();
     group.add(points, lines);
     return {
-      group, pointsMat: mat, n, basePositions, positions,
+      group, pointsMat: mat, n, basePositions, positions, directions, baseRadius,
       posAttr: geo.attributes.position, lineEndpoints, lineGeo, rewireLine,
     };
   }
@@ -1221,13 +1245,27 @@
         const turbAmp = turbBase + audioGlow * 0.85 + brainPulse * 0.55;
         const flowT = t * 0.15;
         const fp = flowShell.positions;
-        const fb = flowShell.basePositions;
+        const fd = flowShell.directions;
+        const fbr = flowShell.baseRadius;
+        // Real body deformation, not just surface texture — see
+        // blobRadius() above: each particle's fixed DIRECTION from center
+        // (not its drifting position, so nearby directions stay
+        // correlated) plus real elapsed time drives real lobes/pseudopods
+        // that slowly migrate around the body, not a static bumpy sphere.
+        // This is the actual fix for "still looks like a planet/galaxy":
+        // direct feedback was that a round silhouette reads as a sphere
+        // no matter how organic its surface texture is — it needs to move
+        // "like a bacterium or a living cell," i.e. the outline itself
+        // has to undulate.
         for (let i = 0; i < flowShell.n; i++) {
           const ix = i * 3, iy = ix + 1, iz = ix + 2;
+          const dx = fd[ix], dy = fd[iy], dz = fd[iz];
+          const dynRadius = blobRadius(fbr, dx, dy, dz, t);
+          const targetX = dx * dynRadius, targetY = dy * dynRadius, targetZ = dz * dynRadius;
           const c = curlNoise3(fp[ix] * 0.55 + flowT, fp[iy] * 0.55, fp[iz] * 0.55 - flowT * 0.7);
-          fp[ix] += c[0] * turbAmp * 0.018 - (fp[ix] - fb[ix]) * 0.05;
-          fp[iy] += c[1] * turbAmp * 0.018 - (fp[iy] - fb[iy]) * 0.05;
-          fp[iz] += c[2] * turbAmp * 0.018 - (fp[iz] - fb[iz]) * 0.05;
+          fp[ix] += c[0] * turbAmp * 0.018 - (fp[ix] - targetX) * 0.05;
+          fp[iy] += c[1] * turbAmp * 0.018 - (fp[iy] - targetY) * 0.05;
+          fp[iz] += c[2] * turbAmp * 0.018 - (fp[iz] - targetZ) * 0.05;
         }
         flowShell.posAttr.needsUpdate = true;
 
