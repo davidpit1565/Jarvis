@@ -10,6 +10,7 @@ import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionService } from "@/permissions/PermissionService";
 import { readOnlyFileInfoTool } from "@/tools/filesystem/ReadOnlyFileInfoTool";
 import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationTool";
+import { listRunningApplicationsTool } from "@/tools/system/ListRunningApplicationsTool";
 import { openApplicationTool } from "@/tools/system/OpenApplicationTool";
 import { quitApplicationTool } from "@/tools/system/QuitApplicationTool";
 import { openUrlTool } from "@/tools/system/OpenUrlTool";
@@ -178,6 +179,7 @@ function main() {
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
+  toolRegistry.registerTool(listRunningApplicationsTool);
   toolRegistry.registerTool(openApplicationTool);
   toolRegistry.registerTool(quitApplicationTool);
   toolRegistry.registerTool(openUrlTool);

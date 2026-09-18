@@ -1341,7 +1341,8 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
 - Local tools: `READ_ONLY_FILE_INFO`, `GET_ACTIVE_APPLICATION`/
   `OPEN_APPLICATION`/`QUIT_APPLICATION`/`OPEN_URL` (device — app name/
   bundle ID only, launching or quitting a named app, or opening an
-  http/https URL in the default browser), `LIST_DEVICES` (which paired
+  http/https URL in the default browser), `LIST_RUNNING_APPLICATIONS`
+  (device — names of currently open apps), `LIST_DEVICES` (which paired
   devices exist and whether they're online), memory/reminder/conversation-history/calendar/wake-up-call/
   `SEARCH_EMAIL`/`GET_WEATHER`/`GET_NEWS`/`NOTIFY_USER` tools (see their own sections above). Real internet search/URL reading
   exist separately, as Anthropic's own server-side `web_search`/`web_fetch`
