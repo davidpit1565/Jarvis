@@ -24,6 +24,7 @@ import { createDeleteReminderTool } from "@/tools/reminders/DeleteReminderTool";
 import { createUpdateReminderTool } from "@/tools/reminders/UpdateReminderTool";
 import { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import { createSearchConversationHistoryTool } from "@/tools/history/SearchConversationHistoryTool";
+import { createClearConversationHistoryTool } from "@/tools/history/ClearConversationHistoryTool";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -100,6 +101,7 @@ function main() {
   toolRegistry.registerTool(createDeleteReminderTool(reminderStore));
   toolRegistry.registerTool(createUpdateReminderTool(reminderStore));
   toolRegistry.registerTool(createSearchConversationHistoryTool(conversationHistoryStore));
+  toolRegistry.registerTool(createClearConversationHistoryTool(conversationHistoryStore));
 
   const permissionService = new PermissionService();
   // This is a single-user personal assistant, not a multi-tenant system —
@@ -111,6 +113,10 @@ function main() {
   permissionService.grant(DEFAULT_USER_ID, "COMPLETE_REMINDER");
   permissionService.grant(DEFAULT_USER_ID, "DELETE_REMINDER");
   permissionService.grant(DEFAULT_USER_ID, "UPDATE_REMINDER");
+  // DANGEROUS: granted so the tool is askable at all, but PermissionService
+  // still forces a fresh per-invocation confirmation regardless of this
+  // grant — this never lets JARVIS erase the transcript silently.
+  permissionService.grant(DEFAULT_USER_ID, "CLEAR_CONVERSATION_HISTORY");
 
   const deviceRegistry = new DeviceRegistry(config.deviceRegistryDbPath);
   const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);

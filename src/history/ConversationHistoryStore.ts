@@ -63,6 +63,13 @@ export class ConversationHistoryStore {
     return row.count;
   }
 
+  /** Permanently erases every stored transcript turn. Returns how many rows were removed. */
+  clear(): number {
+    const before = this.count();
+    this.db.run(`DELETE FROM conversation_history`);
+    return before;
+  }
+
   close(): void {
     this.db.close();
   }

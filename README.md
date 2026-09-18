@@ -185,6 +185,14 @@ instead of only seeing the current thread. Distinct from `SEARCH_MEMORY`
 (explicit facts Claude chose to save) and reminders (tasks) — this is the
 raw record of what was actually said.
 
+**`CLEAR_CONVERSATION_HISTORY`** (`DANGEROUS`) lets the user actually erase
+that transcript — a real "forget everything we've talked about," not just
+a way to search it. Unlike `SAVE_MEMORY`/reminders' `SAFE_ACTION`-level
+deletes (standing-granted, no per-call confirmation), this is `DANGEROUS`:
+it's irreversible and total (every turn, not one record), so it always
+requires a fresh confirmation even with the standing grant JARVIS has —
+see the confirmation flow below.
+
 ## Confirmation flow for CONFIRM / DANGEROUS tools
 
 `CONFIRM` and `DANGEROUS` tools now have a real approval path instead of

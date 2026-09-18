@@ -68,4 +68,21 @@ describe("ConversationHistoryStore", () => {
     expect(store.count()).toBe(2);
     store.close();
   });
+
+  test("clear erases every stored turn and returns how many were removed", () => {
+    const store = new ConversationHistoryStore(":memory:");
+    store.record("user", "hello");
+    store.record("assistant", "hi there");
+
+    expect(store.clear()).toBe(2);
+    expect(store.count()).toBe(0);
+    expect(store.search("hello")).toEqual([]);
+    store.close();
+  });
+
+  test("clear on an empty store returns 0", () => {
+    const store = new ConversationHistoryStore(":memory:");
+    expect(store.clear()).toBe(0);
+    store.close();
+  });
 });
