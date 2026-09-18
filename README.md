@@ -661,6 +661,11 @@ automated from here):
   soonest first, via Google's Calendar API v3 (`src/calendar/GoogleCalendarClient.ts`,
   raw `fetch` calls, no SDK dependency, matching this project's existing
   style — see `TwilioOutboundCaller`).
+- **`SEARCH_CALENDAR_EVENTS`** (`READ`) — finds events (past or future) by
+  free-text query against title/description/location/attendees, via
+  Google's own `q` search parameter — for "when was my dentist
+  appointment" or "find the event with Sarah," which `LIST_CALENDAR_EVENTS`
+  (upcoming-only) can't answer.
 - **`CREATE_CALENDAR_EVENT`** and **`DELETE_CALENDAR_EVENT`** (both
   `SAFE_ACTION`, standing-granted, matching `create_reminder`/
   `delete_reminder`) — real write access: JARVIS can actually put

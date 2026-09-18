@@ -162,6 +162,43 @@ export class GoogleCalendarClient {
     }));
   }
 
+  /** Events matching a free-text query (Google's own `q` search over summary/description/location/attendees), soonest first, not limited to upcoming ones. */
+  async searchEvents(query: string, maxResults: number = 10): Promise<CalendarEvent[]> {
+    const accessToken = await this.getValidAccessToken();
+
+    const url = new URL(GOOGLE_CALENDAR_EVENTS_URL);
+    url.searchParams.set("q", query);
+    url.searchParams.set("maxResults", String(maxResults));
+    url.searchParams.set("singleEvents", "true");
+    url.searchParams.set("orderBy", "startTime");
+
+    const response = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Google Calendar API request failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+
+    const data = (await response.json()) as {
+      items: Array<{
+        id: string;
+        summary?: string;
+        location?: string;
+        start: { dateTime?: string; date?: string };
+        end: { dateTime?: string; date?: string };
+      }>;
+    };
+
+    return (data.items ?? []).map((item) => ({
+      id: item.id,
+      summary: item.summary ?? "(no title)",
+      start: item.start.dateTime ?? item.start.date ?? "",
+      end: item.end.dateTime ?? item.end.date ?? "",
+      location: item.location ?? null,
+    }));
+  }
+
   /** Creates a new event on the user's primary calendar. Returns the created event. */
   async createEvent(input: CreateCalendarEventInput): Promise<CalendarEvent> {
     const accessToken = await this.getValidAccessToken();

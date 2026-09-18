@@ -39,6 +39,7 @@ import { TwilioOutboundCaller } from "@/communication/phone/TwilioOutboundCaller
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { createListCalendarEventsTool } from "@/tools/calendar/ListCalendarEventsTool";
+import { createSearchCalendarEventsTool } from "@/tools/calendar/SearchCalendarEventsTool";
 import { createUnlinkCalendarTool } from "@/tools/calendar/UnlinkCalendarTool";
 import { createCreateCalendarEventTool } from "@/tools/calendar/CreateCalendarEventTool";
 import { createDeleteCalendarEventTool } from "@/tools/calendar/DeleteCalendarEventTool";
@@ -141,6 +142,7 @@ function main() {
   const undoStore = new UndoStore();
   if (calendarClient) {
     toolRegistry.registerTool(createListCalendarEventsTool(calendarClient));
+    toolRegistry.registerTool(createSearchCalendarEventsTool(calendarClient));
     toolRegistry.registerTool(createCreateCalendarEventTool(calendarClient, undoStore));
     toolRegistry.registerTool(createDeleteCalendarEventTool(calendarClient));
     toolRegistry.registerTool(createUnlinkCalendarTool(calendarTokenStore));
