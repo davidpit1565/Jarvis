@@ -39,6 +39,8 @@ final class AgentToolRegistry {
         registry.register(OpenUrlTool.make())
         registry.register(OpenApplicationTool.make())
         registry.register(ComposeEmailDraftTool.make())
+        registry.register(ClickElementTool.make())
+        registry.register(TypeTextTool.make())
         return registry
     }
 }

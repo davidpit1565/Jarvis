@@ -5,6 +5,8 @@ import { validateEmailAddress } from "@/tools/system/emailValidation";
 import { openUrlTool } from "@/tools/system/OpenUrlTool";
 import { openApplicationTool } from "@/tools/system/OpenApplicationTool";
 import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
+import { clickElementTool } from "@/tools/system/ClickElementTool";
+import { typeTextTool } from "@/tools/system/TypeTextTool";
 import { PermissionLevel } from "@/types/permissions";
 
 describe("validateUrl", () => {
@@ -80,5 +82,41 @@ describe("system action tool definitions", () => {
   test("COMPOSE_EMAIL_DRAFT rejects a malformed recipient via its own validateInput", () => {
     expect(composeEmailDraftTool.validateInput!({ to: "not-an-email" }).valid).toBe(false);
     expect(composeEmailDraftTool.validateInput!({ to: "someone@example.com" }).valid).toBe(true);
+  });
+});
+
+describe("broader computer-control tools are gated at CONFIRM, not SAFE_ACTION", () => {
+  // Direct user decision: broader "do things on the computer for me" is
+  // wanted, but strictly on-demand and never on the model's own
+  // initiative. The architecture already guarantees "only when asked"
+  // (every tool call originates from a real user message — no autonomous
+  // loop exists anywhere in this codebase); these tools' own job is
+  // real-time human confirmation of *what* gets clicked/typed, since
+  // unlike the three narrow SAFE_ACTION tools above, either could act on
+  // anything the frontmost app currently shows.
+  for (const tool of [clickElementTool, typeTextTool]) {
+    test(`${tool.id} is a CONFIRM-level device tool`, () => {
+      expect(tool.target).toBe("device");
+      expect(tool.requiredPermission).toBe(PermissionLevel.CONFIRM);
+    });
+  }
+
+  test("CLICK_ELEMENT takes only a semantic description, never raw coordinates", () => {
+    const props = clickElementTool.inputSchema.properties as Record<string, unknown>;
+    expect(props.description).toBeDefined();
+    expect(props.x).toBeUndefined();
+    expect(props.y).toBeUndefined();
+    expect(props.coordinates).toBeUndefined();
+  });
+
+  test("CLICK_ELEMENT rejects an empty description via its own validateInput", () => {
+    expect(clickElementTool.validateInput!({ description: "" }).valid).toBe(false);
+    expect(clickElementTool.validateInput!({ description: "   " }).valid).toBe(false);
+    expect(clickElementTool.validateInput!({ description: "Send" }).valid).toBe(true);
+  });
+
+  test("TYPE_TEXT rejects empty text via its own validateInput", () => {
+    expect(typeTextTool.validateInput!({ text: "" }).valid).toBe(false);
+    expect(typeTextTool.validateInput!({ text: "hello" }).valid).toBe(true);
   });
 });

@@ -6,6 +6,7 @@ import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { PairingService } from "@/devices/pairing/PairingService";
 import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import type { ActivityLog } from "@/core/activity/ActivityLog";
+import type { PermissionService } from "@/permissions/PermissionService";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
@@ -96,6 +97,22 @@ export interface JarvisWebSocketServerDependencies {
    * cost (~$0.004/min on top of call minutes), so it's opt-in.
    */
   audioLevelBroadcaster?: AudioLevelBroadcaster;
+  /**
+   * Approving a device's pairing (an explicit, deliberate human action —
+   * running `bun run approve-device`) is the one moment this codebase
+   * already treats as "I trust this specific device." When set, that same
+   * moment also grants the device-scoped tools listed in
+   * `autoGrantToolIdsOnApproval` to `defaultUserId` on that device —
+   * otherwise a SAFE_ACTION/CONFIRM device tool would be permanently
+   * unusable (PermissionService denies any non-READ tool with no grant,
+   * and there is no other point in this single-user system where a
+   * device-scoped grant could be issued, since the device's id isn't
+   * known until it registers). Both required together; omit both to
+   * leave every non-READ device tool ungranted, as before this existed.
+   */
+  permissionService?: PermissionService;
+  defaultUserId?: string;
+  autoGrantToolIdsOnApproval?: string[];
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -364,10 +381,17 @@ export class JarvisWebSocketServer {
    * never grants itself a role by claiming one in its own payload.
    */
   approveDevice(deviceId: string, code: string): { credential: string } {
-    const { pairingService, deviceConnectionManager, deviceRegistry } = this.deps;
+    const { pairingService, deviceConnectionManager, deviceRegistry, permissionService, defaultUserId, autoGrantToolIdsOnApproval } =
+      this.deps;
     const { secret } = pairingService.approvePairing(deviceId, code);
 
     this.maybeAssignRequestedRole(deviceId);
+
+    if (permissionService && defaultUserId && autoGrantToolIdsOnApproval?.length) {
+      for (const toolId of autoGrantToolIdsOnApproval) {
+        permissionService.grant(defaultUserId, toolId, deviceId);
+      }
+    }
 
     const ws = this.pendingConnections.get(deviceId);
     if (ws) {
