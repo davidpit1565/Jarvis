@@ -1144,7 +1144,12 @@ conversations too, not just the current one.
   it too means a leaked or guessed token can't be used to hammer the
   endpoint indefinitely either. In-memory
   and per-process, resetting on restart — a deliberate simplicity tradeoff
-  for a single-instance personal assistant. "Per client IP" actually means
+  for a single-instance personal assistant. Every distinct key (IP,
+  tool+user) that ever calls in gets its own entry, so `RateLimiter`
+  periodically sweeps out any key whose attempts have all aged out of the
+  window — otherwise a long-running process exposed to the internet (bots
+  scanning it, or many rotating IPs behind a NAT) would grow that map
+  without bound. "Per client IP" actually means
   the `Fly-Client-IP` header, but **only when `FLY_APP_NAME` confirms this
   process is actually running as a Fly Machine** — falling back to the raw
   socket address otherwise (including local dev/tests and any non-Fly

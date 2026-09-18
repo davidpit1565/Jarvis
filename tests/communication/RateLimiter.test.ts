@@ -35,4 +35,26 @@ describe("RateLimiter", () => {
       }, 20);
     });
   });
+
+  test("periodically sweeps out keys whose attempts have all aged out, bounding memory growth", () => {
+    const limiter = new RateLimiter(5, 10);
+    const hits = (limiter as unknown as { hits: Map<string, number[]> }).hits;
+
+    // 499 distinct keys, each hit once — all stale by the time the window (10ms) passes.
+    for (let i = 0; i < 499; i++) {
+      limiter.attempt(`key-${i}`);
+    }
+    expect(hits.size).toBe(499);
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        // This is the 500th attempt overall, crossing the sweep threshold —
+        // it should drop every key whose attempts are now all outside the
+        // window, leaving only this call's own fresh entry behind.
+        limiter.attempt("trigger-sweep");
+        expect(hits.size).toBeLessThan(499);
+        resolve();
+      }, 20);
+    });
+  });
 });
