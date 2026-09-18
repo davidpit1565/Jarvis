@@ -23,7 +23,7 @@ import {
 } from "./protocol";
 
 type SocketData =
-  | { kind: "device"; deviceId: string | null }
+  | { kind: "device"; deviceId: string | null; ip: string | null }
   | { kind: "audio-ingest" }
   | { kind: "audio-viewer" };
 
@@ -235,7 +235,11 @@ export class JarvisWebSocketServer {
               : new Response("Upgrade failed", { status: 400 });
           }
 
-          if (server.upgrade(req, { data: { kind: "device", deviceId: null } })) {
+          if (
+            server.upgrade(req, {
+              data: { kind: "device", deviceId: null, ip: server.requestIP(req)?.address ?? null },
+            })
+          ) {
             return undefined;
           }
           return new Response("JARVIS Core WebSocket endpoint", { status: 200 });
@@ -281,6 +285,17 @@ export class JarvisWebSocketServer {
   private handleRegister(ws: DeviceSocket, message: DeviceRegisterMessage): void {
     const { deviceRegistry, pairingService, deviceConnectionManager } = this.deps;
     const payload = message.payload;
+
+    // Every registration attempt from one IP counts against the same
+    // limit as pairing/login — without this, an attacker (or a buggy
+    // client stuck in a reconnect loop) could open unlimited WebSocket
+    // connections and spam device.register, filling DeviceRegistry with
+    // junk pending-pairing entries at no cost to themselves.
+    if (!this.rateLimiter.attempt(`device-register:${ws.data.ip ?? "unknown"}`)) {
+      ws.send(JSON.stringify({ type: "error", reason: "Too many registration attempts, try again later" }));
+      ws.close();
+      return;
+    }
 
     const deviceId = message.deviceId ?? randomUUID();
     const existingDevice = deviceRegistry.getDevice(deviceId);

@@ -436,4 +436,47 @@ describe("Pairing approval with an admin token configured", () => {
 
     expect(lastStatus).toBe(429);
   });
+
+  test("repeated device.register spam from the same client is rate-limited", async () => {
+    const { handle, port } = setupServer();
+    activeHandle = handle;
+
+    async function attempt(): Promise<string> {
+      const ws = new WebSocket(`ws://localhost:${port}`);
+      return new Promise<string>((resolve, reject) => {
+        ws.onopen = () => {
+          ws.send(
+            JSON.stringify({
+              requestId: crypto.randomUUID(),
+              timestamp: new Date().toISOString(),
+              deviceId: null,
+              type: "device.register",
+              payload: {
+                deviceName: "Spammer",
+                deviceType: "mac",
+                platform: "macos",
+                agentVersion: "0.1.0",
+                protocolVersion: "1",
+                capabilities: [],
+              },
+            })
+          );
+        };
+        ws.onmessage = (event) => {
+          const message = JSON.parse(event.data as string);
+          resolve(message.type === "error" ? message.reason : message.payload?.command);
+          ws.close();
+        };
+        ws.onerror = () => reject(new Error("WebSocket error"));
+        setTimeout(() => reject(new Error("Timed out")), 2000);
+      });
+    }
+
+    let lastOutcome = "";
+    for (let i = 0; i < 11; i++) {
+      lastOutcome = await attempt();
+    }
+
+    expect(lastOutcome).toContain("Too many");
+  });
 });
