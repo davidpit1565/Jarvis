@@ -8,6 +8,8 @@ const DEFAULT_TOOL_TIMEOUT_MS = 10_000;
 /** Transport-agnostic connection abstraction so this class never touches a raw WebSocket. */
 export interface DeviceConnection {
   send(raw: string): void;
+  /** Optional: actually closes the underlying transport (e.g. on revocation), not just stops routing to it. */
+  close?(): void;
 }
 
 interface PendingToolRequest {
@@ -38,15 +40,32 @@ export class DeviceConnectionManager {
   }
 
   removeConnection(deviceId: string, reason: string = "disconnected"): void {
+    const connection = this.connections.get(deviceId);
     const had = this.connections.delete(deviceId);
     this.rejectAllPendingForDevice(deviceId, new Error(`Device disconnected: ${deviceId}`));
     if (had) {
+      connection?.close?.();
       this.eventBus.emit("device.disconnected", { deviceId, reason });
     }
   }
 
   hasConnection(deviceId: string): boolean {
     return this.connections.has(deviceId);
+  }
+
+  /**
+   * Sends a "ping" to every connected device — paired with the server's
+   * own WebSocket `idleTimeout`, this is what keeps a genuinely healthy
+   * but quiet connection (no tool calls in a while) from being closed as
+   * idle: the Agent's real "pong" reply (see `main.swift`'s existing
+   * handler for it) is itself socket activity, resetting the timeout.
+   * A connection that's actually dead just never replies and gets
+   * cleaned up by the idle timeout as intended.
+   */
+  pingAll(): void {
+    for (const [deviceId, connection] of this.connections) {
+      connection.send(JSON.stringify(makeEnvelope("ping", {}, deviceId, randomUUID())));
+    }
   }
 
   /** Sends a raw envelope to a device without expecting a correlated response. */

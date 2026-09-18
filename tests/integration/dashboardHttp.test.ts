@@ -1,4 +1,5 @@
 import { describe, test, expect, afterEach } from "bun:test";
+import { mkdirSync, rmSync } from "node:fs";
 import { EventBus } from "@/core/events/EventBus";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
@@ -6,6 +7,11 @@ import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnect
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { ActivityLog } from "@/core/activity/ActivityLog";
+import { TokenUsageStore } from "@/audit/TokenUsageStore";
+import { ToolAuditLog } from "@/audit/ToolAuditLog";
+import { ReminderStore } from "@/reminders/ReminderStore";
+import { MemoryStore } from "@/memory/MemoryStore";
+import { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 
@@ -46,6 +52,138 @@ describe("Dashboard HTTP routes", () => {
     const body = await response.text();
     expect(body).toContain("JARVIS");
     expect(body).toContain("/status");
+  });
+
+  test("every response carries basic security headers", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const responses = await Promise.all([
+      fetch(`http://localhost:${handle.port}/`),
+      fetch(`http://localhost:${handle.port}/health`),
+      fetch(`http://localhost:${handle.port}/status`),
+    ]);
+
+    for (const response of responses) {
+      expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      expect(response.headers.get("X-Frame-Options")).toBe("DENY");
+      expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
+    }
+  });
+
+  test("GET /health reports ok with an uptime, unauthenticated", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/health`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { status: string; uptimeSeconds: number; version: string; commit: string | null };
+    expect(body.status).toBe("ok");
+    expect(typeof body.uptimeSeconds).toBe("number");
+    expect(typeof body.version).toBe("string");
+    expect(body.version.length).toBeGreaterThan(0);
+  });
+
+  test("GET /health reports commit as null when JARVIS_COMMIT_SHA isn't set", async () => {
+    const original = process.env.JARVIS_COMMIT_SHA;
+    delete process.env.JARVIS_COMMIT_SHA;
+    try {
+      const eventBus = new EventBus();
+      const server = new JarvisWebSocketServer({
+        deviceRegistry: new DeviceRegistry(),
+        deviceConnectionManager: new DeviceConnectionManager(eventBus),
+        pairingService: new PairingService(),
+        eventBus,
+      });
+      const handle = server.start(0);
+      activeHandle = handle;
+
+      const body = (await (await fetch(`http://localhost:${handle.port}/health`)).json()) as { commit: string | null };
+      expect(body.commit).toBeNull();
+    } finally {
+      if (original !== undefined) process.env.JARVIS_COMMIT_SHA = original;
+    }
+  });
+
+  test("GET /health reports ok/diskWritable=true when the data directory is actually writable", async () => {
+    const dataDirectory = `/tmp/jarvis-health-test-${crypto.randomUUID()}`;
+    mkdirSync(dataDirectory, { recursive: true });
+
+    try {
+      const eventBus = new EventBus();
+      const server = new JarvisWebSocketServer({
+        deviceRegistry: new DeviceRegistry(),
+        deviceConnectionManager: new DeviceConnectionManager(eventBus),
+        pairingService: new PairingService(),
+        eventBus,
+        dataDirectory,
+      });
+      const handle = server.start(0);
+      activeHandle = handle;
+
+      const response = await fetch(`http://localhost:${handle.port}/health`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { status: string; diskWritable: boolean };
+      expect(body.status).toBe("ok");
+      expect(body.diskWritable).toBe(true);
+    } finally {
+      rmSync(dataDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("GET /health reports degraded/503 when the data directory isn't writable", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      dataDirectory: "/nonexistent/jarvis-data-directory-that-does-not-exist",
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/health`);
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { status: string; diskWritable: boolean };
+    expect(body.status).toBe("degraded");
+    expect(body.diskWritable).toBe(false);
+  });
+
+  test("GET /health reports the configured commit when JARVIS_COMMIT_SHA is set", async () => {
+    const original = process.env.JARVIS_COMMIT_SHA;
+    process.env.JARVIS_COMMIT_SHA = "abc1234";
+    try {
+      const eventBus = new EventBus();
+      const server = new JarvisWebSocketServer({
+        deviceRegistry: new DeviceRegistry(),
+        deviceConnectionManager: new DeviceConnectionManager(eventBus),
+        pairingService: new PairingService(),
+        eventBus,
+      });
+      const handle = server.start(0);
+      activeHandle = handle;
+
+      const body = (await (await fetch(`http://localhost:${handle.port}/health`)).json()) as { commit: string | null };
+      expect(body.commit).toBe("abc1234");
+    } finally {
+      if (original === undefined) delete process.env.JARVIS_COMMIT_SHA;
+      else process.env.JARVIS_COMMIT_SHA = original;
+    }
   });
 
   test("GET /dashboard serves the same page as GET /", async () => {
@@ -121,6 +259,115 @@ describe("Dashboard HTTP routes", () => {
     const response = await fetch(`http://localhost:${handle.port}/status`);
     const data = (await response.json()) as { phoneGatewayEnabled: boolean };
     expect(data.phoneGatewayEnabled).toBe(true);
+  });
+
+  test("GET /status omits tokenUsage when no TokenUsageStore is configured", async () => {
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/status`);
+    const data = (await response.json()) as { tokenUsage?: unknown };
+    expect(data.tokenUsage).toBeUndefined();
+  });
+
+  test("GET /status reports token usage totals and an estimated cost", async () => {
+    const eventBus = new EventBus();
+    const tokenUsageStore = new TokenUsageStore(":memory:");
+    tokenUsageStore.record({ inputTokens: 1000, outputTokens: 500, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 });
+
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      tokenUsageStore,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/status`);
+    const data = (await response.json()) as {
+      tokenUsage: { inputTokens: number; outputTokens: number; calls: number; estimatedCostUsd: number | null };
+    };
+
+    expect(data.tokenUsage.inputTokens).toBe(1000);
+    expect(data.tokenUsage.outputTokens).toBe(500);
+    expect(data.tokenUsage.calls).toBe(1);
+    expect(data.tokenUsage.estimatedCostUsd).not.toBeNull();
+    tokenUsageStore.close();
+  });
+
+  test("GET /status reports a tool-usage summary from ToolAuditLog", async () => {
+    const eventBus = new EventBus();
+    const toolAuditLog = new ToolAuditLog(":memory:");
+    toolAuditLog.record("save_memory", "user-1", {}, { success: true });
+    toolAuditLog.record("save_memory", "user-1", {}, { success: false, error: "boom" });
+
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      toolAuditLog,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/status`);
+    const data = (await response.json()) as {
+      toolUsage: { totalCalls: number; errorCount: number; mostUsedTool: string | null };
+    };
+
+    expect(data.toolUsage.totalCalls).toBe(2);
+    expect(data.toolUsage.errorCount).toBe(1);
+    expect(data.toolUsage.mostUsedTool).toBe("save_memory");
+    toolAuditLog.close();
+  });
+
+  test("GET /status reports memory/reminders/conversation-history counts", async () => {
+    const eventBus = new EventBus();
+    const reminderStore = new ReminderStore(":memory:");
+    const memoryStore = new MemoryStore(":memory:");
+    const conversationHistoryStore = new ConversationHistoryStore(":memory:");
+
+    reminderStore.create({ text: "Buy milk" });
+    const r2 = reminderStore.create({ text: "Call mom" });
+    reminderStore.complete(r2.id);
+    memoryStore.save({ key: "user.name", value: "David" });
+    conversationHistoryStore.record("user", "hello");
+
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      reminderStore,
+      memoryStore,
+      conversationHistoryStore,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${handle.port}/status`);
+    const data = (await response.json()) as {
+      counts: { memory: number; reminders: number; pendingReminders: number; conversationHistory: number };
+    };
+
+    expect(data.counts.memory).toBe(1);
+    expect(data.counts.reminders).toBe(2);
+    expect(data.counts.pendingReminders).toBe(1);
+    expect(data.counts.conversationHistory).toBe(1);
+
+    reminderStore.close();
+    memoryStore.close();
+    conversationHistoryStore.close();
   });
 
   test("GET /status includes recent activity log entries, newest first", async () => {

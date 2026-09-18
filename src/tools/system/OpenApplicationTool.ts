@@ -8,11 +8,9 @@ import { validateAppName } from "./appNameValidation";
  * SAFE_ACTION: it only ever launches something the user already has
  * installed, exactly as if they'd clicked its Dock/Launchpad icon
  * themselves — reversible (just quit it), and never reads or changes
- * anything inside the application. There is deliberately no "quit
- * application" or "force-close" counterpart yet — those are more
- * disruptive (an unsaved document, an in-progress call) and deserve their
- * own, separately-considered permission level rather than being bundled
- * in here as "the opposite of open."
+ * anything inside the application. There is a "quit application"
+ * counterpart (`QUIT_APPLICATION`), a separately-considered tool rather
+ * than bundled in here as "the opposite of open."
  */
 export const openApplicationTool: DeviceTool = {
   id: "OPEN_APPLICATION",

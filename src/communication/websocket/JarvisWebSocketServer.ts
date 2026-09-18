@@ -1,20 +1,37 @@
-import type { ServerWebSocket } from "bun";
+import type { Server, ServerWebSocket } from "bun";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
+import { writeFileSync, unlinkSync } from "node:fs";
+import packageJson from "../../../package.json";
 import type { EventBus } from "@/core/events/EventBus";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { PairingService } from "@/devices/pairing/PairingService";
 import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import type { ActivityLog } from "@/core/activity/ActivityLog";
+import type { TokenUsageStore } from "@/audit/TokenUsageStore";
+import { estimateCostUsd } from "@/audit/estimateCostUsd";
+import { DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
+import { createBackupArchive } from "@/backup/createBackupArchive";
+import type { ReminderStore } from "@/reminders/ReminderStore";
+import type { MemoryStore } from "@/memory/MemoryStore";
+import type { ToolAuditLog } from "@/audit/ToolAuditLog";
+import type { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
+import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import type { SpotifyClient } from "@/spotify/SpotifyClient";
+import type { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
 import type { PermissionService } from "@/permissions/PermissionService";
 import type { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
+import type { TelegramGateway } from "@/communication/telegram/TelegramGateway";
+import type { DeviceVoiceGateway } from "@/communication/voice/DeviceVoiceGateway";
+import type { LockdownService } from "@/core/lockdown/LockdownService";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
 import { DASHBOARD_HTML, LOCK_HTML } from "./dashboard";
 import type { WebAuthnService } from "@/auth/WebAuthnService";
 import type { SessionStore } from "@/auth/SessionStore";
 import { AudioLevelBroadcaster } from "./AudioLevelBroadcaster";
+import { RateLimiter } from "./RateLimiter";
 import { computeAudioLevel } from "@/communication/phone/audioLevel";
 import {
   makeEnvelope,
@@ -24,7 +41,7 @@ import {
 } from "./protocol";
 
 type SocketData =
-  | { kind: "device"; deviceId: string | null }
+  | { kind: "device"; deviceId: string | null; ip: string | null }
   // Read-only spectator on /observer (e.g. the hologram UI) — never part
   // of the device protocol, just mirrored every EventBus event.
   | { kind: "observer" }
@@ -39,6 +56,7 @@ type SocketData =
   | { kind: "web-chat" };
 
 type DeviceSocket = ServerWebSocket<Extract<SocketData, { kind: "device" }>>;
+type BunServer = Server<SocketData>;
 
 /** Every EventBus event this server will mirror out to observer sockets. */
 const OBSERVABLE_EVENTS = [
@@ -105,6 +123,72 @@ export interface JarvisWebSocketServerDependencies {
    * cost (~$0.004/min on top of call minutes), so it's opt-in.
    */
   audioLevelBroadcaster?: AudioLevelBroadcaster;
+  /** Optional: exposes real token usage + estimated cost in GET /status. */
+  tokenUsageStore?: TokenUsageStore;
+  /**
+   * Every SQLite database file path this instance is configured to use.
+   * When set alongside `adminToken`, enables GET /backup: an admin-gated
+   * download of all of them as one gzip'd tar, for actual disaster
+   * recovery. Without an admin token configured, /backup always 404s —
+   * this dumps everything including paired-device and WebAuthn
+   * credentials, so it must never be reachable without one.
+   */
+  backupDbPaths?: string[];
+  /** Optional: enables the admin-gated GET /reminders read-only endpoint. */
+  reminderStore?: ReminderStore;
+  /** Optional: enables the admin-gated GET /memory read-only endpoint. */
+  memoryStore?: MemoryStore;
+  /** Optional: exposes a tool-usage summary (most-used tool, error rate) in GET /status. */
+  toolAuditLog?: ToolAuditLog;
+  /** Optional: exposes a conversation-history turn count in GET /status. */
+  conversationHistoryStore?: ConversationHistoryStore;
+  /**
+   * Directory the SQLite databases actually live in. When set, GET /health
+   * does a real write+delete test against it on every check, so a full or
+   * unwritable data volume shows up as `status: "degraded"` (HTTP 503)
+   * instead of every store's writes silently failing while Fly.io's health
+   * check keeps reporting the machine as fine. Omit for :memory: setups
+   * (tests, local dev without persistence) where there's no disk to check.
+   */
+  dataDirectory?: string;
+  /**
+   * Optional: enables GET /calendar/oauth/start and /calendar/oauth/callback,
+   * which link a Google account for read-only Calendar access. When unset,
+   * both routes 404.
+   */
+  calendarClient?: GoogleCalendarClient;
+  /**
+   * Optional: enables GET /spotify/oauth/start and /spotify/oauth/callback,
+   * which link a Spotify account for playback control. When unset, both
+   * routes 404.
+   */
+  spotifyClient?: SpotifyClient;
+  /** Optional: enables the admin-gated GET /wakeup-calls read-only endpoint. */
+  wakeUpCallStore?: WakeUpCallStore;
+  /**
+   * Both required together to enable POST /telegram/webhook; otherwise it
+   * 404s. `telegramWebhookSecret` must match the `X-Telegram-Bot-Api-Secret-Token`
+   * header Telegram sends on every webhook request (configured via
+   * setWebhook's own `secret_token` field) — without it, anyone who
+   * discovers the webhook URL could inject fake "incoming messages."
+   */
+  telegramGateway?: TelegramGateway;
+  telegramWebhookSecret?: string;
+  /**
+   * Optional: enables the "Hey JARVIS" wake-word voice channel. When set,
+   * a `voice.transcript` message from a paired device is routed through
+   * it and any spoken-back reply is sent as `voice.reply`. Without it,
+   * `voice.transcript` messages are silently ignored (same shape as
+   * `event`'s current no-op handling).
+   */
+  deviceVoiceGateway?: DeviceVoiceGateway;
+  /**
+   * Optional break-glass kill switch. When set, enables POST
+   * /emergency/lockdown and POST /emergency/lockdown/lift (both admin-token
+   * gated) and includes lockdown status in GET /status. Without it, both
+   * routes 404 and the feature doesn't exist for this instance.
+   */
+  lockdownService?: LockdownService;
   /**
    * Approving a device's pairing (an explicit, deliberate human action —
    * running `bun run approve-device`) is the one moment this codebase
@@ -138,6 +222,11 @@ export interface JarvisWebSocketServerDependencies {
 
 const SESSION_COOKIE = "jarvis_session";
 const HOLOGRAM_ASSET_PATH = join(import.meta.dir, "assets", "hologram.jpg");
+// Generous for a real, one-time, deliberate action (nobody takes 10
+// minutes to click through Google's consent screen), short enough that
+// an abandoned/repeated /calendar/oauth/start never leaves state entries
+// accumulating for long.
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 // The full standalone hologram visualizer (ui/hologram/ — the "Core" HUD
 // with its own README) used to only be opened as a local file (or from a
@@ -175,6 +264,29 @@ function getOriginAndRpID(req: Request, url: URL): { origin: string; rpID: strin
 export class JarvisWebSocketServer {
   /** Sockets that have sent device.register but aren't authenticated yet, keyed by deviceId. */
   private pendingConnections: Map<string, DeviceSocket> = new Map();
+  /**
+   * Guards the two endpoints with a brute-forceable secret behind them (a
+   * pairing code, a WebAuthn assertion) — 10 attempts per 5 minutes per
+   * (IP, route) is generous for a genuine user (nobody fat-fingers a
+   * pairing code or retries a failed Face ID prompt 10 times in 5 minutes)
+   * but far too slow to brute-force a 6-digit code or hammer verification.
+   */
+  private readonly rateLimiter = new RateLimiter(10, 5 * 60 * 1000);
+  /**
+   * OAuth `state` values issued by GET /calendar/oauth/start and not yet
+   * redeemed, mapped to when they were issued — CSRF protection for the
+   * callback, since Google's redirect carries no way to re-prove the
+   * admin token that gated /start. Each value is single-use (removed once
+   * redeemed) and expires after OAUTH_STATE_TTL_MS: an abandoned or
+   * repeated /start (a probe, a retry) would otherwise leave entries
+   * accumulating in memory forever, since nothing else ever removes an
+   * unredeemed one. In-memory (not persisted) is fine regardless: a
+   * restart mid-flow just means starting the link again, a rare,
+   * deliberate, one-time action.
+   */
+  private readonly pendingOAuthStates: Map<string, number> = new Map();
+  /** Same purpose/lifecycle as `pendingOAuthStates`, kept separate so the Spotify and Calendar OAuth flows never share state. */
+  private readonly pendingSpotifyOAuthStates: Map<string, number> = new Map();
 
   /**
    * Read-only spectators connected on `/observer` (e.g. the hologram UI in
@@ -205,112 +317,26 @@ export class JarvisWebSocketServer {
   }
 
   start(port: number) {
-    return Bun.serve<SocketData>({
+    const server = Bun.serve<SocketData>({
       port,
       fetch: async (req, server) => {
-        try {
-          const url = new URL(req.url);
-
-          if (req.method === "POST" && url.pathname === "/pairing/approve") {
-            return await this.handleApproveHttp(req);
-          }
-
-          if (req.method === "POST" && url.pathname.startsWith("/voice/")) {
-            return await this.handleVoiceWebhook(req, url);
-          }
-
-          // A WebSocket handshake is itself an HTTP GET with an Upgrade
-          // header — device agents (and the hologram UI's /observer
-          // socket) connect this way, so these routes must never
-          // intercept that or every connection would break.
-          const isUpgradeRequest = req.headers.get("upgrade")?.toLowerCase() === "websocket";
-
-          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
-            return this.handleStatusJson();
-          }
-
-          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/assets/hologram.jpg") {
-            return new Response(Bun.file(HOLOGRAM_ASSET_PATH));
-          }
-
-          // The full hologram visualizer, served from Core itself — see
-          // HOLOGRAM_UI_DIR above. Same lock check as "/" (a real
-          // WebAuthn-gated screen makes sense here too once this is
-          // reachable from the open internet, not just localhost).
-          if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/hologram" || url.pathname === "/hologram/")) {
-            const { webAuthnService } = this.deps;
-            const locked = webAuthnService?.hasCredentials() && !this.hasValidSession(req);
-            if (locked) return new Response(LOCK_HTML, { headers: { "Content-Type": "text/html" } });
-            return new Response(Bun.file(join(HOLOGRAM_UI_DIR, "index.html")));
-          }
-          if (!isUpgradeRequest && req.method === "GET" && url.pathname.startsWith("/hologram/")) {
-            return await this.serveHologramAsset(url.pathname.slice("/hologram/".length));
-          }
-
-          if (!isUpgradeRequest && url.pathname.startsWith("/auth/")) {
-            return await this.handleAuthRoute(req, url);
-          }
-
-          if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
-            const { webAuthnService } = this.deps;
-            const locked = webAuthnService?.hasCredentials() && !this.hasValidSession(req);
-            return new Response(locked ? LOCK_HTML : DASHBOARD_HTML, { headers: { "Content-Type": "text/html" } });
-          }
-
-          if (isUpgradeRequest && url.pathname === "/observer") {
-            return server.upgrade(req, { data: { kind: "observer" } })
-              ? undefined
-              : new Response("Upgrade failed", { status: 400 });
-          }
-
-          if (isUpgradeRequest && url.pathname === "/chat") {
-            if (!this.deps.webChatOrchestrator) return new Response("Not found", { status: 404 });
-            // Same admin-token gate as pairing approval and WebAuthn setup
-            // — required once one is configured, since a WebSocket upgrade
-            // can't carry a custom header from a browser the way a normal
-            // fetch() can, so the token travels as a query param instead.
-            // Optional only for local dev with no adminToken set at all.
-            const { adminToken } = this.deps;
-            if (adminToken && !constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
-              return new Response("Unauthorized", { status: 401 });
-            }
-            return server.upgrade(req, { data: { kind: "web-chat" } })
-              ? undefined
-              : new Response("Upgrade failed", { status: 400 });
-          }
-
-          if (isUpgradeRequest && url.pathname === "/voice/audio-stream") {
-            if (!this.deps.audioLevelBroadcaster) {
-              return new Response("Not found", { status: 404 });
-            }
-            return server.upgrade(req, { data: { kind: "audio-ingest" } })
-              ? undefined
-              : new Response("Upgrade failed", { status: 400 });
-          }
-
-          if (isUpgradeRequest && url.pathname === "/dashboard/audio-ws") {
-            if (!this.deps.audioLevelBroadcaster) {
-              return new Response("Not found", { status: 404 });
-            }
-            return server.upgrade(req, { data: { kind: "audio-viewer" } })
-              ? undefined
-              : new Response("Upgrade failed", { status: 400 });
-          }
-
-          if (server.upgrade(req, { data: { kind: "device", deviceId: null } })) {
-            return undefined;
-          }
-          return new Response("JARVIS Core WebSocket endpoint", { status: 200 });
-        } catch (error) {
-          // Guarantees every HTTP response is well-formed JSON or plain text
-          // (never a runtime's default error page), so an HTTP client never
-          // has to guess what came back.
-          const message = error instanceof Error ? error.message : "Unexpected server error";
-          console.error(`[jarvis] fetch handler error: ${message}`);
-          return Response.json({ success: false, error: message }, { status: 500 });
-        }
+        const response = await this.route(req, server);
+        // A WebSocket upgrade returns undefined by design (Bun owns the
+        // response in that case) — only an actual HTTP response gets the
+        // headers below.
+        return response ? withSecurityHeaders(response) : undefined;
       },
       websocket: {
+        // Without this, a connection whose TCP session died without a
+        // clean close (network drop, laptop sleep, a Wi-Fi handoff) stays
+        // "connected" from this server's point of view forever — the
+        // device would show as online on the dashboard and JARVIS would
+        // keep trying to dispatch device tools to it, with every one of
+        // those calls only failing after its own separate timeout. Bun
+        // closes an idle socket after this many seconds of no messages in
+        // either direction, which fires the same `close` handler below
+        // that already marks a device offline on a clean disconnect.
+        idleTimeout: 120,
         open: (ws) => {
           const socket = ws as ServerWebSocket<SocketData>;
           if (socket.data.kind === "observer") {
@@ -355,6 +381,210 @@ export class JarvisWebSocketServer {
         },
       },
     });
+
+    // Keeps a genuinely healthy but quiet device connection (no tool
+    // calls in a while) from being closed by the idleTimeout above: each
+    // ping's real "pong" reply is itself socket activity. Well under
+    // idleTimeout so a pong has time to arrive before the connection
+    // would otherwise be considered idle. Cleared whenever the caller
+    // stops the server — never left running past the server's own
+    // lifetime (this matters most in tests, which start/stop many
+    // short-lived servers).
+    const pingInterval = setInterval(() => this.deps.deviceConnectionManager.pingAll(), 45_000);
+    const originalStop = server.stop.bind(server);
+    server.stop = ((...args: Parameters<typeof originalStop>) => {
+      clearInterval(pingInterval);
+      return originalStop(...args);
+    }) as typeof server.stop;
+
+    return server;
+  }
+
+  private async route(req: Request, server: BunServer): Promise<Response | undefined> {
+    try {
+          const url = new URL(req.url);
+
+          if (req.method === "POST" && url.pathname === "/pairing/approve") {
+            return await this.handleApproveHttp(req, server);
+          }
+
+          if (req.method === "POST" && url.pathname === "/pairing/revoke") {
+            return await this.handleRevokeHttp(req, server);
+          }
+
+          if (req.method === "POST" && url.pathname === "/emergency/lockdown") {
+            return await this.handleLockdownHttp(req, server, "activate");
+          }
+
+          if (req.method === "POST" && url.pathname === "/emergency/lockdown/lift") {
+            return await this.handleLockdownHttp(req, server, "lift");
+          }
+
+          if (req.method === "POST" && url.pathname.startsWith("/voice/")) {
+            return await this.handleVoiceWebhook(req, url);
+          }
+
+          if (req.method === "POST" && url.pathname === "/telegram/webhook") {
+            return await this.handleTelegramWebhook(req, server);
+          }
+
+          // A WebSocket handshake is itself an HTTP GET with an Upgrade
+          // header — device agents connect to "/", so these routes must
+          // never intercept that or every device connection would break.
+          const isUpgradeRequest = req.headers.get("upgrade")?.toLowerCase() === "websocket";
+
+          // Deliberately unauthenticated and independent of everything else
+          // (Face ID lock, admin token, phone gateway config) — a health
+          // check has to keep working even if those are misconfigured,
+          // since that's exactly the situation an uptime monitor or Fly.io
+          // deploy health check needs to detect isn't a full outage.
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/health") {
+            const diskWritable = isDataDirectoryWritable(this.deps.dataDirectory);
+            return Response.json(
+              {
+                status: diskWritable ? "ok" : "degraded",
+                uptimeSeconds: process.uptime(),
+                version: packageJson.version,
+                // Unset unless the deploy pipeline sets it explicitly — there's
+                // no CI here to inject a git SHA automatically. Documented in
+                // .env.example / README for anyone who wants to wire it up
+                // (e.g. `fly secrets set JARVIS_COMMIT_SHA=$(git rev-parse HEAD)`
+                // before `fly deploy`) to confirm exactly which commit is live.
+                commit: process.env.JARVIS_COMMIT_SHA ?? null,
+                diskWritable,
+              },
+              { status: diskWritable ? 200 : 503 }
+            );
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
+            const { webAuthnService } = this.deps;
+            if (webAuthnService?.hasCredentials() && !this.hasValidSession(req)) {
+              return Response.json({ error: "Locked" }, { status: 401 });
+            }
+            return this.handleStatusJson();
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/backup") {
+            return this.handleBackupHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/reminders") {
+            return this.handleRemindersHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/wakeup-calls") {
+            return this.handleWakeUpCallsHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/memory") {
+            return this.handleMemoryHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/audit-log") {
+            return this.handleAuditLogHttp(req, url, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/assets/hologram.jpg") {
+            return new Response(Bun.file(HOLOGRAM_ASSET_PATH));
+          }
+
+          // The full hologram visualizer, served from Core itself — see
+          // HOLOGRAM_UI_DIR above. Same lock check as "/" (a real
+          // WebAuthn-gated screen makes sense here too once this is
+          // reachable from the open internet, not just localhost).
+          if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/hologram" || url.pathname === "/hologram/")) {
+            const { webAuthnService } = this.deps;
+            const locked = webAuthnService?.hasCredentials() && !this.hasValidSession(req);
+            if (locked) return new Response(LOCK_HTML, { headers: { "Content-Type": "text/html" } });
+            return new Response(Bun.file(join(HOLOGRAM_UI_DIR, "index.html")));
+          }
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname.startsWith("/hologram/")) {
+            return await this.serveHologramAsset(url.pathname.slice("/hologram/".length));
+          }
+
+          if (!isUpgradeRequest && url.pathname.startsWith("/auth/")) {
+            return await this.handleAuthRoute(req, url, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/calendar/oauth/start") {
+            return this.handleCalendarOAuthStart(req, url, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/calendar/oauth/callback") {
+            return await this.handleCalendarOAuthCallback(url);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/spotify/oauth/start") {
+            return this.handleSpotifyOAuthStart(req, url, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/spotify/oauth/callback") {
+            return await this.handleSpotifyOAuthCallback(url);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
+            const { webAuthnService } = this.deps;
+            const locked = webAuthnService?.hasCredentials() && !this.hasValidSession(req);
+            return new Response(locked ? LOCK_HTML : DASHBOARD_HTML, { headers: { "Content-Type": "text/html" } });
+          }
+
+          if (isUpgradeRequest && url.pathname === "/voice/audio-stream") {
+            if (!this.deps.audioLevelBroadcaster) {
+              return new Response("Not found", { status: 404 });
+            }
+            return server.upgrade(req, { data: { kind: "audio-ingest" } })
+              ? undefined
+              : new Response("Upgrade failed", { status: 400 });
+          }
+
+          if (isUpgradeRequest && url.pathname === "/dashboard/audio-ws") {
+            if (!this.deps.audioLevelBroadcaster) {
+              return new Response("Not found", { status: 404 });
+            }
+            return server.upgrade(req, { data: { kind: "audio-viewer" } })
+              ? undefined
+              : new Response("Upgrade failed", { status: 400 });
+          }
+
+          if (isUpgradeRequest && url.pathname === "/observer") {
+            return server.upgrade(req, { data: { kind: "observer" } })
+              ? undefined
+              : new Response("Upgrade failed", { status: 400 });
+          }
+
+          if (isUpgradeRequest && url.pathname === "/chat") {
+            if (!this.deps.webChatOrchestrator) return new Response("Not found", { status: 404 });
+            // Same admin-token gate as pairing approval and WebAuthn setup
+            // — required once one is configured, since a WebSocket upgrade
+            // can't carry a custom header from a browser the way a normal
+            // fetch() can, so the token travels as a query param instead.
+            // Optional only for local dev with no adminToken set at all.
+            const { adminToken } = this.deps;
+            if (adminToken && !constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
+              return new Response("Unauthorized", { status: 401 });
+            }
+            return server.upgrade(req, { data: { kind: "web-chat" } })
+              ? undefined
+              : new Response("Upgrade failed", { status: 400 });
+          }
+
+          if (
+            server.upgrade(req, {
+              data: { kind: "device", deviceId: null, ip: clientIp(req, server) },
+            })
+          ) {
+            return undefined;
+          }
+          return new Response("JARVIS Core WebSocket endpoint", { status: 200 });
+    } catch (error) {
+      // Guarantees every HTTP response is well-formed JSON or plain text
+      // (never a runtime's default error page), so an HTTP client never
+      // has to guess what came back.
+      const message = error instanceof Error ? error.message : "Unexpected server error";
+      console.error(`[jarvis] fetch handler error: ${message}`);
+      return Response.json({ success: false, error: message }, { status: 500 });
+    }
   }
 
   /**
@@ -419,15 +649,40 @@ export class JarvisWebSocketServer {
         }
         return;
       case "pong":
-      case "event":
-        // Heartbeats and generic device events aren't acted on in Phase 2.
+        if (message.deviceId) {
+          const device = this.deps.deviceRegistry.getDevice(message.deviceId);
+          if (device) this.deps.deviceRegistry.updateStatus(message.deviceId, device.status);
+        }
         return;
+      case "event":
+        // Generic device events aren't acted on in Phase 2.
+        return;
+      case "voice.transcript": {
+        const { deviceVoiceGateway } = this.deps;
+        if (deviceVoiceGateway && message.deviceId) {
+          deviceVoiceGateway.handleTranscript(message.deviceId, message.payload.text).catch((error) => {
+            console.error(`[jarvis] voice.transcript handling threw for device ${message.deviceId}:`, error);
+          });
+        }
+        return;
+      }
     }
   }
 
   private handleRegister(ws: DeviceSocket, message: DeviceRegisterMessage): void {
     const { deviceRegistry, pairingService, deviceConnectionManager } = this.deps;
     const payload = message.payload;
+
+    // Every registration attempt from one IP counts against the same
+    // limit as pairing/login — without this, an attacker (or a buggy
+    // client stuck in a reconnect loop) could open unlimited WebSocket
+    // connections and spam device.register, filling DeviceRegistry with
+    // junk pending-pairing entries at no cost to themselves.
+    if (!this.rateLimiter.attempt(`device-register:${ws.data.ip ?? "unknown"}`)) {
+      ws.send(JSON.stringify({ type: "error", reason: "Too many registration attempts, try again later" }));
+      ws.close();
+      return;
+    }
 
     const deviceId = message.deviceId ?? randomUUID();
     const existingDevice = deviceRegistry.getDevice(deviceId);
@@ -465,7 +720,7 @@ export class JarvisWebSocketServer {
 
     this.pendingConnections.delete(deviceId);
     ws.data.deviceId = deviceId;
-    deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data) });
+    deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data), close: () => ws.close() });
     deviceRegistry.updateStatus(deviceId, "online");
     this.maybeAssignRequestedRole(deviceId);
     this.send(ws, deviceId, "device.command", { command: "pairing.approved" });
@@ -501,7 +756,7 @@ export class JarvisWebSocketServer {
     if (ws) {
       this.pendingConnections.delete(deviceId);
       ws.data.deviceId = deviceId;
-      deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data) });
+      deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data), close: () => ws.close() });
       deviceRegistry.updateStatus(deviceId, "online");
       this.send(ws, deviceId, "device.command", {
         command: "pairing.approved",
@@ -513,18 +768,43 @@ export class JarvisWebSocketServer {
   }
 
   /**
+   * Revokes a device's credential (lost/stolen/decommissioned) and
+   * immediately drops its live connection if it has one — so cutting a
+   * device off doesn't wait for it to naturally disconnect first. The
+   * device keeps showing up in GET /status (its history isn't erased) but
+   * can never reconnect without a brand-new pairing code approved again.
+   *
+   * Also emits "device.revoked" so index.ts can clear this device's
+   * standing PermissionService grants (OPEN_APPLICATION etc.) — defense
+   * in depth: those grants otherwise stay valid forever since nothing
+   * else ever clears them, so a revoked device that somehow reconnected
+   * (a bug elsewhere in the pairing/auth path) shouldn't silently keep
+   * its old standing trust.
+   */
+  revokeDevice(deviceId: string): void {
+    const { pairingService, deviceConnectionManager, eventBus } = this.deps;
+    pairingService.revoke(deviceId);
+    if (deviceConnectionManager.hasConnection(deviceId)) {
+      deviceConnectionManager.removeConnection(deviceId, "revoked");
+    }
+    this.pendingConnections.delete(deviceId);
+    eventBus.emit("device.revoked", { deviceId });
+  }
+
+  /**
    * Grants a device's originally-requested role, but only if it doesn't
    * have one yet and nothing else already holds "primary" — never
    * overrides an existing, deliberately-set role.
    */
   private maybeAssignRequestedRole(deviceId: string): void {
-    const { deviceRegistry } = this.deps;
+    const { deviceRegistry, eventBus } = this.deps;
     const device = deviceRegistry.getDevice(deviceId);
     if (!device || device.role !== null || !device.requestedRole) return;
 
     try {
       deviceRegistry.setRole(deviceId, device.requestedRole);
       console.log(`[jarvis] device "${device.name}" (${deviceId}) granted role: ${device.requestedRole}`);
+      eventBus.emit("device.roleGranted", { deviceId, role: device.requestedRole });
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown reason";
       console.log(`[jarvis] could not grant requested role to "${deviceId}": ${message}`);
@@ -586,12 +866,57 @@ export class JarvisWebSocketServer {
         return phoneGateway.handleIncomingCall(callSid);
       case "/voice/gather":
         return await phoneGateway.handleGather(callSid, params.SpeechResult ?? null);
+      case "/voice/wakeup-connected":
+        return await phoneGateway.handleWakeUpCallConnected(callSid);
       case "/voice/status":
         phoneGateway.handleCallEnded(callSid);
         return new Response(null, { status: 204 });
       default:
         return new Response("Not found", { status: 404 });
     }
+  }
+
+  /**
+   * Handles Telegram's Bot API webhook, after verifying the
+   * `X-Telegram-Bot-Api-Secret-Token` header Telegram echoes on every
+   * request (set once via setWebhook's own `secret_token` field) against
+   * the configured secret. A missing or invalid secret is always
+   * rejected — an unauthenticated webhook here would let anyone drive
+   * JARVIS's tools with a fabricated "incoming message," no real Telegram
+   * account required. Always responds 200 once the secret checks out —
+   * Telegram retries a webhook that doesn't get a 2xx, and message
+   * handling failures are already turned into a spoken-style error reply
+   * inside TelegramGateway itself, never a thrown error here.
+   */
+  private async handleTelegramWebhook(req: Request, server: BunServer): Promise<Response> {
+    const { telegramGateway, telegramWebhookSecret } = this.deps;
+    if (!telegramGateway || !telegramWebhookSecret) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    // Rate-limited per client IP, same defense-in-depth as the other
+    // secret-gated routes (pairing/backup/login): without this, an
+    // attacker could brute-force the webhook secret with unlimited
+    // attempts, only ever paying the cost of a 403.
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "telegram-webhook"))) {
+      return new Response("Too many attempts, try again later", { status: 429 });
+    }
+
+    const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
+    if (secret !== telegramWebhookSecret) {
+      console.error("[jarvis] rejected Telegram webhook: invalid or missing secret token");
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    let update: unknown;
+    try {
+      update = await req.json();
+    } catch {
+      return new Response("Bad request: invalid JSON", { status: 400 });
+    }
+
+    await telegramGateway.handleUpdate(update);
+    return new Response(null, { status: 200 });
   }
 
   /**
@@ -632,16 +957,33 @@ export class JarvisWebSocketServer {
   }
 
   /**
-   * GET /status — read-only JSON feed both the dashboard and the hologram
-   * UI (`ui/hologram/`) poll; no auth today, matching the rest of Core's
-   * HTTP surface. `observers` (the hologram's own /observer spectator
-   * count) was added on top of the dashboard's existing shape rather than
-   * given a separate endpoint, so both consumers share one real contract
-   * instead of two endpoints drifting apart.
+   * GET /status — read-only JSON feed the dashboard and the hologram UI
+   * (`ui/hologram/`) both poll. Gated the same way as GET / and GET
+   * /dashboard: once any Face ID/Touch ID credential is registered, a
+   * valid session is required here too — otherwise the dashboard lock
+   * would be purely cosmetic, since this feed carries everything the
+   * locked page shows (devices, activity, token/tool usage, record
+   * counts) and more. `observers` (the hologram's own /observer
+   * spectator count) was added on top of the dashboard's existing shape
+   * rather than given a separate endpoint, so both consumers share one
+   * real contract instead of two endpoints drifting apart.
    */
   private handleStatusJson(): Response {
-    const { deviceRegistry, toolRegistry, phoneGateway, activityLog, webAuthnService, audioLevelBroadcaster } =
-      this.deps;
+    const {
+      deviceRegistry,
+      toolRegistry,
+      phoneGateway,
+      telegramGateway,
+      activityLog,
+      webAuthnService,
+      audioLevelBroadcaster,
+      tokenUsageStore,
+      toolAuditLog,
+      reminderStore,
+      memoryStore,
+      conversationHistoryStore,
+      lockdownService,
+    } = this.deps;
 
     const devices = deviceRegistry.listDevices().map((device) => ({
       id: device.id,
@@ -657,25 +999,285 @@ export class JarvisWebSocketServer {
       target: tool.target,
     }));
 
+    const tokenUsage = tokenUsageStore?.totals();
+
     return Response.json(
       {
         devices,
         tools,
         phoneGatewayEnabled: Boolean(phoneGateway),
+        telegramGatewayEnabled: Boolean(telegramGateway),
+        lockdown: lockdownService?.status() ?? { active: false, reason: null, activatedAt: null },
         activity: activityLog?.list() ?? [],
         webAuthnConfigured: webAuthnService?.hasCredentials() ?? true,
         audioWaveformEnabled: Boolean(audioLevelBroadcaster),
         observers: this.observers.size,
+        tokenUsage: tokenUsage
+          ? { ...tokenUsage, estimatedCostUsd: estimateCostUsd(tokenUsage, DEFAULT_MODEL) ?? null }
+          : undefined,
+        toolUsage: toolAuditLog?.summary(),
+        counts: {
+          memory: memoryStore?.search("").length,
+          reminders: reminderStore?.list(true).length,
+          pendingReminders: reminderStore?.list(false).length,
+          conversationHistory: conversationHistoryStore?.count(),
+        },
       },
       // CORS: the hologram UI is typically opened as a `file://` page (or
       // a different origin/port than Core), so the browser needs this
       // header to let a same-effort fetch() read the response at all —
       // without it the request still reaches the server (as curl shows)
       // but the browser silently blocks the page from seeing the body.
-      // Fine to leave wide open: this endpoint is already unauthenticated
-      // and intentionally exposes only aggregate/summary data, no secrets.
+      // Fine to leave wide open when the dashboard isn't locked: this
+      // endpoint intentionally exposes only aggregate/summary data, no
+      // secrets, and is still gated by the session check above once a
+      // Face ID/Touch ID credential is registered.
       { headers: { "Access-Control-Allow-Origin": "*" } }
     );
+  }
+
+  /**
+   * GET /backup — downloads a gzip'd tar of every configured SQLite
+   * database (memory, reminders, pairing/device credentials, transcripts,
+   * etc.) for disaster recovery. Always requires the admin token: unlike
+   * other admin-gated routes, there is no "optional for local dev" case
+   * here — this endpoint's whole purpose is to hand out everything,
+   * credentials included, so an unset admin token means 404, not "open."
+   */
+  private handleBackupHttp(req: Request, server: BunServer): Response {
+    const { adminToken, backupDbPaths } = this.deps;
+
+    if (!adminToken) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "backup"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+
+    if (!constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    return createBackupArchive(backupDbPaths ?? []);
+  }
+
+  /**
+   * GET /reminders — read-only admin view of every stored reminder
+   * (including completed ones), so you can actually see what JARVIS
+   * thinks it's tracking without asking it in conversation. Same admin
+   * token as pairing approval — optional only for local development,
+   * mandatory once this server is reachable from the public internet.
+   */
+  private handleRemindersHttp(req: Request, server: BunServer): Response {
+    const { adminToken, reminderStore } = this.deps;
+    if (!reminderStore) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "reminders"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ reminders: reminderStore.list(true) });
+  }
+
+  /**
+   * GET /wakeup-calls — read-only admin view of the recurring wake-up
+   * call schedule. Same admin-token gating rationale as GET /reminders.
+   */
+  private handleWakeUpCallsHttp(req: Request, server: BunServer): Response {
+    const { adminToken, wakeUpCallStore } = this.deps;
+    if (!wakeUpCallStore) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "wakeup-calls"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ wakeUpCalls: wakeUpCallStore.list() });
+  }
+
+  /**
+   * GET /memory — read-only admin view of every saved memory fact. Same
+   * admin-token gating rationale as GET /reminders above.
+   */
+  private handleMemoryHttp(req: Request, server: BunServer): Response {
+    const { adminToken, memoryStore } = this.deps;
+    if (!memoryStore) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "memory"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ memory: memoryStore.search("") });
+  }
+
+  /**
+   * GET /audit-log — read-only admin view of the full structured tool
+   * execution trail (ToolAuditLog), distinct from the summary stats
+   * already exposed via /status. Same admin-token gating rationale as
+   * GET /reminders/etc. Optional `?tool=TOOL_ID` and `?limit=N` query
+   * params, mirroring ToolAuditLog.list()'s own options.
+   */
+  private handleAuditLogHttp(req: Request, url: URL, server: BunServer): Response {
+    const { adminToken, toolAuditLog } = this.deps;
+    if (!toolAuditLog) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "audit-log"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    const toolName = url.searchParams.get("tool") ?? undefined;
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? Number(limitParam) : undefined;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+      return Response.json({ error: "limit must be a positive integer" }, { status: 400 });
+    }
+    return Response.json({ entries: toolAuditLog.list({ toolName, limit }) });
+  }
+
+  /**
+   * GET /calendar/oauth/start — begins linking a Google account for
+   * read-only Calendar access. Gated by the admin token as a query
+   * parameter (`?token=...`), not a header: this is a route the user
+   * navigates to directly in a browser to reach Google's consent screen,
+   * which a fetch header can't do. Rate-limited per client IP, same
+   * defense-in-depth as the other admin-token-gated routes — a token
+   * passed in a URL is otherwise guessable at no cost beyond a 401.
+   */
+  private handleCalendarOAuthStart(req: Request, url: URL, server: BunServer): Response {
+    const { adminToken, calendarClient } = this.deps;
+    if (!calendarClient || !adminToken) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "calendar-oauth-start"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (!constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    this.purgeExpiredOAuthStates();
+    const state = randomUUID();
+    this.pendingOAuthStates.set(state, Date.now());
+    return Response.redirect(calendarClient.buildAuthUrl(state), 302);
+  }
+
+  /** Drops any issued-but-never-redeemed OAuth state past its TTL, so an abandoned/repeated /start never accumulates entries forever. */
+  private purgeExpiredOAuthStates(): void {
+    const cutoff = Date.now() - OAUTH_STATE_TTL_MS;
+    for (const [state, issuedAt] of this.pendingOAuthStates) {
+      if (issuedAt < cutoff) this.pendingOAuthStates.delete(state);
+    }
+  }
+
+  /** GET /calendar/oauth/callback — Google redirects here once the user grants (or denies) access. */
+  private async handleCalendarOAuthCallback(url: URL): Promise<Response> {
+    const { calendarClient } = this.deps;
+    if (!calendarClient) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    const error = url.searchParams.get("error");
+    if (error) {
+      return new Response(`Google Calendar linking was not completed: ${error}`, { status: 400 });
+    }
+
+    const state = url.searchParams.get("state");
+    const code = url.searchParams.get("code");
+    const issuedAt = state ? this.pendingOAuthStates.get(state) : undefined;
+    if (!state || issuedAt === undefined || issuedAt < Date.now() - OAUTH_STATE_TTL_MS || !code) {
+      return new Response("Invalid or expired OAuth state", { status: 400 });
+    }
+    this.pendingOAuthStates.delete(state);
+
+    try {
+      await calendarClient.exchangeCodeForTokens(code);
+    } catch (err) {
+      console.error("[jarvis] Google Calendar OAuth exchange failed:", err instanceof Error ? err.message : String(err));
+      return new Response("Failed to complete Google Calendar linking. Check the server logs for details.", {
+        status: 500,
+      });
+    }
+
+    return new Response("Google Calendar linked successfully. You can close this tab.", {
+      headers: { "Content-Type": "text/plain" },
+    });
+  }
+
+  /**
+   * GET /spotify/oauth/start — begins linking a Spotify account for
+   * playback control. Same admin-token-in-query-param gating and
+   * rate-limiting rationale as GET /calendar/oauth/start.
+   */
+  private handleSpotifyOAuthStart(req: Request, url: URL, server: BunServer): Response {
+    const { adminToken, spotifyClient } = this.deps;
+    if (!spotifyClient || !adminToken) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "spotify-oauth-start"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (!constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    this.purgeExpiredSpotifyOAuthStates();
+    const state = randomUUID();
+    this.pendingSpotifyOAuthStates.set(state, Date.now());
+    return Response.redirect(spotifyClient.buildAuthUrl(state), 302);
+  }
+
+  /** Same purpose as `purgeExpiredOAuthStates`, for the separate Spotify state map. */
+  private purgeExpiredSpotifyOAuthStates(): void {
+    const cutoff = Date.now() - OAUTH_STATE_TTL_MS;
+    for (const [state, issuedAt] of this.pendingSpotifyOAuthStates) {
+      if (issuedAt < cutoff) this.pendingSpotifyOAuthStates.delete(state);
+    }
+  }
+
+  /** GET /spotify/oauth/callback — Spotify redirects here once the user grants (or denies) access. */
+  private async handleSpotifyOAuthCallback(url: URL): Promise<Response> {
+    const { spotifyClient } = this.deps;
+    if (!spotifyClient) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    const error = url.searchParams.get("error");
+    if (error) {
+      return new Response(`Spotify linking was not completed: ${error}`, { status: 400 });
+    }
+
+    const state = url.searchParams.get("state");
+    const code = url.searchParams.get("code");
+    const issuedAt = state ? this.pendingSpotifyOAuthStates.get(state) : undefined;
+    if (!state || issuedAt === undefined || issuedAt < Date.now() - OAUTH_STATE_TTL_MS || !code) {
+      return new Response("Invalid or expired OAuth state", { status: 400 });
+    }
+    this.pendingSpotifyOAuthStates.delete(state);
+
+    try {
+      await spotifyClient.exchangeCodeForTokens(code);
+    } catch (err) {
+      console.error("[jarvis] Spotify OAuth exchange failed:", err instanceof Error ? err.message : String(err));
+      return new Response("Failed to complete Spotify linking. Check the server logs for details.", {
+        status: 500,
+      });
+    }
+
+    return new Response("Spotify linked successfully. You can close this tab.", {
+      headers: { "Content-Type": "text/plain" },
+    });
   }
 
   private hasValidSession(req: Request): boolean {
@@ -711,12 +1313,22 @@ export class JarvisWebSocketServer {
    * "the owner." Login requires no secret: the platform authenticator
    * ceremony itself is the proof.
    */
-  private async handleAuthRoute(req: Request, url: URL): Promise<Response> {
+  private async handleAuthRoute(req: Request, url: URL, server: BunServer): Promise<Response> {
     const { webAuthnService, sessionStore, adminToken } = this.deps;
     if (!webAuthnService || !sessionStore) {
       return new Response("Not found", { status: 404 });
     }
     const { origin, rpID } = getOriginAndRpID(req, url);
+
+    if (url.pathname === "/auth/login" && !this.rateLimiter.attempt(rateLimitKey(req, server, "auth-login"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+
+    if (url.pathname === "/auth/register-options" || url.pathname === "/auth/register") {
+      if (!this.rateLimiter.attempt(rateLimitKey(req, server, "auth-register"))) {
+        return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+      }
+    }
 
     if (req.method === "POST" && url.pathname === "/auth/register-options") {
       if (!adminToken || !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
@@ -759,7 +1371,11 @@ export class JarvisWebSocketServer {
     return new Response("Not found", { status: 404 });
   }
 
-  private async handleApproveHttp(req: Request): Promise<Response> {
+  private async handleApproveHttp(req: Request, server: BunServer): Promise<Response> {
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "pairing-approve"))) {
+      return Response.json({ success: false, error: "Too many attempts, try again later" }, { status: 429 });
+    }
+
     const { adminToken } = this.deps;
     if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
       return Response.json({ success: false, error: "Missing or invalid admin token" }, { status: 401 });
@@ -792,6 +1408,79 @@ export class JarvisWebSocketServer {
     }
   }
 
+  /**
+   * Lets a human cut off a lost/stolen device remotely (e.g. from a phone
+   * browser, via curl) without needing shell access to wherever Core
+   * actually runs — the only other way to revoke trust today. Same
+   * admin-token gate and rate limit as /pairing/approve, since both let
+   * someone reshape which devices JARVIS trusts.
+   */
+  private async handleRevokeHttp(req: Request, server: BunServer): Promise<Response> {
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "pairing-revoke"))) {
+      return Response.json({ success: false, error: "Too many attempts, try again later" }, { status: 429 });
+    }
+
+    const { adminToken } = this.deps;
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ success: false, error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return Response.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    if (typeof body !== "object" || body === null || typeof (body as Record<string, unknown>).deviceId !== "string") {
+      return Response.json({ success: false, error: "Body must be { deviceId: string }" }, { status: 400 });
+    }
+
+    const { deviceId } = body as { deviceId: string };
+    this.revokeDevice(deviceId);
+    return Response.json({ success: true, deviceId });
+  }
+
+  /**
+   * The break-glass kill switch. Same admin-token gate and rate limit as
+   * /pairing/approve /pairing/revoke — anyone who can flip this can stop
+   * JARVIS from acting at all, which is exactly the point in an emergency
+   * (a stolen phone, a device behaving unexpectedly) but must never be
+   * reachable without the admin token.
+   */
+  private async handleLockdownHttp(req: Request, server: BunServer, action: "activate" | "lift"): Promise<Response> {
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "emergency-lockdown"))) {
+      return Response.json({ success: false, error: "Too many attempts, try again later" }, { status: 429 });
+    }
+
+    const { adminToken, lockdownService } = this.deps;
+    if (!lockdownService) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ success: false, error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    if (action === "lift") {
+      lockdownService.deactivate();
+      console.log("[jarvis] emergency lockdown lifted");
+      return Response.json({ success: true, status: lockdownService.status() });
+    }
+
+    let reason: string | undefined;
+    try {
+      const body = (await req.json()) as { reason?: string } | null;
+      reason = typeof body?.reason === "string" ? body.reason : undefined;
+    } catch {
+      // A bare POST with no body is fine — reason is optional.
+    }
+
+    lockdownService.activate(reason);
+    console.error(`[jarvis] EMERGENCY LOCKDOWN ACTIVATED${reason ? `: ${reason}` : ""}`);
+    return Response.json({ success: true, status: lockdownService.status() });
+  }
+
   private send(
     ws: DeviceSocket,
     deviceId: string,
@@ -800,6 +1489,89 @@ export class JarvisWebSocketServer {
   ): void {
     ws.send(JSON.stringify(makeEnvelope(type, payload, deviceId, randomUUID())));
   }
+}
+
+/**
+ * A real write+delete test against the data directory, not just a stat
+ * check — a full disk can leave a directory perfectly "existing" and
+ * listable while every actual write to it fails with ENOSPC. Returns true
+ * when no directory is configured (e.g. :memory: setups in tests/local
+ * dev), since there's nothing to check and this must never be the reason
+ * a health check without persistence reports unhealthy.
+ */
+function isDataDirectoryWritable(dataDirectory: string | undefined): boolean {
+  if (!dataDirectory) return true;
+  const probePath = join(dataDirectory, ".jarvis-health-check");
+  try {
+    writeFileSync(probePath, "");
+    unlinkSync(probePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True only when this process is actually running as a Fly.io Machine —
+ * Fly injects FLY_APP_NAME (among others) into every Machine's
+ * environment automatically, and nothing else does. Deliberately NOT just
+ * "is the Fly-Client-IP header present": that header is only trustworthy
+ * because Fly's own proxy always overwrites any client-supplied value of
+ * it before forwarding — a guarantee that holds only when Fly's proxy is
+ * actually the sole entry point. This same Dockerfile is documented to
+ * also run on Railway, Render, or a plain VPS (see README "Cloud
+ * deployment"); on any of those, nothing strips a client-supplied
+ * Fly-Client-IP header, so blindly trusting its presence would let any
+ * caller set an arbitrary value on every request and get a fresh
+ * rate-limit bucket each time — a straightforward brute-force bypass on
+ * pairing/auth/device-registration. Read fresh each call, not cached at
+ * module load, purely so tests can toggle it per case.
+ */
+function isRunningOnFly(): boolean {
+  return Boolean(process.env.FLY_APP_NAME);
+}
+
+/**
+ * The real caller's IP, not the address the app's socket actually sees.
+ * Fly.io's edge proxy terminates the client connection and forwards to
+ * this app over its own internal network — `server.requestIP()` returns
+ * *that* internal hop, which is the same for every request when deployed,
+ * collapsing per-IP rate limiting into one shared bucket for every caller.
+ * `Fly-Client-IP` is only trusted when `isRunningOnFly()` is true (see
+ * above) — everywhere else, including local dev/tests and any non-Fly
+ * deployment of this same Dockerfile, this falls straight through to the
+ * raw socket address exactly as before.
+ */
+function clientIp(req: Request, server: BunServer): string | null {
+  const flyClientIp = isRunningOnFly() ? req.headers.get("Fly-Client-IP") : null;
+  return flyClientIp ?? server.requestIP(req)?.address ?? null;
+}
+
+/**
+ * Keys the rate limiter by (route, client IP) — falling back to a single
+ * shared bucket for that route when the IP can't be determined (e.g. in a
+ * test harness with no real socket) rather than throwing, since a fallback
+ * that's slightly too strict is a far safer failure mode here than one
+ * that silently disables the limit entirely.
+ */
+function rateLimitKey(req: Request, server: BunServer, route: string): string {
+  return `${route}:${clientIp(req, server) ?? "unknown"}`;
+}
+
+/**
+ * Applied to every HTTP response this server sends. `nosniff` stops a
+ * browser from re-guessing a response's content type against its own
+ * heuristics (relevant since some routes serve user-influenced device
+ * names as plain text); `DENY` stops the dashboard from being framed by
+ * another site (clickjacking); `no-referrer` keeps this server's own URLs
+ * (including the pairing/admin routes) out of any Referer header sent to
+ * a third party a dashboard link might be clicked through to.
+ */
+function withSecurityHeaders(response: Response): Response {
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  response.headers.set("X-Frame-Options", "DENY");
+  response.headers.set("Referrer-Policy", "no-referrer");
+  return response;
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

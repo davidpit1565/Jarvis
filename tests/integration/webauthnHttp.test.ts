@@ -77,6 +77,22 @@ describe("WebAuthn (Face ID / Touch ID) HTTP routes", () => {
     expect(options.rp.id).toBe("localhost");
   });
 
+  test("too many register-options attempts from the same IP are rate-limited with 429", async () => {
+    const { handle, port } = setupServer({ withAuth: true });
+    activeHandle = handle;
+
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const response = await fetch(`http://localhost:${port}/auth/register-options`, {
+        method: "POST",
+        headers: { "X-Jarvis-Admin-Token": "wrong" },
+      });
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
+  });
+
   test("login-options requires no secret", async () => {
     const { handle, port } = setupServer({ withAuth: true });
     activeHandle = handle;
@@ -119,6 +135,35 @@ describe("WebAuthn (Face ID / Touch ID) HTTP routes", () => {
     });
     const unlockedBody = await unlockedResponse.text();
     expect(unlockedBody).not.toContain("LOCKED");
+  });
+
+  test("GET /status locks once a credential exists, until a valid session cookie is presented", async () => {
+    const store = new WebAuthnStore();
+    store.save({ id: "cred-1", publicKey: new Uint8Array([1, 2, 3]), counter: 0 });
+    const webAuthnService = new WebAuthnService(store);
+    const sessionStore = new SessionStore();
+
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      adminToken: ADMIN_TOKEN,
+      webAuthnService,
+      sessionStore,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const lockedResponse = await fetch(`http://localhost:${handle.port}/status`);
+    expect(lockedResponse.status).toBe(401);
+
+    const token = sessionStore.create();
+    const unlockedResponse = await fetch(`http://localhost:${handle.port}/status`, {
+      headers: { Cookie: `jarvis_session=${token}` },
+    });
+    expect(unlockedResponse.status).toBe(200);
   });
 
   test("GET /status reports webAuthnConfigured based on whether a credential exists", async () => {

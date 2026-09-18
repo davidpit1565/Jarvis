@@ -21,6 +21,17 @@ export interface BrainResponse {
    * only signal callers get that one fired.
    */
   serverToolUses?: string[];
+  /** Token accounting for this call, when the provider reports it — the basis for real cost tracking. */
+  usage?: TokenUsage;
+}
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  /** Tokens written to the prompt cache this call (billed at a premium over a normal input token). */
+  cacheCreationInputTokens: number;
+  /** Tokens read from the prompt cache this call (billed at a steep discount vs. a normal input token). */
+  cacheReadInputTokens: number;
 }
 
 /**

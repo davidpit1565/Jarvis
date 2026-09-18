@@ -1,0 +1,431 @@
+import { describe, test, expect, afterEach } from "bun:test";
+import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
+import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+
+const originalFetch = global.fetch;
+
+afterEach(() => {
+  global.fetch = originalFetch;
+});
+
+function makeClient(tokenStore = new CalendarTokenStore(":memory:")) {
+  return {
+    client: new GoogleCalendarClient("client-id", "client-secret", "https://example.com/calendar/oauth/callback", tokenStore),
+    tokenStore,
+  };
+}
+
+describe("GoogleCalendarClient.buildAuthUrl", () => {
+  test("includes offline access, forced consent, and the given state", () => {
+    const { client } = makeClient();
+    const url = new URL(client.buildAuthUrl("csrf-token-123"));
+
+    expect(url.origin + url.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
+    expect(url.searchParams.get("client_id")).toBe("client-id");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://example.com/calendar/oauth/callback");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("prompt")).toBe("consent");
+    expect(url.searchParams.get("state")).toBe("csrf-token-123");
+    expect(url.searchParams.get("scope")).toBe(
+      "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.readonly"
+    );
+  });
+});
+
+describe("GoogleCalendarClient.exchangeCodeForTokens", () => {
+  test("saves the returned tokens", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ access_token: "access-1", refresh_token: "refresh-1", expires_in: 3600 }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+
+    const { client, tokenStore } = makeClient();
+    await client.exchangeCodeForTokens("auth-code");
+
+    expect(tokenStore.get()?.refreshToken).toBe("refresh-1");
+    expect(tokenStore.get()?.accessToken).toBe("access-1");
+  });
+
+  test("throws when Google doesn't return a refresh token", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ access_token: "access-1", expires_in: 3600 }), { status: 200 })) as unknown as typeof fetch;
+
+    const { client, tokenStore } = makeClient();
+    await expect(client.exchangeCodeForTokens("auth-code")).rejects.toThrow(/refresh token/i);
+    expect(tokenStore.isLinked()).toBe(false);
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("bad code", { status: 400 })) as unknown as typeof fetch;
+
+    const { client } = makeClient();
+    await expect(client.exchangeCodeForTokens("bad-code")).rejects.toThrow(/400/);
+  });
+});
+
+describe("GoogleCalendarClient.listUpcomingEvents", () => {
+  test("throws when no account is linked", async () => {
+    const { client } = makeClient();
+    await expect(client.listUpcomingEvents()).rejects.toThrow(/no google account linked/i);
+  });
+
+  test("uses the stored access token directly when it's still valid", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save({ refreshToken: "refresh-1", accessToken: "still-valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    let capturedAuthHeader: string | undefined;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      capturedAuthHeader = (init?.headers as Record<string, string>)?.Authorization;
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    await client.listUpcomingEvents();
+
+    expect(capturedAuthHeader).toBe("Bearer still-valid");
+  });
+
+  test("refreshes an expired access token before listing events", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save({ refreshToken: "refresh-1", accessToken: "expired", accessTokenExpiresAt: Date.now() - 1000 });
+
+    const calls: string[] = [];
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push(url);
+      if (url.includes("oauth2.googleapis.com")) {
+        return new Response(JSON.stringify({ access_token: "refreshed-token", expires_in: 3600 }), { status: 200 });
+      }
+      expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer refreshed-token");
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    await client.listUpcomingEvents();
+
+    expect(calls[0]).toContain("oauth2.googleapis.com");
+    expect(tokenStore.get()?.accessToken).toBe("refreshed-token");
+  });
+
+  test("maps Google event fields into CalendarEvent, including all-day events", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save({ refreshToken: "refresh-1", accessToken: "valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [
+            { id: "ev1", summary: "Team sync", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:30:00Z" }, location: "Zoom" },
+            { id: "ev2", start: { date: "2026-01-16" }, end: { date: "2026-01-17" } },
+          ],
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    const events = await client.listUpcomingEvents();
+
+    expect(events).toEqual([
+      { id: "ev1", summary: "Team sync", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:30:00Z", location: "Zoom" },
+      { id: "ev2", summary: "(no title)", start: "2026-01-16", end: "2026-01-17", location: null },
+    ]);
+  });
+
+  test("caps maxResults at 50 even if a larger value is requested", async () => {
+    let capturedMaxResults: string | null = null;
+    global.fetch = (async (url: string) => {
+      capturedMaxResults = new URL(url).searchParams.get("maxResults");
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.listUpcomingEvents(500);
+
+    expect(capturedMaxResults as unknown as string).toBe("50");
+  });
+});
+
+function makeLinkedTokenStore(): CalendarTokenStore {
+  const tokenStore = new CalendarTokenStore(":memory:");
+  tokenStore.save({ refreshToken: "r1", accessToken: "valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
+  return tokenStore;
+}
+
+describe("GoogleCalendarClient.searchEvents", () => {
+  test("throws when no account is linked", async () => {
+    const { client } = makeClient();
+    await expect(client.searchEvents("dentist")).rejects.toThrow(/no google account linked/i);
+  });
+
+  test("sends the query as the `q` param and maps results", async () => {
+    let capturedUrl: string | undefined;
+    global.fetch = (async (url: string) => {
+      capturedUrl = url;
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              id: "ev1",
+              summary: "Dentist",
+              start: { dateTime: "2026-01-15T09:00:00Z" },
+              end: { dateTime: "2026-01-15T09:30:00Z" },
+              location: "Clinic",
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const events = await client.searchEvents("dentist");
+
+    expect(new URL(capturedUrl!).searchParams.get("q")).toBe("dentist");
+    expect(events).toEqual([
+      { id: "ev1", summary: "Dentist", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:30:00Z", location: "Clinic" },
+    ]);
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.searchEvents("dentist")).rejects.toThrow(/400/);
+  });
+
+  test("caps maxResults at 50 even if a larger value is requested", async () => {
+    let capturedMaxResults: string | null = null;
+    global.fetch = (async (url: string) => {
+      capturedMaxResults = new URL(url).searchParams.get("maxResults");
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.searchEvents("dentist", 500);
+
+    expect(capturedMaxResults as unknown as string).toBe("50");
+  });
+});
+
+describe("GoogleCalendarClient.getEvent", () => {
+  test("throws when no account is linked", async () => {
+    const { client } = makeClient();
+    await expect(client.getEvent("ev1")).rejects.toThrow(/no google account linked/i);
+  });
+
+  test("maps the full event including description and attendees", async () => {
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          id: "ev1",
+          summary: "Team sync",
+          description: "Weekly sync",
+          location: "Zoom",
+          start: { dateTime: "2026-01-15T09:00:00Z" },
+          end: { dateTime: "2026-01-15T09:30:00Z" },
+          attendees: [{ email: "alice@example.com" }, { email: "bob@example.com" }],
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const event = await client.getEvent("ev1");
+
+    expect(event).toEqual({
+      id: "ev1",
+      summary: "Team sync",
+      start: "2026-01-15T09:00:00Z",
+      end: "2026-01-15T09:30:00Z",
+      location: "Zoom",
+      description: "Weekly sync",
+      attendees: ["alice@example.com", "bob@example.com"],
+    });
+  });
+
+  test("defaults description to null and attendees to an empty array when absent", async () => {
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({ id: "ev2", start: { date: "2026-01-16" }, end: { date: "2026-01-17" } }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const event = await client.getEvent("ev2");
+
+    expect(event.description).toBeNull();
+    expect(event.attendees).toEqual([]);
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.getEvent("missing")).rejects.toThrow(/404/);
+  });
+});
+
+describe("GoogleCalendarClient.listEventsInRange", () => {
+  test("throws when no account is linked", async () => {
+    const { client } = makeClient();
+    await expect(client.listEventsInRange("2026-01-15T09:00:00Z", "2026-01-15T10:00:00Z")).rejects.toThrow(
+      /no google account linked/i
+    );
+  });
+
+  test("sends timeMin/timeMax and maps overlapping events", async () => {
+    let capturedUrl: string | undefined;
+    global.fetch = (async (url: string) => {
+      capturedUrl = url;
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              id: "ev1",
+              summary: "Existing meeting",
+              start: { dateTime: "2026-01-15T09:00:00Z" },
+              end: { dateTime: "2026-01-15T09:30:00Z" },
+            },
+          ],
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const events = await client.listEventsInRange("2026-01-15T09:00:00Z", "2026-01-15T10:00:00Z");
+
+    expect(new URL(capturedUrl!).searchParams.get("timeMin")).toBe("2026-01-15T09:00:00Z");
+    expect(new URL(capturedUrl!).searchParams.get("timeMax")).toBe("2026-01-15T10:00:00Z");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.summary).toBe("Existing meeting");
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.listEventsInRange("2026-01-15T09:00:00Z", "2026-01-15T10:00:00Z")).rejects.toThrow(/400/);
+  });
+});
+
+describe("GoogleCalendarClient.createEvent", () => {
+  test("posts the event and returns the created event, mapped", async () => {
+    let capturedBody: string | undefined;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(
+        JSON.stringify({
+          id: "new-event-1",
+          summary: "Dentist",
+          location: "Clinic",
+          start: { dateTime: "2026-01-20T10:00:00Z" },
+          end: { dateTime: "2026-01-20T10:30:00Z" },
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const event = await client.createEvent({
+      summary: "Dentist",
+      start: "2026-01-20T10:00:00Z",
+      end: "2026-01-20T10:30:00Z",
+      location: "Clinic",
+    });
+
+    expect(event).toEqual({
+      id: "new-event-1",
+      summary: "Dentist",
+      start: "2026-01-20T10:00:00Z",
+      end: "2026-01-20T10:30:00Z",
+      location: "Clinic",
+    });
+
+    const body = JSON.parse(capturedBody!);
+    expect(body.summary).toBe("Dentist");
+    expect(body.start).toEqual({ dateTime: "2026-01-20T10:00:00Z" });
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(
+      client.createEvent({ summary: "Test", start: "2026-01-20T10:00:00Z", end: "2026-01-20T10:30:00Z" })
+    ).rejects.toThrow(/400/);
+  });
+});
+
+describe("GoogleCalendarClient.updateEvent", () => {
+  test("sends a PATCH with only the given fields, and maps the result", async () => {
+    let capturedMethod: string | undefined;
+    let capturedBody: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedMethod = init?.method;
+      capturedBody = init?.body as string;
+      return new Response(
+        JSON.stringify({
+          id: "ev1",
+          summary: "Dentist (moved)",
+          location: "New clinic",
+          start: { dateTime: "2026-01-20T11:00:00Z" },
+          end: { dateTime: "2026-01-20T11:30:00Z" },
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const event = await client.updateEvent("ev1", { start: "2026-01-20T11:00:00Z", end: "2026-01-20T11:30:00Z" });
+
+    expect(capturedMethod).toBe("PATCH");
+    const body = JSON.parse(capturedBody!);
+    expect(body).toEqual({ start: { dateTime: "2026-01-20T11:00:00Z" }, end: { dateTime: "2026-01-20T11:30:00Z" } });
+    expect(event.summary).toBe("Dentist (moved)");
+  });
+
+  test("clears location when passed null", async () => {
+    let capturedBody: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(
+        JSON.stringify({ id: "ev1", start: { dateTime: "2026-01-20T11:00:00Z" }, end: { dateTime: "2026-01-20T11:30:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.updateEvent("ev1", { location: null });
+
+    expect(JSON.parse(capturedBody!)).toEqual({ location: "" });
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.updateEvent("ev1", { summary: "New" })).rejects.toThrow(/400/);
+  });
+});
+
+describe("GoogleCalendarClient.deleteEvent", () => {
+  test("succeeds on a 204 response", async () => {
+    global.fetch = (async () => new Response(null, { status: 204 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.deleteEvent("event-1")).resolves.toBeUndefined();
+  });
+
+  test("treats a 410 (already gone) as success, not a failure", async () => {
+    global.fetch = (async () => new Response("gone", { status: 410 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.deleteEvent("event-1")).resolves.toBeUndefined();
+  });
+
+  test("throws on another non-2xx response", async () => {
+    global.fetch = (async () => new Response("forbidden", { status: 403 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.deleteEvent("event-1")).rejects.toThrow(/403/);
+  });
+});

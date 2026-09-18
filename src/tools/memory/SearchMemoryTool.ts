@@ -16,14 +16,14 @@ export function createSearchMemoryTool(memoryStore: MemoryStore): LocalTool<Sear
     id: "SEARCH_MEMORY",
     name: "search_memory",
     description:
-      "Searches previously saved facts about the user by key fragment (e.g. \"user.\"). " +
-      "Omit the query to list everything remembered so far. Read-only.",
+      "Searches previously saved facts about the user by a fragment matched against either the key " +
+      '(e.g. "user.") or the value (e.g. "dog"). Omit the query to list everything remembered so far. Read-only.',
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "Fragment to match against saved keys. Omit to list everything.",
+          description: "Fragment to match against saved keys or values. Omit to list everything.",
         },
       },
     },

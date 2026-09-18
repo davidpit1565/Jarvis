@@ -20,7 +20,7 @@ function setupServer() {
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const server = new JarvisWebSocketServer({ deviceRegistry, deviceConnectionManager, pairingService, eventBus });
   const handle = server.start(0); // port 0: let the OS pick a free port
-  return { handle, port: handle.port, deviceRegistry, deviceConnectionManager, pairingService };
+  return { handle, port: handle.port, deviceRegistry, deviceConnectionManager, pairingService, eventBus };
 }
 
 describe("Pairing approval over HTTP", () => {
@@ -99,8 +99,11 @@ describe("Pairing approval over HTTP", () => {
   });
 
   test("approving a device that requested primary actually grants it the role", async () => {
-    const { handle, port, deviceRegistry } = setupServer();
+    const { handle, port, deviceRegistry, eventBus } = setupServer();
     activeHandle = handle;
+
+    const roleGrantedEvents: { deviceId: string; role: string }[] = [];
+    eventBus.on("device.roleGranted", (event) => roleGrantedEvents.push(event));
 
     const deviceId = "test-imac-primary";
     const ws = new WebSocket(`ws://localhost:${port}`);
@@ -144,6 +147,7 @@ describe("Pairing approval over HTTP", () => {
 
     expect(deviceRegistry.getDevice(deviceId)?.role).toBe("primary");
     expect(deviceRegistry.getPrimaryDevice()?.id).toBe(deviceId);
+    expect(roleGrantedEvents).toEqual([{ deviceId, role: "primary" }]);
 
     ws.close();
   });
@@ -496,5 +500,65 @@ describe("Pairing approval with an admin token configured", () => {
     expect(httpBody.success).toBe(true);
 
     ws.close();
+  });
+
+  test("repeated failed pairing-approve attempts from the same client are rate-limited with 429", async () => {
+    const { handle, port } = setupServer();
+    activeHandle = handle;
+
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const response = await fetch(`http://localhost:${port}/pairing/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deviceId: "nonexistent", code: "000000" }),
+      });
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
+  });
+
+  test("repeated device.register spam from the same client is rate-limited", async () => {
+    const { handle, port } = setupServer();
+    activeHandle = handle;
+
+    async function attempt(): Promise<string> {
+      const ws = new WebSocket(`ws://localhost:${port}`);
+      return new Promise<string>((resolve, reject) => {
+        ws.onopen = () => {
+          ws.send(
+            JSON.stringify({
+              requestId: crypto.randomUUID(),
+              timestamp: new Date().toISOString(),
+              deviceId: null,
+              type: "device.register",
+              payload: {
+                deviceName: "Spammer",
+                deviceType: "mac",
+                platform: "macos",
+                agentVersion: "0.1.0",
+                protocolVersion: "1",
+                capabilities: [],
+              },
+            })
+          );
+        };
+        ws.onmessage = (event) => {
+          const message = JSON.parse(event.data as string);
+          resolve(message.type === "error" ? message.reason : message.payload?.command);
+          ws.close();
+        };
+        ws.onerror = () => reject(new Error("WebSocket error"));
+        setTimeout(() => reject(new Error("Timed out")), 2000);
+      });
+    }
+
+    let lastOutcome = "";
+    for (let i = 0; i < 11; i++) {
+      lastOutcome = await attempt();
+    }
+
+    expect(lastOutcome).toContain("Too many");
   });
 });

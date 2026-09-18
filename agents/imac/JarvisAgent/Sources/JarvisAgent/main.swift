@@ -10,6 +10,7 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
     private let deviceId = DeviceIdentity.loadOrCreate()
     private let tools = AgentToolRegistry.buildDefault()
     private let statusBar = StatusItemController()
+    private let wakeWordListener = WakeWordListener()
     private var connection: CoreConnection!
 
     // JARVIS Core (Bun.serve) speaks plain WebSocket, not TLS, so this
@@ -30,6 +31,11 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
         statusBar.onQuitRequested = {
             NSApplication.shared.terminate(nil)
         }
+
+        wakeWordListener.onTranscriptReady = { [weak self] text in
+            self?.sendVoiceTranscript(text)
+        }
+        wakeWordListener.start()
 
         connection.connect()
     }
@@ -57,6 +63,8 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             handleToolRequest(data: envelopeData)
         case "ping":
             sendPong()
+        case "voice.reply":
+            handleVoiceReply(data: envelopeData)
         default:
             Logger.shared.log("Unhandled message type: \(header.type)")
         }
@@ -130,6 +138,30 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
         let envelope = MessageFactory.makeEnvelope(type: "pong", payload: EmptyPayload(), deviceId: deviceId)
         guard let data = try? JSONEncoder().encode(envelope) else { return }
         connection.send(data: data)
+    }
+
+    /// Sends a wake-word-triggered voice command to Core, once the "Hey
+    /// JARVIS" listener has captured what followed the wake phrase.
+    private func sendVoiceTranscript(_ text: String) {
+        let envelope = MessageFactory.makeEnvelope(
+            type: "voice.transcript",
+            payload: VoiceTranscriptPayload(text: text, wakeWord: nil),
+            deviceId: deviceId
+        )
+        guard let data = try? JSONEncoder().encode(envelope) else {
+            Logger.shared.log("Failed to encode voice.transcript")
+            return
+        }
+        connection.send(data: data)
+    }
+
+    /// Speaks a reply from Core back to the user — the other half of a "Hey JARVIS" round trip.
+    private func handleVoiceReply(data: Data) {
+        guard let envelope = try? JSONDecoder().decode(Envelope<VoiceReplyPayload>.self, from: data) else {
+            Logger.shared.log("Failed to decode voice.reply payload")
+            return
+        }
+        wakeWordListener.speak(envelope.payload.text)
     }
 
     private func register() {

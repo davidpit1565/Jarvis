@@ -17,7 +17,7 @@ describe("TwilioVoiceGateway", () => {
     expect(response.headers.get("Content-Type")).toBe("text/xml");
   });
 
-  test("uses a natural neural voice by default", async () => {
+  test("uses a deep, machine-sounding voice by default (not a Neural/human-like one)", async () => {
     const gateway = new TwilioVoiceGateway(() => ({
       orchestrator: makeStubOrchestrator(async () => "unused"),
       userId: "local-user",
@@ -25,7 +25,8 @@ describe("TwilioVoiceGateway", () => {
 
     const response = gateway.handleIncomingCall("CA1");
     const body = await response.text();
-    expect(body).toContain('voice="Polly.Matthew-Neural"');
+    expect(body).toContain('voice="Polly.Matthew"');
+    expect(body).toContain('<prosody pitch="-15%" rate="92%">');
   });
 
   test("honors a custom voice passed to the constructor", async () => {
@@ -37,6 +38,23 @@ describe("TwilioVoiceGateway", () => {
     const response = gateway.handleIncomingCall("CA1");
     const body = await response.text();
     expect(body).toContain('voice="Google.en-US-Chirp3-HD-Charon"');
+  });
+
+  test("honors a custom pitch/rate passed to the constructor", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused"), userId: "local-user" }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "-30%",
+      "80%"
+    );
+
+    const response = gateway.handleIncomingCall("CA1");
+    const body = await response.text();
+    expect(body).toContain('<prosody pitch="-30%" rate="80%">');
   });
 
   test("includes <Start><Stream> on the greeting when an audio stream URL is configured", async () => {
@@ -207,7 +225,7 @@ describe("TwilioVoiceGateway", () => {
     const response = await gateway.handleGather("CA1", "מה אני עושה עכשיו");
     const body = await response.text();
 
-    expect(body).toContain('voice="Google.he-IL-Wavenet-D"');
+    expect(body).toContain('voice="Google.he-IL-Standard-D"');
     expect(body).toContain('language="he-IL"');
     expect(body).toContain("אתה עובד על ג");
   });
@@ -222,7 +240,9 @@ describe("TwilioVoiceGateway", () => {
     const response = await gateway.handleGather("CA1", "what am I doing right now");
     const body = await response.text();
 
-    expect(body).toContain('voice="Polly.Matthew-Neural">You are working on JARVIS.</Say></Gather>');
+    expect(body).toContain(
+      'voice="Polly.Matthew"><prosody pitch="-15%" rate="92%">You are working on JARVIS.</prosody></Say></Gather>'
+    );
   });
 
   test("a custom Hebrew voice is honored", async () => {
@@ -280,5 +300,124 @@ describe("TwilioVoiceGateway", () => {
 
     await gateway.handleGather("CA1", "hi");
     expect(sessionsCreated).toBe(2);
+  });
+
+  test("a call is ended by JARVIS itself after too many turns, as a cost/abuse safety net", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "ok"),
+      userId: "local-user",
+    }));
+
+    gateway.handleIncomingCall("CA1");
+    let lastBody = "";
+    for (let i = 0; i < 41; i++) {
+      const response = await gateway.handleGather("CA1", "hello");
+      lastBody = await response.text();
+    }
+
+    expect(lastBody).toContain("<Hangup/>");
+    expect(lastBody).not.toContain("<Gather");
+  });
+
+  test("a call well under the turn limit is unaffected", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "ok"),
+      userId: "local-user",
+    }));
+
+    gateway.handleIncomingCall("CA1");
+    const response = await gateway.handleGather("CA1", "hello");
+    const body = await response.text();
+
+    expect(body).toContain("<Gather");
+    expect(body).not.toContain("<Hangup/>");
+  });
+
+  test("handleCallEnded resets the turn count for a later call with the same CallSid", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "ok"),
+      userId: "local-user",
+    }));
+
+    gateway.handleIncomingCall("CA1");
+    for (let i = 0; i < 41; i++) await gateway.handleGather("CA1", "hello");
+    gateway.handleCallEnded("CA1");
+
+    gateway.handleIncomingCall("CA1"); // Twilio can reuse a CallSid in principle; treat it as a fresh call
+    const response = await gateway.handleGather("CA1", "hello");
+    const body = await response.text();
+
+    expect(body).toContain("<Gather");
+  });
+
+  test("handleWakeUpCallConnected speaks the brain's own opening line", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused (regular session)"), userId: "local-user" }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => ({
+        orchestrator: makeStubOrchestrator(async () => "Good morning! You have a meeting at 9."),
+        userId: "local-user",
+      })
+    );
+
+    const response = await gateway.handleWakeUpCallConnected("CA-wakeup");
+    const body = await response.text();
+
+    expect(body).toContain("Good morning! You have a meeting at 9.");
+    expect(body).toContain("<Gather");
+  });
+
+  test("handleWakeUpCallConnected falls back to a canned greeting if the brain call fails", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused"), userId: "local-user" }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => ({
+        orchestrator: makeStubOrchestrator(async () => {
+          throw new Error("boom");
+        }),
+        userId: "local-user",
+      })
+    );
+
+    const response = await gateway.handleWakeUpCallConnected("CA-wakeup-2");
+    const body = await response.text();
+
+    expect(body).toContain("Good morning");
+    expect(body).toContain("<Gather");
+  });
+
+  test("a follow-up handleGather for a wake-up call's CallSid finds the same session", async () => {
+    const gateway = new TwilioVoiceGateway(
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused (regular session)"), userId: "local-user" }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => ({ orchestrator: makeStubOrchestrator(async () => "wake-up opener"), userId: "local-user" })
+    );
+
+    await gateway.handleWakeUpCallConnected("CA-wakeup-3");
+    const response = await gateway.handleGather("CA-wakeup-3", "I'm up");
+    const body = await response.text();
+
+    expect(body).toContain("<Gather");
+  });
+
+  test("defaults the wake-up session factory to the regular one when not given", async () => {
+    const gateway = new TwilioVoiceGateway(() => ({
+      orchestrator: makeStubOrchestrator(async () => "same factory response"),
+      userId: "local-user",
+    }));
+
+    const response = await gateway.handleWakeUpCallConnected("CA-wakeup-4");
+    const body = await response.text();
+
+    expect(body).toContain("same factory response");
   });
 });

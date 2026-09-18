@@ -16,23 +16,69 @@ const ERROR_EN = "Sorry, something went wrong on my end. Please try again.";
 const ERROR_HE = "משהו השתבש אצלי. נסה שוב בבקשה.";
 const GOODBYE_EN = "I didn't hear anything. Goodbye.";
 const GOODBYE_HE = "לא שמעתי כלום. להתראות.";
-
+const WAKEUP_FALLBACK_EN = "Good morning! Time to wake up.";
+const WAKEUP_FALLBACK_HE = "בוקר טוב! הגיע הזמן לקום.";
 /**
- * Amazon Polly's Neural voice for <Say> — noticeably more natural than
- * Twilio's default "Basic" voice, and (unlike Twilio's newer Generative
- * voices) available on standard accounts with no beta opt-in required.
- * Overridable via the TWILIO_VOICE env var if a better voice becomes
- * available on the account this actually runs on.
+ * What kicks off a wake-up call's conversation — sent to the Orchestrator
+ * as if it were a user turn, so Claude generates the actual spoken
+ * greeting itself (personalized from real reminders/memory context) rather
+ * than JARVIS always saying the same canned line every single morning.
  */
-const DEFAULT_VOICE = "Polly.Matthew-Neural";
+const WAKEUP_TRIGGER_MESSAGE =
+  "(This is a scheduled wake-up call JARVIS just placed. Open the conversation now: greet the user, tell " +
+  "them it's time to get up, and give one real, specific, motivating reason from what you actually know " +
+  "about today. Keep it short and energetic, spoken aloud on a phone call.)";
+const CALL_LIMIT_EN = "This call has gone on for a while — let's continue over text. Goodbye for now.";
+const CALL_LIMIT_HE = "השיחה הזו נמשכת כבר זמן רב — נמשיך בהודעות. להתראות בינתיים.";
 
 /**
- * Google's WaveNet Hebrew voice — Polly has no Hebrew voice at all, so
- * Hebrew speech always goes through Twilio's Google TTS integration
- * regardless of what English voice is configured. Overridable via
+ * Caps how many back-and-forth turns a single phone call can have before
+ * JARVIS ends it itself. Twilio bills call minutes and every turn is
+ * another Anthropic API call — without a cap, one very long or automated
+ * call (deliberate abuse, or just someone leaving the line open) could run
+ * up real cost indefinitely with no natural end. Generous for an actual
+ * conversation: nobody has 40 back-and-forth exchanges with JARVIS on the
+ * phone in one sitting.
+ */
+const MAX_CALL_TURNS = 40;
+
+/**
+ * Amazon Polly's *Standard* (non-Neural) engine for <Say> — deliberately
+ * NOT the more natural-sounding Neural voice used previously. The user
+ * explicitly asked for JARVIS's phone voice to sound like a distinct
+ * machine/AI, quiet and deep, not a real person and not "cute" — never his
+ * own voice, and never mistakable for a human. The Standard engine's more
+ * synthetic cadence, combined with the pitch/rate SSML below, gets closer
+ * to that than any Neural voice can: AWS Neural voices only support
+ * `<prosody rate>` over SSML, not `<prosody pitch>`, so a Neural voice
+ * can be slowed down but never actually deepened. Overridable via the
+ * TWILIO_VOICE env var if a better voice becomes available on the account
+ * this actually runs on.
+ */
+const DEFAULT_VOICE = "Polly.Matthew";
+
+/**
+ * Google's *Standard* (non-WaveNet) Hebrew voice — Polly has no Hebrew
+ * voice at all, so Hebrew speech always goes through Twilio's Google TTS
+ * integration regardless of what English voice is configured. Standard,
+ * not WaveNet, for the same "sound like a machine, not a person" reason
+ * DEFAULT_VOICE is Polly's Standard engine. Overridable via
  * TWILIO_VOICE_HEBREW for the same reason TWILIO_VOICE is overridable.
  */
-const DEFAULT_HEBREW_VOICE = "Google.he-IL-Wavenet-D";
+const DEFAULT_HEBREW_VOICE = "Google.he-IL-Standard-D";
+
+/**
+ * SSML <prosody> applied around every spoken line to make the voice sit
+ * lower and land more deliberately — quiet and deep, not a chirpy
+ * assistant. Pitch lowering only takes effect on Polly's Standard engine
+ * and on Twilio's Google voices (both used above); it's silently ignored
+ * by Neural voices, which is one more reason not to use one here.
+ * Overridable via TWILIO_VOICE_PITCH / TWILIO_VOICE_RATE if a different
+ * balance sounds better on a real call — never validated against a real
+ * Twilio account.
+ */
+const DEFAULT_VOICE_PITCH = "-15%";
+const DEFAULT_VOICE_RATE = "92%";
 
 /**
  * Twilio's <Gather> only recognizes one language per request UNLESS you opt
@@ -86,9 +132,12 @@ function twimlResponse(body: string): Response {
  */
 export class TwilioVoiceGateway {
   private sessions: Map<string, PhoneSession> = new Map();
+  private turnCounts: Map<string, number> = new Map();
   private readonly voice: string;
   private readonly hebrewVoice: string;
   private readonly gatherLanguage: string;
+  private readonly voicePitch: string;
+  private readonly voiceRate: string;
 
   constructor(
     private readonly createSession: PhoneSessionFactory,
@@ -102,18 +151,31 @@ export class TwilioVoiceGateway {
      */
     private readonly audioStreamUrl?: string,
     hebrewVoice: string = DEFAULT_HEBREW_VOICE,
-    gatherLanguage: string = DEFAULT_GATHER_LANGUAGE
+    gatherLanguage: string = DEFAULT_GATHER_LANGUAGE,
+    /**
+     * Builds the session for an outbound wake-up call — separate from
+     * `createSession` so it can carry a distinct `channelContext` telling
+     * Claude this is a call JARVIS itself placed, not one it answered.
+     * Falls back to `createSession` when omitted (the wake-up feature
+     * still works, just without that extra framing).
+     */
+    private readonly createWakeUpSession: PhoneSessionFactory = createSession,
+    voicePitch: string = DEFAULT_VOICE_PITCH,
+    voiceRate: string = DEFAULT_VOICE_RATE
   ) {
     this.voice = voice;
     this.hebrewVoice = hebrewVoice;
     this.gatherLanguage = gatherLanguage;
+    this.voicePitch = voicePitch;
+    this.voiceRate = voiceRate;
   }
 
-  /** One <Say>, in whichever voice fits the text's own language. */
+  /** One <Say>, in whichever voice fits the text's own language, pitched down for a machine-like tone. */
   private sayTag(text: string): string {
+    const prosody = `<prosody pitch="${escapeXml(this.voicePitch)}" rate="${escapeXml(this.voiceRate)}">${escapeXml(text)}</prosody>`;
     return HEBREW_CHARS.test(text)
-      ? `<Say language="he-IL" voice="${escapeXml(this.hebrewVoice)}">${escapeXml(text)}</Say>`
-      : `<Say voice="${escapeXml(this.voice)}">${escapeXml(text)}</Say>`;
+      ? `<Say language="he-IL" voice="${escapeXml(this.hebrewVoice)}">${prosody}</Say>`
+      : `<Say voice="${escapeXml(this.voice)}">${prosody}</Say>`;
   }
 
   /**
@@ -153,10 +215,40 @@ export class TwilioVoiceGateway {
     return twimlResponse(streamTag + this.gatherPrompt(this.sayBilingual(GREETING_HE, GREETING_EN)));
   }
 
+  /**
+   * Twilio calls this once an outbound wake-up call is answered (see
+   * TwilioOutboundCaller.placeCall's `twimlUrl`). Unlike handleIncomingCall,
+   * JARVIS speaks first: it asks its own brain for an opening line (so the
+   * greeting is personalized from real reminders/memory context, not a
+   * fixed canned sentence) before gathering the user's spoken reply. Once
+   * the session is created, every following /voice/gather POST for this
+   * callSid finds it in `this.sessions` exactly like an inbound call would.
+   */
+  async handleWakeUpCallConnected(callSid: string): Promise<Response> {
+    const session = this.createWakeUpSession(callSid);
+    this.sessions.set(callSid, session);
+
+    let spokenTwiml: string;
+    try {
+      const responseText = await session.orchestrator.handleUserMessage(session.userId, WAKEUP_TRIGGER_MESSAGE);
+      spokenTwiml = this.sayTag(responseText);
+    } catch {
+      spokenTwiml = this.sayBilingual(WAKEUP_FALLBACK_HE, WAKEUP_FALLBACK_EN);
+    }
+
+    return twimlResponse(this.gatherPrompt(spokenTwiml));
+  }
+
   /** POST /voice/gather — Twilio calls this with the caller's transcribed speech. */
   async handleGather(callSid: string, speechResult: string | null): Promise<Response> {
     const session = this.sessions.get(callSid) ?? this.createSession(callSid);
     this.sessions.set(callSid, session);
+
+    const turnCount = (this.turnCounts.get(callSid) ?? 0) + 1;
+    this.turnCounts.set(callSid, turnCount);
+    if (turnCount > MAX_CALL_TURNS) {
+      return twimlResponse(this.sayBilingual(CALL_LIMIT_HE, CALL_LIMIT_EN) + `<Hangup/>`);
+    }
 
     if (!speechResult || speechResult.trim() === "") {
       return twimlResponse(this.gatherPrompt(this.sayBilingual(NO_INPUT_HE, NO_INPUT_EN)));
@@ -176,6 +268,7 @@ export class TwilioVoiceGateway {
   /** POST /voice/status — Twilio's call status callback; frees the session's memory once the call ends. */
   handleCallEnded(callSid: string): void {
     this.sessions.delete(callSid);
+    this.turnCounts.delete(callSid);
   }
 
   hasActiveSession(callSid: string): boolean {

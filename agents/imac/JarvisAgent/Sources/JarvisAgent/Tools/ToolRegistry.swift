@@ -36,8 +36,12 @@ final class AgentToolRegistry {
     static func buildDefault() -> AgentToolRegistry {
         let registry = AgentToolRegistry()
         registry.register(GetActiveApplicationTool.make())
-        registry.register(OpenUrlTool.make())
+        registry.register(ListRunningApplicationsTool.make())
         registry.register(OpenApplicationTool.make())
+        registry.register(QuitApplicationTool.make())
+        registry.register(OpenUrlTool.make())
+        registry.register(ListDirectoryTool.make())
+        registry.register(ReadTextFileTool.make())
         registry.register(ComposeEmailDraftTool.make())
         registry.register(ClickElementTool.make())
         registry.register(TypeTextTool.make())

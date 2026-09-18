@@ -1,27 +1,96 @@
 import { createInterface } from "node:readline/promises";
+import { dirname } from "node:path";
 import { loadConfig } from "@/config";
 import { EventBus } from "@/core/events/EventBus";
 import { ConversationManager } from "@/core/conversation/ConversationManager";
-import { ClaudeBrain } from "@/core/brain/ClaudeBrain";
+import { ClaudeBrain, DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionService } from "@/permissions/PermissionService";
 import { readOnlyFileInfoTool } from "@/tools/filesystem/ReadOnlyFileInfoTool";
 import { getActiveApplicationTool } from "@/tools/system/GetActiveApplicationTool";
-import { openUrlTool } from "@/tools/system/OpenUrlTool";
+import { listRunningApplicationsTool } from "@/tools/system/ListRunningApplicationsTool";
 import { openApplicationTool } from "@/tools/system/OpenApplicationTool";
+import { quitApplicationTool } from "@/tools/system/QuitApplicationTool";
+import { openUrlTool } from "@/tools/system/OpenUrlTool";
+import { listDirectoryTool } from "@/tools/system/ListDirectoryTool";
+import { readTextFileTool } from "@/tools/system/ReadTextFileTool";
+import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
 import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
 import { clickElementTool } from "@/tools/system/ClickElementTool";
 import { typeTextTool } from "@/tools/system/TypeTextTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
+import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
 import { MemoryStore } from "@/memory/MemoryStore";
+import { ReminderStore } from "@/reminders/ReminderStore";
+import { buildContextNote } from "@/core/buildContextNote";
+import { ToolAuditLog } from "@/audit/ToolAuditLog";
+import { TokenUsageStore } from "@/audit/TokenUsageStore";
+import { CostAlertMonitor } from "@/audit/CostAlertMonitor";
+import { estimateCostUsd } from "@/audit/estimateCostUsd";
+import { createCreateReminderTool } from "@/tools/reminders/CreateReminderTool";
+import { createListRemindersTool } from "@/tools/reminders/ListRemindersTool";
+import { createCompleteReminderTool } from "@/tools/reminders/CompleteReminderTool";
+import { createDeleteReminderTool } from "@/tools/reminders/DeleteReminderTool";
+import { createUpdateReminderTool } from "@/tools/reminders/UpdateReminderTool";
+import { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
+import { createSearchConversationHistoryTool } from "@/tools/history/SearchConversationHistoryTool";
+import { createClearConversationHistoryTool } from "@/tools/history/ClearConversationHistoryTool";
+import { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
+import { getDueWakeUpCalls, formatTimeOfDay, formatDateKey } from "@/wakeup/getDueWakeUpCalls";
+import { createCreateWakeUpCallTool } from "@/tools/wakeup/CreateWakeUpCallTool";
+import { createListWakeUpCallsTool } from "@/tools/wakeup/ListWakeUpCallsTool";
+import { createDeleteWakeUpCallTool } from "@/tools/wakeup/DeleteWakeUpCallTool";
+import { createUpdateWakeUpCallTool } from "@/tools/wakeup/UpdateWakeUpCallTool";
+import { TwilioOutboundCaller } from "@/communication/phone/TwilioOutboundCaller";
+import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
+import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import { createListCalendarEventsTool } from "@/tools/calendar/ListCalendarEventsTool";
+import { createSearchCalendarEventsTool } from "@/tools/calendar/SearchCalendarEventsTool";
+import { createGetCalendarEventTool } from "@/tools/calendar/GetCalendarEventTool";
+import { createUpdateCalendarEventTool } from "@/tools/calendar/UpdateCalendarEventTool";
+import { createUnlinkCalendarTool } from "@/tools/calendar/UnlinkCalendarTool";
+import { createCreateCalendarEventTool } from "@/tools/calendar/CreateCalendarEventTool";
+import { createDeleteCalendarEventTool } from "@/tools/calendar/DeleteCalendarEventTool";
+import { UndoStore } from "@/core/undo/UndoStore";
+import { createUndoLastActionTool } from "@/tools/undo/UndoLastActionTool";
+import { GmailClient } from "@/gmail/GmailClient";
+import { SpotifyClient } from "@/spotify/SpotifyClient";
+import { StudioClient } from "@/studio/StudioClient";
+import { createListReelsTool } from "@/tools/studio/ListReelsTool";
+import { createGetInstagramStatsTool } from "@/tools/studio/GetInstagramStatsTool";
+import { createPublishReelTool } from "@/tools/studio/PublishReelTool";
+import { SpotifyTokenStore } from "@/spotify/SpotifyTokenStore";
+import { createGetCurrentlyPlayingTool } from "@/tools/spotify/GetCurrentlyPlayingTool";
+import { createPlayMusicTool } from "@/tools/spotify/PlayMusicTool";
+import { createPauseMusicTool } from "@/tools/spotify/PauseMusicTool";
+import { createSkipTrackTool } from "@/tools/spotify/SkipTrackTool";
+import { createUnlinkSpotifyTool } from "@/tools/spotify/UnlinkSpotifyTool";
+import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
+import { createGetEmailTool } from "@/tools/gmail/GetEmailTool";
+import { createGetUnreadEmailCountTool } from "@/tools/gmail/GetUnreadEmailCountTool";
+import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
+import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
+import { createGetWeatherForecastTool } from "@/tools/weather/GetWeatherForecastTool";
+import { RssNewsClient } from "@/news/RssNewsClient";
+import { createGetNewsTool } from "@/tools/news/GetNewsTool";
+import { createSearchNewsTool } from "@/tools/news/SearchNewsTool";
+import { isWeeklyDigestDue } from "@/digest/isWeeklyDigestDue";
+import { formatWeeklyDigest } from "@/digest/formatWeeklyDigest";
+import { isCheckinDue } from "@/digest/isCheckinDue";
+import { isMorningBriefingDue } from "@/digest/isMorningBriefingDue";
+import { formatMorningBriefing } from "@/digest/formatMorningBriefing";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/TwilioVoiceGateway";
+import { TelegramGateway, type TelegramSession } from "@/communication/telegram/TelegramGateway";
+import { DeviceVoiceGateway, type DeviceVoiceSession } from "@/communication/voice/DeviceVoiceGateway";
+import { createNotifyUserTool } from "@/tools/telegram/NotifyUserTool";
+import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ActivityLog } from "@/core/activity/ActivityLog";
 import { WebAuthnStore } from "@/auth/WebAuthnStore";
 import { WebAuthnService } from "@/auth/WebAuthnService";
@@ -36,42 +105,242 @@ const DEFAULT_USER_ID = "local-user";
 // never concurrently with the loop's own next question() call.
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 
+// Set once main() creates the real ActivityLog; the handlers below are
+// registered immediately (before config loading or any store is opened)
+// so a crash during startup itself is still caught, not just one after
+// everything is up — they just log to the console alone until then.
+let activityLogForCrashHandlers: { record: (message: string) => void } | undefined;
+
+// A single uncaught throw or rejected promise anywhere in the process (a
+// timer callback, a stray `.then()` with no `.catch()`, a bug in code this
+// handler doesn't directly touch) would otherwise crash the entire Bun
+// process — taking down every open phone call and device connection over
+// one unrelated bug. Logging and continuing is the right tradeoff for a
+// personal assistant that should stay reachable; genuinely fatal errors (a
+// corrupted SQLite file, a full disk) still surface loudly in the logs and
+// in the dashboard's activity feed, they just don't take the whole process
+// down with them.
+// Logs only .message/.stack, never the raw error object — an error type
+// with an unexpected enumerable custom property (not something anything
+// here constructs today, but not guaranteed of every dependency forever)
+// could otherwise get its fields printed wholesale by console.error's
+// default object formatting.
+process.on("uncaughtException", (error) => {
+  console.error("[jarvis] uncaught exception (process continuing):", error.stack ?? error.message);
+  activityLogForCrashHandlers?.record(`Uncaught exception: ${error.message}`);
+});
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const detail = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+  console.error("[jarvis] unhandled promise rejection (process continuing):", detail);
+  activityLogForCrashHandlers?.record(`Unhandled rejection: ${message}`);
+});
+
 function main() {
   const config = loadConfig();
 
   const eventBus = new EventBus();
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
-  const activityLog = new ActivityLog();
+  const reminderStore = new ReminderStore(config.remindersDbPath);
+  const conversationHistoryStore = new ConversationHistoryStore(config.conversationHistoryDbPath);
+  const activityLog = new ActivityLog(config.activityLogDbPath);
+  const toolAuditLog = new ToolAuditLog(config.toolAuditLogDbPath);
+  const tokenUsageStore = new TokenUsageStore(config.tokenUsageDbPath);
+  const costAlertMonitor = config.costAlertThresholdUsd
+    ? new CostAlertMonitor(config.costAlertThresholdUsd, (stagePercent, costUsd, thresholdUsd) => {
+        const message = `Estimated cost has reached ${Math.round(stagePercent * 100)}% of your $${thresholdUsd} threshold ($${costUsd.toFixed(2)} so far, all-time).`;
+        console.warn(`[jarvis] COST ALERT: ${message}`);
+        activityLog.record(message);
+      })
+    : undefined;
   const webAuthnStore = new WebAuthnStore(config.webauthnDbPath);
   const webAuthnService = new WebAuthnService(webAuthnStore);
   const sessionStore = new SessionStore();
 
+  const calendarEnabled = Boolean(config.googleClientId && config.googleClientSecret && config.publicBaseUrl);
+  const calendarTokenStore = new CalendarTokenStore(config.calendarTokenDbPath);
+  const calendarClient = calendarEnabled
+    ? new GoogleCalendarClient(
+        config.googleClientId!,
+        config.googleClientSecret!,
+        new URL("/calendar/oauth/callback", config.publicBaseUrl).toString(),
+        calendarTokenStore
+      )
+    : undefined;
+  const undoStore = new UndoStore();
+  if (calendarClient) {
+    toolRegistry.registerTool(createListCalendarEventsTool(calendarClient));
+    toolRegistry.registerTool(createSearchCalendarEventsTool(calendarClient));
+    toolRegistry.registerTool(createGetCalendarEventTool(calendarClient));
+    toolRegistry.registerTool(createUpdateCalendarEventTool(calendarClient, undoStore));
+    toolRegistry.registerTool(createCreateCalendarEventTool(calendarClient, undoStore));
+    toolRegistry.registerTool(createDeleteCalendarEventTool(calendarClient, undoStore));
+    toolRegistry.registerTool(createUnlinkCalendarTool(calendarTokenStore));
+  }
+  // Registered unconditionally: reminders are always available (no
+  // calendar link required), and reminder_deleted is one of the
+  // undoable action types UNDO_LAST_ACTION itself already knows how to
+  // reverse.
+  toolRegistry.registerTool(createUndoLastActionTool(undoStore, calendarClient, reminderStore, memoryStore));
+
+  // Shares the same Google account link as Calendar (one OAuth consent
+  // screen, two scopes) rather than a second separate account link.
+  const gmailClient = calendarEnabled
+    ? new GmailClient(config.googleClientId!, config.googleClientSecret!, calendarTokenStore)
+    : undefined;
+  if (gmailClient) {
+    toolRegistry.registerTool(createSearchEmailTool(gmailClient));
+    toolRegistry.registerTool(createGetEmailTool(gmailClient));
+    toolRegistry.registerTool(createGetUnreadEmailCountTool(gmailClient));
+  }
+
+  const spotifyEnabled = Boolean(config.spotifyClientId && config.spotifyClientSecret && config.publicBaseUrl);
+  const spotifyTokenStore = new SpotifyTokenStore(config.spotifyTokenDbPath);
+  const spotifyClient = spotifyEnabled
+    ? new SpotifyClient(
+        config.spotifyClientId!,
+        config.spotifyClientSecret!,
+        new URL("/spotify/oauth/callback", config.publicBaseUrl).toString(),
+        spotifyTokenStore
+      )
+    : undefined;
+  if (spotifyClient) {
+    toolRegistry.registerTool(createGetCurrentlyPlayingTool(spotifyClient));
+    toolRegistry.registerTool(createPlayMusicTool(spotifyClient));
+    toolRegistry.registerTool(createPauseMusicTool(spotifyClient));
+    toolRegistry.registerTool(createSkipTrackTool(spotifyClient));
+    toolRegistry.registerTool(createUnlinkSpotifyTool(spotifyTokenStore));
+  }
+
+  const studioClient =
+    config.studioBaseUrl && config.studioSecret ? new StudioClient(config.studioBaseUrl, config.studioSecret) : undefined;
+  if (studioClient) {
+    toolRegistry.registerTool(createListReelsTool(studioClient));
+    toolRegistry.registerTool(createGetInstagramStatsTool(studioClient));
+    toolRegistry.registerTool(createPublishReelTool(studioClient));
+  }
+
+  const weatherEnabled = config.weatherLatitude !== undefined && config.weatherLongitude !== undefined;
+  const weatherClient = weatherEnabled ? new OpenMeteoClient(config.weatherLatitude!, config.weatherLongitude!) : undefined;
+  if (weatherClient) {
+    toolRegistry.registerTool(createGetWeatherTool(weatherClient));
+    toolRegistry.registerTool(createGetWeatherForecastTool(weatherClient));
+  }
+
+  if (config.newsRssUrl) {
+    const newsClient = new RssNewsClient(config.newsRssUrl);
+    toolRegistry.registerTool(createGetNewsTool(newsClient));
+    toolRegistry.registerTool(createSearchNewsTool(newsClient));
+  }
+
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
-  toolRegistry.registerTool(openUrlTool);
+  toolRegistry.registerTool(listRunningApplicationsTool);
   toolRegistry.registerTool(openApplicationTool);
+  toolRegistry.registerTool(quitApplicationTool);
+  toolRegistry.registerTool(openUrlTool);
+  toolRegistry.registerTool(listDirectoryTool);
+  toolRegistry.registerTool(readTextFileTool);
   toolRegistry.registerTool(composeEmailDraftTool);
   toolRegistry.registerTool(clickElementTool);
   toolRegistry.registerTool(typeTextTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
+  toolRegistry.registerTool(createDeleteMemoryTool(memoryStore, undoStore));
+  toolRegistry.registerTool(createCreateReminderTool(reminderStore));
+  toolRegistry.registerTool(createListRemindersTool(reminderStore));
+  toolRegistry.registerTool(createCompleteReminderTool(reminderStore));
+  toolRegistry.registerTool(createDeleteReminderTool(reminderStore, undoStore));
+  toolRegistry.registerTool(createUpdateReminderTool(reminderStore));
+  toolRegistry.registerTool(createSearchConversationHistoryTool(conversationHistoryStore));
+  toolRegistry.registerTool(createClearConversationHistoryTool(conversationHistoryStore));
 
   const permissionService = new PermissionService();
+  const lockdownService = new LockdownService();
   // This is a single-user personal assistant, not a multi-tenant system —
   // memory writes are SAFE_ACTION-level but standing-granted to the one
   // local user rather than asked about every time.
   permissionService.grant(DEFAULT_USER_ID, "SAVE_MEMORY");
+  permissionService.grant(DEFAULT_USER_ID, "DELETE_MEMORY");
+  permissionService.grant(DEFAULT_USER_ID, "CREATE_REMINDER");
+  permissionService.grant(DEFAULT_USER_ID, "COMPLETE_REMINDER");
+  permissionService.grant(DEFAULT_USER_ID, "DELETE_REMINDER");
+  permissionService.grant(DEFAULT_USER_ID, "UPDATE_REMINDER");
+  // DANGEROUS: granted so the tool is askable at all, but PermissionService
+  // still forces a fresh per-invocation confirmation regardless of this
+  // grant — this never lets JARVIS erase the transcript silently.
+  permissionService.grant(DEFAULT_USER_ID, "CLEAR_CONVERSATION_HISTORY");
+  if (calendarClient) {
+    permissionService.grant(DEFAULT_USER_ID, "CREATE_CALENDAR_EVENT");
+    permissionService.grant(DEFAULT_USER_ID, "UPDATE_CALENDAR_EVENT");
+    permissionService.grant(DEFAULT_USER_ID, "DELETE_CALENDAR_EVENT");
+    // Same DANGEROUS reasoning as CLEAR_CONVERSATION_HISTORY above.
+    permissionService.grant(DEFAULT_USER_ID, "UNLINK_CALENDAR");
+    permissionService.grant(DEFAULT_USER_ID, "UNDO_LAST_ACTION");
+  }
+  if (spotifyClient) {
+    permissionService.grant(DEFAULT_USER_ID, "PLAY_MUSIC");
+    permissionService.grant(DEFAULT_USER_ID, "PAUSE_MUSIC");
+    permissionService.grant(DEFAULT_USER_ID, "SKIP_TRACK");
+    // Same DANGEROUS reasoning as CLEAR_CONVERSATION_HISTORY/UNLINK_CALENDAR above.
+    permissionService.grant(DEFAULT_USER_ID, "UNLINK_SPOTIFY");
+  }
+  if (studioClient) {
+    // DANGEROUS: granted so the tool is askable at all, but PermissionService
+    // still forces a fresh per-invocation confirmation regardless of this
+    // grant — publishing to a real public account never happens silently.
+    permissionService.grant(DEFAULT_USER_ID, "PUBLISH_REEL");
+  }
 
-  const deviceRegistry = new DeviceRegistry();
-  const pairingService = new PairingService();
+  const deviceRegistry = new DeviceRegistry(config.deviceRegistryDbPath);
+  toolRegistry.registerTool(createListDevicesTool(deviceRegistry));
+
+  // Device-scoped SAFE_ACTION tools a device automatically gets once it's
+  // trusted as "primary" — that trust decision (a human approving its
+  // pairing code, then granting it the primary role) is already the
+  // deliberate, one-time consent step; piggybacking standing tool access
+  // on it, rather than inventing a second separate consent step per tool,
+  // keeps this consistent with how every other primary-device capability
+  // already works. Granted both when a device newly receives the role
+  // (via "device.roleGranted") and, since PermissionService's grants are
+  // in-memory only, re-derived at startup for any device that already
+  // has the role persisted from before a restart.
+  const STANDARD_PRIMARY_DEVICE_TOOLS = ["OPEN_APPLICATION", "QUIT_APPLICATION", "OPEN_URL"];
+  function grantPrimaryDeviceTools(deviceId: string): void {
+    for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {
+      permissionService.grant(DEFAULT_USER_ID, toolId, deviceId);
+    }
+  }
+  eventBus.on("device.roleGranted", ({ deviceId, role }) => {
+    if (role === "primary") grantPrimaryDeviceTools(deviceId);
+  });
+  for (const device of deviceRegistry.listDevices()) {
+    if (device.role === "primary") grantPrimaryDeviceTools(device.id);
+  }
+  // Defense in depth: a revoked device's standing tool grants otherwise
+  // stay valid forever, since nothing else ever clears them. If it ever
+  // reconnected anyway (a bug elsewhere in the pairing/auth path), it
+  // shouldn't silently keep acting on its old standing trust.
+  eventBus.on("device.revoked", ({ deviceId }) => {
+    for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {
+      permissionService.revoke(DEFAULT_USER_ID, toolId, deviceId);
+    }
+  });
+
+  const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const conversation = new ConversationManager(eventBus);
   const brain = new ClaudeBrain(config.anthropicApiKey, {
     webSearchEnabled: config.webSearchEnabled,
     webSearchMaxUses: config.webSearchMaxUses,
+    webFetchEnabled: config.webFetchEnabled,
+    webFetchMaxUses: config.webFetchMaxUses,
+    baseUrl: config.anthropicBaseUrl,
+    fallbackModel: config.fallbackModel,
   });
   const confirmationService = new ConfirmationService(confirmViaChat);
+  const phoneConfirmationService = new ConfirmationService(denyPhoneConfirmation);
 
   const orchestrator = new Orchestrator({
     brain,
@@ -82,6 +351,8 @@ function main() {
     deviceRegistry,
     deviceConnectionManager,
     confirmationService,
+    contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+    lockdownService,
   });
 
   // A phone call gets its own conversation thread (a fresh ConversationManager
@@ -98,8 +369,49 @@ function main() {
       eventBus,
       deviceRegistry,
       deviceConnectionManager,
-      confirmationService,
+      confirmationService: phoneConfirmationService,
       channelContext: "This conversation is happening over a live phone call right now.",
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      lockdownService,
+    });
+    return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
+  }
+
+  const wakeUpCallsEnabled = Boolean(
+    config.twilioAuthToken &&
+      config.twilioPublicBaseUrl &&
+      config.twilioAccountSid &&
+      config.twilioFromNumber &&
+      config.ownerPhoneNumber
+  );
+  const wakeUpCallStore = new WakeUpCallStore(config.wakeUpCallDbPath);
+
+  // A wake-up call gets its own conversation thread like any other phone
+  // call, but with a distinct channelContext: JARVIS placed this call
+  // itself (the user didn't call in), and its whole point is to actually
+  // get them out of bed, persuading further if they push back, using
+  // whatever real context (reminders, memory) is actually relevant today —
+  // not the same "how can I help" framing as an inbound call.
+  function createWakeUpPhoneSession(_callSid: string): PhoneSession {
+    const phoneConversation = new ConversationManager(eventBus);
+    const phoneOrchestrator = new Orchestrator({
+      brain,
+      conversation: phoneConversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService: phoneConfirmationService,
+      channelContext:
+        "This is a scheduled wake-up call that JARVIS itself just placed — the user didn't call in, JARVIS " +
+        "called them. Open by greeting them and telling them it's time to get up, giving one real, specific, " +
+        "motivating reason pulled from what you actually know (check reminders/memory for anything relevant " +
+        "today — a meeting, a task, a workout). If they push back or say they're tired, don't just accept it: " +
+        "persuade them further with another real, specific reason, the way a determined friend would, rather " +
+        "than immediately backing off. Keep replies short and energetic — this is a live phone call.",
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      lockdownService,
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -120,9 +432,259 @@ function main() {
           config.twilioVoice,
           audioStreamUrl,
           config.twilioVoiceHebrew,
-          config.twilioGatherLanguage
+          config.twilioGatherLanguage,
+          createWakeUpPhoneSession,
+          config.twilioVoicePitch,
+          config.twilioVoiceRate
         )
       : undefined;
+
+  // A Telegram chat gets its own conversation thread, like a phone call,
+  // but kept for the life of the process rather than one call's duration —
+  // a chat has no natural "hang up." Scoped on purpose: JARVIS only ever
+  // sees messages sent to this specific bot, in chats it's been added to.
+  function createTelegramSession(chatId: string): TelegramSession {
+    const telegramConversation = new ConversationManager(eventBus);
+    const telegramConfirmationService = new ConfirmationService(createTelegramConfirmationPrompter(chatId));
+    const telegramOrchestrator = new Orchestrator({
+      brain,
+      conversation: telegramConversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService: telegramConfirmationService,
+      channelContext: "This conversation is happening over Telegram right now.",
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      lockdownService,
+    });
+    return { orchestrator: telegramOrchestrator, userId: DEFAULT_USER_ID };
+  }
+
+  /**
+   * Unlike a phone call, a Telegram chat is a reliable bidirectional text
+   * channel — as capable as the terminal's own `confirmViaChat` of asking a
+   * real yes/no question and waiting for a real answer. So Telegram
+   * sessions get a real confirmation prompt instead of the phone's
+   * auto-deny. Safe to reference `telegramGateway` here even though it's
+   * declared below: this closure only runs once a Telegram message
+   * actually arrives, well after `telegramGateway` has been constructed.
+   */
+  function createTelegramConfirmationPrompter(chatId: string) {
+    return async (request: ConfirmationRequest): Promise<boolean> => {
+      const inputSummary = JSON.stringify(request.input);
+      return telegramGateway!.awaitConfirmation(
+        chatId,
+        `JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Approve? (yes/no)`
+      );
+    };
+  }
+
+  const telegramGateway =
+    config.telegramBotToken && config.telegramWebhookSecret
+      ? new TelegramGateway(config.telegramBotToken, createTelegramSession, config.telegramAllowedChatIds)
+      : undefined;
+
+  if (telegramGateway && config.telegramOwnerChatId) {
+    toolRegistry.registerTool(createNotifyUserTool(telegramGateway, config.telegramOwnerChatId));
+    permissionService.grant(DEFAULT_USER_ID, "NOTIFY_USER");
+  }
+
+  // A paired device's "Hey JARVIS" wake-word channel gets its own
+  // conversation thread, exactly like Telegram — kept for the life of the
+  // process, not tied to any one utterance. Always available (no separate
+  // opt-in config): it rides on the same pairing/device-trust model every
+  // other device capability already requires, so there's nothing new to
+  // configure here beyond the Agent actually sending voice.transcript.
+  function createDeviceVoiceSession(deviceId: string): DeviceVoiceSession {
+    const voiceConversation = new ConversationManager(eventBus);
+    const voiceConfirmationService = new ConfirmationService(createDeviceVoiceConfirmationPrompter(deviceId));
+    const voiceOrchestrator = new Orchestrator({
+      brain,
+      conversation: voiceConversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService: voiceConfirmationService,
+      channelContext: "This conversation is happening by voice, right now, on the user's Mac.",
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      lockdownService,
+    });
+    return { orchestrator: voiceOrchestrator, userId: DEFAULT_USER_ID };
+  }
+
+  /** Same reasoning as createTelegramConfirmationPrompter: a paired device is a reliable bidirectional channel. */
+  function createDeviceVoiceConfirmationPrompter(deviceId: string) {
+    return async (request: ConfirmationRequest): Promise<boolean> => {
+      const inputSummary = JSON.stringify(request.input);
+      return deviceVoiceGateway!.awaitConfirmation(
+        deviceId,
+        `JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Say yes or no.`
+      );
+    };
+  }
+
+  const deviceVoiceGateway = new DeviceVoiceGateway(deviceConnectionManager, createDeviceVoiceSession);
+
+  let wakeUpInterval: ReturnType<typeof setInterval> | undefined;
+  if (wakeUpCallsEnabled) {
+    toolRegistry.registerTool(createCreateWakeUpCallTool(wakeUpCallStore));
+    toolRegistry.registerTool(createListWakeUpCallsTool(wakeUpCallStore));
+    toolRegistry.registerTool(createUpdateWakeUpCallTool(wakeUpCallStore));
+    toolRegistry.registerTool(createDeleteWakeUpCallTool(wakeUpCallStore));
+    permissionService.grant(DEFAULT_USER_ID, "CREATE_WAKEUP_CALL");
+    permissionService.grant(DEFAULT_USER_ID, "UPDATE_WAKEUP_CALL");
+    permissionService.grant(DEFAULT_USER_ID, "DELETE_WAKEUP_CALL");
+
+    const outboundCaller = new TwilioOutboundCaller(
+      config.twilioAccountSid!,
+      config.twilioAuthToken!,
+      config.twilioFromNumber!
+    );
+    const wakeUpTwimlUrl = new URL("/voice/wakeup-connected", config.twilioPublicBaseUrl!).toString();
+
+    // WakeUpCallStore's lastTriggeredDate check makes each tick idempotent
+    // ONCE a call has actually completed — but a call stays due for up to
+    // two ticks within the same matching minute (checks run every 30s),
+    // so a placeCall() that's still in flight when the next tick fires
+    // (a slow/stuck network request) would otherwise be dialed again
+    // before markTriggered() ever runs. inFlightWakeUpCallIds closes that
+    // gap: a call id is tracked as soon as placeCall() starts, not only
+    // once it resolves.
+    const inFlightWakeUpCallIds = new Set<string>();
+
+    wakeUpInterval = setInterval(() => {
+      const now = new Date();
+      const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
+      const todayDateStr = formatDateKey(now, config.timezone);
+      const due = getDueWakeUpCalls(wakeUpCallStore.list(), nowTimeOfDay, todayDateStr, inFlightWakeUpCallIds);
+
+      for (const call of due) {
+        inFlightWakeUpCallIds.add(call.id);
+        outboundCaller
+          .placeCall(config.ownerPhoneNumber!, wakeUpTwimlUrl)
+          .then(() => {
+            wakeUpCallStore.markTriggered(call.id, todayDateStr);
+            activityLog.record(`Placed wake-up call${call.label ? ` (${call.label})` : ""}`);
+          })
+          .catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[jarvis] failed to place wake-up call ${call.id}:`, message);
+            activityLog.record(`Failed to place wake-up call${call.label ? ` (${call.label})` : ""}: ${message}`);
+            // A failed alarm call is silent by nature — the one thing it
+            // can't do is tell the user it didn't ring. If a Telegram
+            // push channel is configured, use it as the one channel that
+            // doesn't depend on the phone call that just failed.
+            if (telegramGateway && config.telegramOwnerChatId) {
+              telegramGateway
+                .sendMessage(
+                  config.telegramOwnerChatId,
+                  `JARVIS failed to place your wake-up call${call.label ? ` (${call.label})` : ""}: ${message}`
+                )
+                .catch(() => {
+                  // Best-effort notification about a best-effort call — already logged above either way.
+                });
+            }
+          })
+          .finally(() => {
+            inFlightWakeUpCallIds.delete(call.id);
+          });
+      }
+    }, 30_000);
+  }
+
+  let weeklyDigestInterval: ReturnType<typeof setInterval> | undefined;
+  const weeklyDigestEnabled = Boolean(
+    config.weeklyDigestDayOfWeek !== undefined &&
+      config.weeklyDigestTime &&
+      telegramGateway &&
+      config.telegramOwnerChatId
+  );
+  if (weeklyDigestEnabled) {
+    let lastWeeklyDigestDateKey: string | null = null;
+    weeklyDigestInterval = setInterval(() => {
+      const now = new Date();
+      const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
+      const todayDateKey = formatDateKey(now, config.timezone);
+
+      if (
+        !isWeeklyDigestDue(
+          now,
+          config.timezone,
+          config.weeklyDigestDayOfWeek!,
+          config.weeklyDigestTime!,
+          nowTimeOfDay,
+          todayDateKey,
+          lastWeeklyDigestDateKey
+        )
+      ) {
+        return;
+      }
+
+      lastWeeklyDigestDateKey = todayDateKey;
+      const cost = estimateCostUsd(tokenUsageStore.totals(), DEFAULT_MODEL);
+      const message = formatWeeklyDigest(toolAuditLog.summary(), tokenUsageStore.totals(), cost);
+      telegramGateway!.sendMessage(config.telegramOwnerChatId!, message).catch((error) => {
+        console.error("[jarvis] failed to send weekly digest:", error instanceof Error ? error.message : String(error));
+      });
+    }, 30_000);
+  }
+
+  let checkinInterval: ReturnType<typeof setInterval> | undefined;
+  const checkinEnabled = Boolean(config.checkinAfterHours && telegramGateway && config.telegramOwnerChatId);
+  if (checkinEnabled) {
+    let lastInteractionAt = new Date();
+    let checkinSentSinceLastInteraction = false;
+    eventBus.on("brain.request", () => {
+      lastInteractionAt = new Date();
+      checkinSentSinceLastInteraction = false;
+    });
+
+    checkinInterval = setInterval(() => {
+      if (!isCheckinDue(new Date(), lastInteractionAt, config.checkinAfterHours!, checkinSentSinceLastInteraction)) {
+        return;
+      }
+
+      checkinSentSinceLastInteraction = true;
+      const hours = Math.round((Date.now() - lastInteractionAt.getTime()) / 3_600_000);
+      const message = `Haven't heard from you in about ${hours} hours — just checking in.`;
+      telegramGateway!.sendMessage(config.telegramOwnerChatId!, message).catch((error) => {
+        console.error("[jarvis] failed to send check-in:", error instanceof Error ? error.message : String(error));
+      });
+    }, 60_000);
+  }
+
+  let morningBriefingInterval: ReturnType<typeof setInterval> | undefined;
+  const morningBriefingEnabled = Boolean(config.morningBriefingTime && telegramGateway && config.telegramOwnerChatId);
+  if (morningBriefingEnabled) {
+    let lastMorningBriefingDateKey: string | null = null;
+    morningBriefingInterval = setInterval(async () => {
+      const now = new Date();
+      const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
+      const todayDateKey = formatDateKey(now, config.timezone);
+
+      if (!isMorningBriefingDue(config.morningBriefingTime!, nowTimeOfDay, todayDateKey, lastMorningBriefingDateKey)) {
+        return;
+      }
+      lastMorningBriefingDateKey = todayDateKey;
+
+      const weather = await weatherClient?.getCurrentWeather().catch(() => undefined);
+      const todaysEvents = calendarClient ? await calendarClient.listUpcomingEvents(10).catch(() => []) : [];
+      const nowIso = now.toISOString();
+      const dueOrOverdueReminders = reminderStore.list().filter((r) => r.dueAt !== null && r.dueAt <= nowIso);
+
+      const message = formatMorningBriefing(weather, todaysEvents, dueOrOverdueReminders);
+      telegramGateway!.sendMessage(config.telegramOwnerChatId!, message).catch((error) => {
+        console.error(
+          "[jarvis] failed to send morning briefing:",
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+    }, 30_000);
+  }
 
   const wsServer = new JarvisWebSocketServer({
     deviceRegistry,
@@ -135,10 +697,36 @@ function main() {
     twilioAuthToken: config.twilioAuthToken,
     twilioPublicBaseUrl: config.twilioPublicBaseUrl,
     twilioAllowedCallers: config.twilioAllowedCallers,
+    telegramGateway,
+    deviceVoiceGateway,
+    telegramWebhookSecret: config.telegramWebhookSecret,
+    lockdownService,
     adminToken: config.adminToken,
     webAuthnService,
     sessionStore,
     audioLevelBroadcaster,
+    tokenUsageStore,
+    reminderStore,
+    memoryStore,
+    toolAuditLog,
+    conversationHistoryStore,
+    calendarClient,
+    spotifyClient,
+    wakeUpCallStore,
+    dataDirectory: config.memoryDbPath === ":memory:" ? undefined : dirname(config.memoryDbPath),
+    backupDbPaths: [
+      config.memoryDbPath,
+      config.webauthnDbPath,
+      config.remindersDbPath,
+      config.activityLogDbPath,
+      config.conversationHistoryDbPath,
+      config.pairingDbPath,
+      config.deviceRegistryDbPath,
+      config.toolAuditLogDbPath,
+      config.tokenUsageDbPath,
+      config.wakeUpCallDbPath,
+      config.calendarTokenDbPath,
+    ],
     permissionService,
     defaultUserId: DEFAULT_USER_ID,
     // The hologram UI's real chat box (ws(s)://.../chat) shares this same
@@ -156,16 +744,26 @@ function main() {
     // only means "may be asked," never "runs without asking."
     autoGrantToolIdsOnApproval: ["OPEN_URL", "OPEN_APPLICATION", "COMPOSE_EMAIL_DRAFT", "CLICK_ELEMENT", "TYPE_TEXT"],
   });
-  wsServer.start(config.port);
+  const httpHandle = wsServer.start(config.port);
 
   eventBus.on("brain.request", () => {
     activityLog.record("JARVIS is thinking…", "thinking");
   });
 
-  eventBus.on("brain.response", ({ text, toolCallCount, serverToolUses }) => {
+  eventBus.on("brain.response", ({ text, toolCallCount, serverToolUses, usage }) => {
     console.log(`[jarvis] brain responded (toolCalls=${toolCallCount}): ${text.slice(0, 120)}`);
+    if (usage) {
+      tokenUsageStore.record(usage);
+      if (costAlertMonitor) {
+        const costUsd = estimateCostUsd(tokenUsageStore.totals(), DEFAULT_MODEL);
+        if (costUsd !== undefined) costAlertMonitor.check(costUsd);
+      }
+    }
     if (serverToolUses?.includes("web_search")) {
       activityLog.record("Searching the web…", "thinking");
+    }
+    if (serverToolUses?.includes("web_fetch")) {
+      activityLog.record("Reading a page…", "thinking");
     }
     if (text.trim()) activityLog.record(text, "speaking");
   });
@@ -189,7 +787,18 @@ function main() {
     activityLog.record(`Device disconnected: ${deviceId} (${reason})`);
   });
 
-  eventBus.on("tool.executed", ({ toolName, result }) => {
+  eventBus.on("conversation.message", ({ message }) => {
+    // Only user/assistant text turns are worth searching later — tool
+    // calls/results are protocol noise, not something a human would ever
+    // search for ("what did we talk about"), and are already visible via
+    // the activity log's own tool.executed entries.
+    if (message.role === "user" || message.role === "assistant") {
+      conversationHistoryStore.record(message.role, message.content);
+    }
+  });
+
+  eventBus.on("tool.executed", ({ toolName, result, userId, input }) => {
+    toolAuditLog.record(toolName, userId, input, result);
     activityLog.record(`${toolName} → ${result.success ? "ok" : `failed: ${result.error}`}`);
   });
 
@@ -210,13 +819,54 @@ function main() {
         "Set TWILIO_ALLOWED_CALLERS before giving the number to anyone but yourself."
     );
   }
+  console.log(
+    telegramGateway
+      ? "Telegram gateway: enabled (POST /telegram/webhook)"
+      : "Telegram gateway: disabled (set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET to enable)"
+  );
+  if (telegramGateway && (!config.telegramAllowedChatIds || config.telegramAllowedChatIds.length === 0)) {
+    console.warn(
+      "[jarvis] WARNING: Telegram gateway is enabled with no TELEGRAM_ALLOWED_CHAT_IDS set — " +
+        "anyone who finds and messages the bot reaches full JARVIS, including tools like SAVE_MEMORY. " +
+        "Set TELEGRAM_ALLOWED_CHAT_IDS before sharing the bot with anyone but yourself."
+    );
+  }
 
-  process.on("SIGINT", () => {
+  activityLogForCrashHandlers = activityLog;
+
+  // SIGTERM is what Fly.io/Docker/Kubernetes actually send for a normal
+  // stop or redeploy — SIGINT (Ctrl+C) was the only signal handled before,
+  // so a cloud restart previously skipped this cleanup entirely and relied
+  // on the runtime being killed out from under open SQLite handles/sockets
+  // instead of closing them itself. Both signals now do the same graceful
+  // shutdown: stop accepting new connections, close every store, then exit.
+  let shuttingDown = false;
+  function shutdown(signal: string): void {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n[jarvis] received ${signal}, shutting down…`);
+    httpHandle.stop();
     memoryStore.close();
+    reminderStore.close();
+    conversationHistoryStore.close();
+    activityLog.close();
+    toolAuditLog.close();
+    tokenUsageStore.close();
+    deviceRegistry.close();
+    pairingService.close();
     webAuthnStore.close();
+    wakeUpCallStore.close();
+    if (wakeUpInterval) clearInterval(wakeUpInterval);
+    if (weeklyDigestInterval) clearInterval(weeklyDigestInterval);
+    if (checkinInterval) clearInterval(checkinInterval);
+    if (morningBriefingInterval) clearInterval(morningBriefingInterval);
+    calendarTokenStore.close();
+    spotifyTokenStore.close();
     rl.close();
     process.exit(0);
-  });
+  }
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 
   runChatLoop(orchestrator);
 
@@ -231,6 +881,7 @@ function main() {
     permissionService,
     confirmationService,
     phoneGateway,
+    telegramGateway,
     eventBus,
   };
 }
@@ -247,6 +898,25 @@ async function confirmViaChat(request: ConfirmationRequest): Promise<boolean> {
     `\n⚠️  JARVIS wants to run "${request.toolName}" with input ${inputSummary}. Approve? (yes/no): `
   );
   return answer.trim().toLowerCase().startsWith("y");
+}
+
+/**
+ * Phone sessions get their own ConfirmationService using this prompter,
+ * instead of sharing confirmViaChat's terminal-bound one — otherwise a
+ * CONFIRM/DANGEROUS tool requested mid-call (e.g. UNLINK_CALENDAR,
+ * CLEAR_CONVERSATION_HISTORY) would silently hang the live call for the
+ * full 60s timeout waiting on a terminal prompt nobody on the phone can
+ * see or answer, before auto-denying anyway. This resolves immediately
+ * instead, denying the action outright: voice confirmation of a real,
+ * high-impact action is inherently unreliable (background noise,
+ * misheard "yes", someone else picking up the phone), so an immediate,
+ * clear denial — Claude can then tell the caller to do it from the
+ * terminal/dashboard instead — is the right behavior here, not a
+ * workaround for a technical limitation.
+ */
+async function denyPhoneConfirmation(request: ConfirmationRequest): Promise<boolean> {
+  console.log(`[jarvis] denied "${request.toolName}" over the phone — confirmation isn't supported on this channel`);
+  return false;
 }
 
 /**

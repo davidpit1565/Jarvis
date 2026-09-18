@@ -10,6 +10,7 @@ import { DeviceConnectionManager, type DeviceConnection } from "@/communication/
 import { parseDeviceToCoreMessage, type ToolResultMessage } from "@/communication/websocket/protocol";
 import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { DeviceTool, LocalTool } from "@/types/tools";
+import { LockdownService } from "@/core/lockdown/LockdownService";
 
 /** Scripted mock brain: returns queued responses in order, one per call. */
 class ScriptedBrain implements Brain {
@@ -56,7 +57,11 @@ function makeDeviceTool(id: string, requiredPermission: DeviceTool["requiredPerm
 function setup(
   brain: Brain,
   tools: (LocalTool | DeviceTool)[] = [],
-  options: { deviceRegistry?: DeviceRegistry; deviceConnectionManager?: DeviceConnectionManager } = {}
+  options: {
+    deviceRegistry?: DeviceRegistry;
+    deviceConnectionManager?: DeviceConnectionManager;
+    lockdownService?: LockdownService;
+  } = {}
 ) {
   const eventBus = new EventBus();
   const toolRegistry = new ToolRegistry();
@@ -72,6 +77,7 @@ function setup(
     eventBus,
     deviceRegistry: options.deviceRegistry,
     deviceConnectionManager: options.deviceConnectionManager,
+    lockdownService: options.lockdownService,
   });
   return { orchestrator, conversation, eventBus, toolRegistry, permissionService };
 }
@@ -88,6 +94,26 @@ class MockDeviceConnection implements DeviceConnection {
 }
 
 describe("Orchestrator integration", () => {
+  test("rejects an oversized message before it ever reaches the brain or conversation history", async () => {
+    const brain = new ScriptedBrain([]); // would throw if ever called — proves the brain is never reached
+    const { orchestrator, conversation } = setup(brain);
+
+    const response = await orchestrator.handleUserMessage("user-1", "x".repeat(8_001));
+
+    expect(response).toContain("too long");
+    expect(brain.callCount).toBe(0);
+    expect(conversation.getMessages()).toHaveLength(0);
+  });
+
+  test("accepts a message right at the length limit", async () => {
+    const brain = new ScriptedBrain([{ text: "ok", toolCalls: [], stopReason: "end_turn" }]);
+    const { orchestrator } = setup(brain);
+
+    const response = await orchestrator.handleUserMessage("user-1", "x".repeat(8_000));
+
+    expect(response).toBe("ok");
+  });
+
   test("completes a full mocked Claude -> tool -> result -> Claude loop", async () => {
     const tool = makeEchoTool("ECHO_TOOL");
     const brain = new ScriptedBrain([
@@ -111,6 +137,30 @@ describe("Orchestrator integration", () => {
       success: true,
       data: { hello: "world" },
     });
+  });
+
+  test("tool.executed carries the userId and exact input, for a durable audit trail", async () => {
+    const tool = makeEchoTool("ECHO_TOOL");
+    const brain = new ScriptedBrain([
+      {
+        text: "",
+        toolCalls: [{ id: "call-1", toolName: "echo_tool", input: { hello: "world" } }],
+        stopReason: "tool_use",
+      },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const { orchestrator, eventBus } = setup(brain, [tool]);
+    let captured: { toolName: string; userId: string; input: Record<string, unknown> } | undefined;
+    eventBus.on("tool.executed", (payload) => {
+      captured = payload;
+    });
+
+    await orchestrator.handleUserMessage("user-42", "please echo hello world");
+
+    expect(captured?.toolName).toBe("echo_tool");
+    expect(captured?.userId).toBe("user-42");
+    expect(captured?.input).toEqual({ hello: "world" });
   });
 
   test("returns Claude's text directly when no tool call is requested", async () => {
@@ -143,6 +193,64 @@ describe("Orchestrator integration", () => {
     expect(parsed.error).toMatch(/Permission denied/);
   });
 
+  test("emergency lockdown refuses a SAFE_ACTION tool even with a standing grant", async () => {
+    const safeTool = makeEchoTool("SAFE_TOOL", PermissionLevel.SAFE_ACTION);
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "safe_tool", input: {} }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const lockdownService = new LockdownService();
+    lockdownService.activate("test");
+    const { orchestrator, conversation, permissionService } = setup(brain, [safeTool], { lockdownService });
+    permissionService.grant("user-1", safeTool.id);
+
+    await orchestrator.handleUserMessage("user-1", "do the safe thing");
+
+    const toolResult = conversation.getMessages().find((m) => m.role === "tool");
+    const parsed = JSON.parse((toolResult as { content: string }).content);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toMatch(/lockdown/i);
+  });
+
+  test("emergency lockdown does not block a READ tool", async () => {
+    const readTool = makeEchoTool("READ_TOOL");
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "read_tool", input: {} }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const lockdownService = new LockdownService();
+    lockdownService.activate();
+    const { orchestrator, conversation } = setup(brain, [readTool], { lockdownService });
+
+    await orchestrator.handleUserMessage("user-1", "just read something");
+
+    const toolResult = conversation.getMessages().find((m) => m.role === "tool");
+    const parsed = JSON.parse((toolResult as { content: string }).content);
+    expect(parsed.success).toBe(true);
+  });
+
+  test("lifting lockdown restores normal tool execution", async () => {
+    const safeTool = makeEchoTool("SAFE_TOOL2", PermissionLevel.SAFE_ACTION);
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "safe_tool2", input: {} }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const lockdownService = new LockdownService();
+    lockdownService.activate();
+    lockdownService.deactivate();
+    const { orchestrator, conversation, permissionService } = setup(brain, [safeTool], { lockdownService });
+    permissionService.grant("user-1", safeTool.id);
+
+    await orchestrator.handleUserMessage("user-1", "do the safe thing");
+
+    const toolResult = conversation.getMessages().find((m) => m.role === "tool");
+    const parsed = JSON.parse((toolResult as { content: string }).content);
+    expect(parsed.success).toBe(true);
+  });
+
   test("appends channelContext to the system prompt for a channel-specific Orchestrator", async () => {
     const eventBus = new EventBus();
     const toolRegistry = new ToolRegistry();
@@ -169,6 +277,68 @@ describe("Orchestrator integration", () => {
     await orchestrator.handleUserMessage("user-1", "hi");
 
     expect(capturedContext).toContain("live phone call");
+  });
+
+  test("appends contextProvider's output to the system prompt, called fresh each turn", async () => {
+    const eventBus = new EventBus();
+    const toolRegistry = new ToolRegistry();
+    const permissionService = new PermissionService();
+    const conversation = new ConversationManager(eventBus);
+
+    const capturedContexts: string[] = [];
+    const brain: Brain = {
+      async chat(request: BrainRequest): Promise<BrainResponse> {
+        capturedContexts.push(request.context ?? "");
+        return { text: "ok", toolCalls: [], stopReason: "end_turn" };
+      },
+    };
+
+    let callCount = 0;
+    const orchestrator = new Orchestrator({
+      brain,
+      conversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      contextProvider: () => {
+        callCount++;
+        return callCount === 1 ? "You have 1 reminder due." : undefined;
+      },
+    });
+
+    await orchestrator.handleUserMessage("user-1", "hi");
+    await orchestrator.handleUserMessage("user-1", "hi again");
+
+    expect(capturedContexts[0]).toContain("You have 1 reminder due.");
+    expect(capturedContexts[1]).not.toContain("reminder due");
+  });
+
+  test("a contextProvider returning undefined leaves the system prompt at its default", async () => {
+    const eventBus = new EventBus();
+    const toolRegistry = new ToolRegistry();
+    const permissionService = new PermissionService();
+    const conversation = new ConversationManager(eventBus);
+
+    let capturedContext = "";
+    const brain: Brain = {
+      async chat(request: BrainRequest): Promise<BrainResponse> {
+        capturedContext = request.context ?? "";
+        return { text: "ok", toolCalls: [], stopReason: "end_turn" };
+      },
+    };
+
+    const orchestrator = new Orchestrator({
+      brain,
+      conversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      contextProvider: () => undefined,
+    });
+
+    await orchestrator.handleUserMessage("user-1", "hi");
+
+    expect(capturedContext).not.toContain("undefined");
   });
 
   test("reports an unknown tool name back to Claude instead of throwing", async () => {

@@ -25,7 +25,22 @@ primary_region = "iad"
 
 [env]
   JARVIS_PORT = "4770"
+  # All four SQLite databases point at the mounted volume below — without
+  # this, only JARVIS_MEMORY_DB_PATH would survive a restart/redeploy, and
+  # Face ID credentials, reminders, and activity history would silently
+  # reset to empty every time the machine restarts despite the volume
+  # existing right there.
   JARVIS_MEMORY_DB_PATH = "/data/jarvis-memory.sqlite"
+  JARVIS_WEBAUTHN_DB_PATH = "/data/jarvis-webauthn.sqlite"
+  JARVIS_REMINDERS_DB_PATH = "/data/jarvis-reminders.sqlite"
+  JARVIS_ACTIVITY_LOG_DB_PATH = "/data/jarvis-activity.sqlite"
+  JARVIS_CONVERSATION_HISTORY_DB_PATH = "/data/jarvis-conversation-history.sqlite"
+  JARVIS_PAIRING_DB_PATH = "/data/jarvis-pairing.sqlite"
+  JARVIS_DEVICE_REGISTRY_DB_PATH = "/data/jarvis-devices.sqlite"
+  JARVIS_TOOL_AUDIT_LOG_DB_PATH = "/data/jarvis-tool-audit.sqlite"
+  JARVIS_TOKEN_USAGE_DB_PATH = "/data/jarvis-token-usage.sqlite"
+  JARVIS_WAKEUP_CALL_DB_PATH = "/data/jarvis-wakeup-calls.sqlite"
+  JARVIS_CALENDAR_TOKEN_DB_PATH = "/data/jarvis-calendar-tokens.sqlite"
 
 [http_service]
   internal_port = 4770
@@ -33,6 +48,13 @@ primary_region = "iad"
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
 
 [[mounts]]
   source = "jarvis_data"

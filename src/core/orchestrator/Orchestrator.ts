@@ -9,8 +9,9 @@ import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import type { ConfirmationService } from "@/core/confirmation/ConfirmationService";
 import type { DeviceTool, LocalTool, Tool, ToolResult } from "@/types/tools";
-import type { PermissionCheckResult } from "@/types/permissions";
+import { PermissionLevel, type PermissionCheckResult } from "@/types/permissions";
 import { JARVIS_SYSTEM_PROMPT } from "@/core/brain/systemPrompt";
+import type { LockdownService } from "@/core/lockdown/LockdownService";
 
 export interface OrchestratorDependencies {
   brain: Brain;
@@ -30,9 +31,38 @@ export interface OrchestratorDependencies {
    * (text-only) channel.
    */
   channelContext?: string;
+  /**
+   * Called fresh on every turn to get extra system-prompt context that can
+   * change between messages — e.g. due/overdue reminders. Returning
+   * undefined/empty adds nothing. Kept as a plain callback rather than a
+   * concrete dependency (a ReminderStore, say) so the Orchestrator stays
+   * decoupled from any specific source of "things worth mentioning right
+   * now" — this is what makes JARVIS proactively say "you have a reminder
+   * due" without the user having to ask, instead of only ever answering
+   * exactly what was asked.
+   */
+  contextProvider?: () => string | undefined | Promise<string | undefined>;
+  /**
+   * Optional break-glass kill switch. When active, every tool above READ
+   * is refused before it reaches a permission check or confirmation
+   * prompt — a single flag that stops JARVIS from taking any action at
+   * all (writing, sending, calling, touching a device) while it keeps
+   * answering questions normally. Omitted means the feature doesn't
+   * exist for this Orchestrator (never locked down).
+   */
+  lockdownService?: LockdownService;
 }
 
 const MAX_TOOL_ITERATIONS = 5;
+/**
+ * Generous for any real message (a long paste, a rambling phone
+ * transcript) but bounded — without this, a single oversized message
+ * (accidental paste, or a caller deliberately trying to run up cost/abuse
+ * the phone gateway) would go straight into the model with no limit at
+ * all. Rejected before touching the conversation or the brain at all, so
+ * it costs nothing and never pollutes conversation history.
+ */
+const MAX_USER_MESSAGE_LENGTH = 8_000;
 
 /**
  * The central JARVIS loop: user message -> Claude -> tool decision ->
@@ -46,8 +76,16 @@ export class Orchestrator {
   constructor(private readonly deps: OrchestratorDependencies) {}
 
   async handleUserMessage(userId: string, content: string): Promise<string> {
-    const { brain, conversation, toolRegistry, eventBus, channelContext } = this.deps;
-    const systemPrompt = channelContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${channelContext}` : JARVIS_SYSTEM_PROMPT;
+    const { brain, conversation, toolRegistry, eventBus, channelContext, contextProvider } = this.deps;
+    const extraContext = [channelContext, await contextProvider?.()].filter(Boolean).join("\n\n");
+    const systemPrompt = extraContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${extraContext}` : JARVIS_SYSTEM_PROMPT;
+
+    if (content.length > MAX_USER_MESSAGE_LENGTH) {
+      return (
+        `That message is too long (${content.length} characters, limit ${MAX_USER_MESSAGE_LENGTH}) — ` +
+        "please send something shorter."
+      );
+    }
 
     conversation.addUserMessage(content);
 
@@ -64,6 +102,7 @@ export class Orchestrator {
         text: response.text,
         toolCallCount: response.toolCalls.length,
         serverToolUses: response.serverToolUses,
+        usage: response.usage,
       });
 
       if (response.toolCalls.length === 0) {
@@ -82,7 +121,7 @@ export class Orchestrator {
   }
 
   private async runToolCall(userId: string, toolCall: ToolCallRequest): Promise<void> {
-    const { toolRegistry, eventBus } = this.deps;
+    const { toolRegistry, eventBus, lockdownService } = this.deps;
 
     eventBus.emit("tool.requested", { toolCall });
 
@@ -90,6 +129,14 @@ export class Orchestrator {
 
     if (!tool) {
       this.completeToolCall(toolCall, { success: false, error: `Unknown tool: ${toolCall.toolName}` });
+      return;
+    }
+
+    if (lockdownService?.isActive() && tool.requiredPermission !== PermissionLevel.READ) {
+      this.completeToolCall(toolCall, {
+        success: false,
+        error: "JARVIS is in emergency lockdown right now — only read-only actions are available.",
+      });
       return;
     }
 
@@ -166,7 +213,7 @@ export class Orchestrator {
     const requestId = randomUUID();
     const result = await tool.execute(toolCall.input, { userId, requestId });
 
-    eventBus.emit("tool.executed", { toolName: tool.name, requestId, result });
+    eventBus.emit("tool.executed", { toolName: tool.name, requestId, result, userId, input: toolCall.input });
     this.completeToolCall(toolCall, result);
   }
 
@@ -217,7 +264,13 @@ export class Orchestrator {
 
     try {
       const result = await deviceConnectionManager.sendToolRequest(targetDevice.id, tool.name, toolCall.input);
-      eventBus.emit("tool.executed", { toolName: tool.name, requestId: toolCall.id, result });
+      eventBus.emit("tool.executed", {
+        toolName: tool.name,
+        requestId: toolCall.id,
+        result,
+        userId,
+        input: toolCall.input,
+      });
       this.completeToolCall(toolCall, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Remote tool execution failed";

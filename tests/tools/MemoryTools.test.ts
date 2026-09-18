@@ -2,6 +2,8 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { MemoryStore } from "@/memory/MemoryStore";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
+import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
+import { UndoStore } from "@/core/undo/UndoStore";
 import { PermissionLevel } from "@/types/permissions";
 
 const context = { userId: "user-1", requestId: "req-1" };
@@ -84,5 +86,64 @@ describe("SEARCH_MEMORY tool", () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual([]);
+  });
+});
+
+describe("DELETE_MEMORY tool", () => {
+  let store: MemoryStore;
+
+  beforeEach(() => {
+    store = new MemoryStore(":memory:");
+  });
+
+  afterEach(() => {
+    store.close();
+  });
+
+  test("is a local tool requiring SAFE_ACTION", () => {
+    const tool = createDeleteMemoryTool(store);
+    expect(tool.target).toBe("local");
+    expect(tool.requiredPermission).toBe(PermissionLevel.SAFE_ACTION);
+  });
+
+  test("deletes a fact by key", async () => {
+    store.save({ key: "user.oldJob", value: "Acme Corp" });
+    const tool = createDeleteMemoryTool(store);
+
+    const result = await tool.execute({ key: "user.oldJob" }, context);
+
+    expect(result.success).toBe(true);
+    expect(store.search("user.oldJob")).toEqual([]);
+  });
+
+  test("fails for an unknown key", async () => {
+    const tool = createDeleteMemoryTool(store);
+    const result = await tool.execute({ key: "missing" }, context);
+    expect(result.success).toBe(false);
+  });
+
+  test("rejects an empty key", async () => {
+    const tool = createDeleteMemoryTool(store);
+    const result = await tool.execute({ key: "" }, context);
+    expect(result.success).toBe(false);
+  });
+
+  test("records the deleted fact's key/value to the undo store, when given one", async () => {
+    store.save({ key: "user.oldJob", value: "Acme Corp" });
+    const undoStore = new UndoStore();
+    const tool = createDeleteMemoryTool(store, undoStore);
+
+    await tool.execute({ key: "user.oldJob" }, context);
+
+    expect(undoStore.takeLast()).toEqual({ type: "memory_deleted", key: "user.oldJob", value: "Acme Corp" });
+  });
+
+  test("does not record anything in the undo store on failure", async () => {
+    const undoStore = new UndoStore();
+    const tool = createDeleteMemoryTool(store, undoStore);
+
+    await tool.execute({ key: "missing" }, context);
+
+    expect(undoStore.takeLast()).toBeUndefined();
   });
 });

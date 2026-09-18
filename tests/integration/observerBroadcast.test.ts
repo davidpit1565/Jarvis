@@ -50,6 +50,8 @@ describe("Observer broadcast (/observer)", () => {
       toolName: "getActiveApplication",
       requestId: "req-123",
       result: { success: true, data: { app: "Safari" } },
+      userId: "local-user",
+      input: {},
     });
 
     const message = await received;
@@ -58,6 +60,8 @@ describe("Observer broadcast (/observer)", () => {
       toolName: "getActiveApplication",
       requestId: "req-123",
       result: { success: true, data: { app: "Safari" } },
+      userId: "local-user",
+      input: {},
     });
     expect(typeof message.timestamp).toBe("string");
 

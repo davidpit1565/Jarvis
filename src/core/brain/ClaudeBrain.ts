@@ -5,7 +5,7 @@ import type { ToolDefinition } from "@/types/tools";
 
 type ContentBlockParam = Anthropic.TextBlockParam | Anthropic.ToolUseBlockParam | Anthropic.ToolResultBlockParam;
 
-const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
+export const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TOKENS = 1024;
 const ANTHROPIC_API_BASE_URL = "https://api.anthropic.com";
 
@@ -21,6 +21,35 @@ export interface ClaudeBrainOptions {
    */
   webSearchEnabled?: boolean;
   webSearchMaxUses?: number;
+  /**
+   * Enables Anthropic's own server-side web_fetch tool — lets Claude
+   * actually open and read a specific URL's content (a page it found via
+   * web_search, or one the user gave directly), not just see a search
+   * snippet. Same account/billing as web_search, same reasoning for being
+   * an explicit opt-in (JARVIS_WEB_FETCH=true).
+   */
+  webFetchEnabled?: boolean;
+  webFetchMaxUses?: number;
+  /**
+   * Overrides the Anthropic API base URL — a deliberate, explicit opt-in
+   * only, distinct from the SDK's own ambient ANTHROPIC_BASE_URL support
+   * (see the constructor comment below for why that's never honored
+   * silently). Meant for pointing JARVIS at a local Anthropic-compatible
+   * gateway (e.g. a self-hosted model router) instead of Anthropic's own
+   * API, for cost reasons. Unset means "talk to the real Anthropic API,"
+   * always.
+   */
+  baseUrl?: string;
+  /**
+   * A cheaper/different model to retry against, once, if the primary
+   * model call fails with a retryable-but-exhausted error (429 rate
+   * limit, 503/529 overloaded) even after the SDK's own maxRetries. A
+   * degraded reply from a fallback model beats no reply at all during a
+   * provider outage or a rate-limit spike — this is a real-availability
+   * tradeoff, not a cost-saving default, so it's opt-in only
+   * (JARVIS_FALLBACK_MODEL unset means no fallback, ever).
+   */
+  fallbackModel?: string;
 }
 
 /**
@@ -34,18 +63,46 @@ export class ClaudeBrain implements Brain {
   private readonly maxTokens: number;
   private readonly webSearchEnabled: boolean;
   private readonly webSearchMaxUses: number;
+  private readonly webFetchEnabled: boolean;
+  private readonly webFetchMaxUses: number;
+  private readonly fallbackModel?: string;
 
   constructor(apiKey: string, options: ClaudeBrainOptions = {}) {
     this.model = options.model ?? DEFAULT_MODEL;
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.webSearchEnabled = options.webSearchEnabled ?? false;
     this.webSearchMaxUses = options.webSearchMaxUses ?? 5;
-    // baseURL is pinned explicitly: the Anthropic SDK otherwise honors an
-    // ambient ANTHROPIC_BASE_URL environment variable, which on a
-    // developer's machine may point at an unrelated local proxy/router
-    // (e.g. a different AI tool) — JARVIS must always talk to the real
-    // Anthropic API regardless of what else is configured on the host.
-    this.client = new Anthropic({ apiKey, baseURL: ANTHROPIC_API_BASE_URL });
+    this.webFetchEnabled = options.webFetchEnabled ?? false;
+    this.webFetchMaxUses = options.webFetchMaxUses ?? 5;
+    this.fallbackModel = options.fallbackModel;
+    // baseURL defaults to the real Anthropic API and is pinned there
+    // unless `options.baseUrl` is explicitly given: the Anthropic SDK
+    // otherwise honors an ambient ANTHROPIC_BASE_URL environment variable,
+    // which on a developer's machine may point at an unrelated local
+    // proxy/router (e.g. a different AI tool) — JARVIS must never silently
+    // pick that up. A deliberate `options.baseUrl` (from JARVIS's own
+    // JARVIS_ANTHROPIC_BASE_URL config, not the ambient SDK one) is the
+    // only way to point this at anything else.
+    //
+    // maxRetries/timeout are set explicitly rather than left at the SDK's
+    // own defaults (2 retries, 10 minutes) — 4 retries gives a call on a
+    // flaky connection (phone calls in particular can't just be asked to
+    // "try again") more chances to recover from a transient 429/5xx before
+    // giving up, and a 30s cap keeps a single stuck request from silently
+    // blocking a phone call or chat turn far longer than a human would
+    // ever wait. The SDK already backs off between retries and honors the
+    // API's Retry-After header — there is no reason to reimplement that.
+    this.client = new Anthropic({
+      apiKey,
+      baseURL: options.baseUrl ?? ANTHROPIC_API_BASE_URL,
+      maxRetries: 4,
+      timeout: 30_000,
+    });
+  }
+
+  /** Exposed for testing/diagnostics — the actual API base URL this instance talks to. */
+  get baseUrl(): string {
+    return this.client.baseURL;
   }
 
   async chat(request: BrainRequest): Promise<BrainResponse> {
@@ -53,19 +110,33 @@ export class ClaudeBrain implements Brain {
     const system = request.context ? request.context : undefined;
     const tools = this.buildTools(request.tools);
 
-    const response = await this.client.messages.create({
-      model: this.model,
+    const params = {
       max_tokens: this.maxTokens,
       system,
       messages,
       tools: tools.length > 0 ? tools : undefined,
-    });
+    };
 
-    return fromAnthropicResponse(response);
+    try {
+      const response = await this.client.messages.create({ model: this.model, ...params });
+      return fromAnthropicResponse(response);
+    } catch (error) {
+      if (this.fallbackModel && this.fallbackModel !== this.model && isRetryableWithFallback(error)) {
+        const response = await this.client.messages.create({ model: this.fallbackModel, ...params });
+        return fromAnthropicResponse(response);
+      }
+      throw error;
+    }
   }
 
   private buildTools(tools: ToolDefinition[]): Anthropic.ToolUnion[] {
-    return buildAnthropicTools(tools, this.webSearchEnabled, this.webSearchMaxUses);
+    return buildAnthropicTools(
+      tools,
+      this.webSearchEnabled,
+      this.webSearchMaxUses,
+      this.webFetchEnabled,
+      this.webFetchMaxUses
+    );
   }
 }
 
@@ -73,7 +144,9 @@ export class ClaudeBrain implements Brain {
 export function buildAnthropicTools(
   tools: ToolDefinition[],
   webSearchEnabled: boolean,
-  webSearchMaxUses: number
+  webSearchMaxUses: number,
+  webFetchEnabled: boolean = false,
+  webFetchMaxUses: number = 5
 ): Anthropic.ToolUnion[] {
   const result: Anthropic.ToolUnion[] = toAnthropicTools(tools);
   if (webSearchEnabled) {
@@ -82,7 +155,23 @@ export function buildAnthropicTools(
     // model than JARVIS defaults to.
     result.push({ type: "web_search_20250305", name: "web_search", max_uses: webSearchMaxUses });
   }
+  if (webFetchEnabled) {
+    // Same reasoning as web_search above: the "20250910" (basic) variant
+    // works with any current model.
+    result.push({ type: "web_fetch_20250910", name: "web_fetch", max_uses: webFetchMaxUses });
+  }
   return result;
+}
+
+/**
+ * True only for the specific errors a fallback model can actually help
+ * with — the primary model itself being rate-limited or overloaded, after
+ * the SDK's own maxRetries gave up. Anything else (a bad request, an auth
+ * failure, a genuine tool-input problem) would fail identically on the
+ * fallback model too, so it's not worth the extra latency of trying.
+ */
+export function isRetryableWithFallback(error: unknown): boolean {
+  return error instanceof Anthropic.APIError && (error.status === 429 || error.status === 503 || error.status === 529);
 }
 
 function toAnthropicTools(tools: ToolDefinition[]): Anthropic.Tool[] {
@@ -156,5 +245,11 @@ export function fromAnthropicResponse(response: Anthropic.Message): BrainRespons
     toolCalls,
     stopReason: response.stop_reason ?? "unknown",
     serverToolUses: serverToolUses.length > 0 ? serverToolUses : undefined,
+    usage: {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? 0,
+      cacheReadInputTokens: response.usage.cache_read_input_tokens ?? 0,
+    },
   };
 }
