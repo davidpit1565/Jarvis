@@ -37,6 +37,8 @@ import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { createListCalendarEventsTool } from "@/tools/calendar/ListCalendarEventsTool";
 import { createUnlinkCalendarTool } from "@/tools/calendar/UnlinkCalendarTool";
+import { createCreateCalendarEventTool } from "@/tools/calendar/CreateCalendarEventTool";
+import { createDeleteCalendarEventTool } from "@/tools/calendar/DeleteCalendarEventTool";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -114,6 +116,8 @@ function main() {
     : undefined;
   if (calendarClient) {
     toolRegistry.registerTool(createListCalendarEventsTool(calendarClient));
+    toolRegistry.registerTool(createCreateCalendarEventTool(calendarClient));
+    toolRegistry.registerTool(createDeleteCalendarEventTool(calendarClient));
     toolRegistry.registerTool(createUnlinkCalendarTool(calendarTokenStore));
   }
 
@@ -145,6 +149,8 @@ function main() {
   // grant — this never lets JARVIS erase the transcript silently.
   permissionService.grant(DEFAULT_USER_ID, "CLEAR_CONVERSATION_HISTORY");
   if (calendarClient) {
+    permissionService.grant(DEFAULT_USER_ID, "CREATE_CALENDAR_EVENT");
+    permissionService.grant(DEFAULT_USER_ID, "DELETE_CALENDAR_EVENT");
     // Same DANGEROUS reasoning as CLEAR_CONVERSATION_HISTORY above.
     permissionService.grant(DEFAULT_USER_ID, "UNLINK_CALENDAR");
   }

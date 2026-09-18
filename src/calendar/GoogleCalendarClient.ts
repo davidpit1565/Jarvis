@@ -1,10 +1,14 @@
 import type { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
-import type { CalendarEvent } from "@/types/calendar";
+import type { CalendarEvent, CreateCalendarEventInput } from "@/types/calendar";
 
 const GOOGLE_OAUTH_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
-const CALENDAR_READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+// Full read/write access — not just calendar.readonly. JARVIS creating an
+// event on request is a real, requested feature; the tool layer (CONFIRM
+// permission level) is what actually gates when that's allowed to happen,
+// not the OAuth scope.
+const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar";
 
 // Refresh a little before actual expiry, so a request never straddles the
 // exact expiry instant and gets rejected mid-flight by Google's clock
@@ -12,11 +16,11 @@ const CALENDAR_READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.readon
 const TOKEN_EXPIRY_SAFETY_MARGIN_MS = 60_000;
 
 /**
- * Read-only Google Calendar access via raw fetch calls to Google's OAuth2
- * and Calendar v3 REST APIs — no SDK dependency, matching this project's
- * existing style (see TwilioOutboundCaller). Read-only scope only:
- * JARVIS has no business creating/editing the user's actual calendar,
- * only knowing what's on it.
+ * Google Calendar access via raw fetch calls to Google's OAuth2 and
+ * Calendar v3 REST APIs — no SDK dependency, matching this project's
+ * existing style (see TwilioOutboundCaller). Supports both reading and
+ * creating events; the tool layer (READ vs. CONFIRM permission level) is
+ * what actually gates when each is allowed to happen, not this class.
  */
 export class GoogleCalendarClient {
   constructor(
@@ -32,7 +36,7 @@ export class GoogleCalendarClient {
     url.searchParams.set("client_id", this.clientId);
     url.searchParams.set("redirect_uri", this.redirectUri);
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", CALENDAR_READONLY_SCOPE);
+    url.searchParams.set("scope", CALENDAR_SCOPE);
     // offline + consent: without both, Google may not issue a refresh
     // token at all on a repeat authorization, silently leaving JARVIS
     // unable to refresh access after the short-lived access token expires.
@@ -148,5 +152,61 @@ export class GoogleCalendarClient {
       end: item.end.dateTime ?? item.end.date ?? "",
       location: item.location ?? null,
     }));
+  }
+
+  /** Creates a new event on the user's primary calendar. Returns the created event. */
+  async createEvent(input: CreateCalendarEventInput): Promise<CalendarEvent> {
+    const accessToken = await this.getValidAccessToken();
+
+    const response = await fetch(GOOGLE_CALENDAR_EVENTS_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        summary: input.summary,
+        location: input.location ?? undefined,
+        start: { dateTime: input.start },
+        end: { dateTime: input.end },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Google Calendar event creation failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+
+    const item = (await response.json()) as {
+      id: string;
+      summary?: string;
+      location?: string;
+      start: { dateTime?: string; date?: string };
+      end: { dateTime?: string; date?: string };
+    };
+
+    return {
+      id: item.id,
+      summary: item.summary ?? "(no title)",
+      start: item.start.dateTime ?? item.start.date ?? "",
+      end: item.end.dateTime ?? item.end.date ?? "",
+      location: item.location ?? null,
+    };
+  }
+
+  /** Deletes an event from the user's primary calendar by its id. */
+  async deleteEvent(eventId: string): Promise<void> {
+    const accessToken = await this.getValidAccessToken();
+
+    const response = await fetch(`${GOOGLE_CALENDAR_EVENTS_URL}/${encodeURIComponent(eventId)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    // Google returns 204 on success and 410 if the event was already
+    // deleted — both mean "the event isn't there anymore," which is what
+    // the caller wanted, so 410 isn't treated as failure.
+    if (!response.ok && response.status !== 410) {
+      throw new Error(`Google Calendar event deletion failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
   }
 }

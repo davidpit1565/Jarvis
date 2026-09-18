@@ -6,3 +6,12 @@ export interface CalendarEvent {
   end: string;
   location: string | null;
 }
+
+export interface CreateCalendarEventInput {
+  summary: string;
+  /** ISO 8601 timestamp the event starts at. */
+  start: string;
+  /** ISO 8601 timestamp the event ends at. */
+  end: string;
+  location?: string | null;
+}

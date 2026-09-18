@@ -586,13 +586,13 @@ another reminder notification.
 - Real Twilio per-minute cost applies to every call actually placed —
   same pricing as the inbound gateway, just outbound-initiated.
 
-## Calendar integration (read-only Google Calendar)
+## Calendar integration (Google Calendar)
 
 Lets JARVIS answer "what's on my calendar" / "am I free at 3pm" with your
-actual Google Calendar, and lets reminders/wake-up calls reference real
-meetings instead of only what's been manually typed in. Read-only by
-design — JARVIS never creates, edits, or deletes calendar events, only
-looks at them.
+actual Google Calendar, lets reminders/wake-up calls reference real
+meetings instead of only what's been manually typed in, and lets you
+actually ask it to add or remove events — "add a dentist appointment
+tomorrow at 3pm" really puts it on your calendar.
 
 **Setup** (Google Cloud Console, one-time, done manually — this can't be
 automated from here):
@@ -621,10 +621,17 @@ automated from here):
 - **`LIST_CALENDAR_EVENTS`** (`READ`) — the user's upcoming events,
   soonest first, via Google's Calendar API v3 (`src/calendar/GoogleCalendarClient.ts`,
   raw `fetch` calls, no SDK dependency, matching this project's existing
-  style — see `TwilioOutboundCaller`). **`UNLINK_CALENDAR`** (`DANGEROUS`,
-  like `CLEAR_CONVERSATION_HISTORY`) actually disconnects the linked
-  account on request — before this, the only way to undo a link was
-  manually deleting the SQLite file.
+  style — see `TwilioOutboundCaller`).
+- **`CREATE_CALENDAR_EVENT`** and **`DELETE_CALENDAR_EVENT`** (both
+  `SAFE_ACTION`, standing-granted, matching `create_reminder`/
+  `delete_reminder`) — real write access: JARVIS can actually put
+  something on the calendar or take it off, not just read it. The OAuth
+  scope requested is full `.../auth/calendar` (not `.readonly`) for
+  exactly this reason — the permission-level check at the tool layer is
+  what actually gates when writes happen, not the OAuth scope.
+  **`UNLINK_CALENDAR`** (`DANGEROUS`, like `CLEAR_CONVERSATION_HISTORY`)
+  actually disconnects the linked account on request — before this, the
+  only way to undo a link was manually deleting the SQLite file.
 - OAuth tokens (the refresh token and current access token) are persisted
   to their own SQLite database (`src/calendar/CalendarTokenStore.ts`,
   `JARVIS_CALENDAR_TOKEN_DB_PATH`) — access tokens are refreshed
