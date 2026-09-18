@@ -16,7 +16,21 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "JarvisAgent",
-            path: "Sources/JarvisAgent"
+            path: "Sources/JarvisAgent",
+            // Embeds Resources/Info.plist into the compiled binary's own
+            // Mach-O __TEXT,__info_plist section — the standard way a raw
+            // `swift build` executable (not an .app bundle) gets an
+            // Info.plist at all. Without it, macOS/TCC never shows the
+            // microphone/Speech-Recognition permission prompts at all,
+            // so WakeWordListener silently never starts.
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Resources/Info.plist",
+                ])
+            ]
         )
     ]
 )
