@@ -1,0 +1,22 @@
+name: Deploy to Fly.io
+
+# Every push to main goes live automatically — no manual `fly deploy` step,
+# no flyctl needed on anyone's laptop. Requires a FLY_API_TOKEN repo secret
+# (Fly dashboard -> Account -> Tokens -> create a deploy token scoped to
+# this app, then GitHub repo Settings -> Secrets and variables -> Actions).
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    concurrency: deploy-group
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
