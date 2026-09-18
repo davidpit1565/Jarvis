@@ -6,6 +6,7 @@ import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnect
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { ReminderStore } from "@/reminders/ReminderStore";
 import { MemoryStore } from "@/memory/MemoryStore";
+import { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
 
 let activeHandle: { stop: (force?: boolean) => void } | undefined;
 
@@ -18,6 +19,7 @@ function setupServer(opts: {
   adminToken?: string;
   reminderStore?: ReminderStore;
   memoryStore?: MemoryStore;
+  wakeUpCallStore?: WakeUpCallStore;
 }) {
   const eventBus = new EventBus();
   const server = new JarvisWebSocketServer({
@@ -28,6 +30,7 @@ function setupServer(opts: {
     adminToken: opts.adminToken,
     reminderStore: opts.reminderStore,
     memoryStore: opts.memoryStore,
+    wakeUpCallStore: opts.wakeUpCallStore,
   });
   const handle = server.start(0);
   activeHandle = handle;
@@ -112,5 +115,46 @@ describe("GET /memory", () => {
     expect(data.memory).toHaveLength(2);
     expect(data.memory.some((m) => m.key === "user.name" && m.value === "David")).toBe(true);
     memoryStore.close();
+  });
+});
+
+describe("GET /wakeup-calls", () => {
+  test("404s when no WakeUpCallStore is configured", async () => {
+    const handle = setupServer({});
+    const response = await fetch(`http://localhost:${handle.port}/wakeup-calls`);
+    expect(response.status).toBe(404);
+  });
+
+  test("401s with a missing or wrong admin token when one is configured", async () => {
+    const wakeUpCallStore = new WakeUpCallStore(":memory:");
+    const handle = setupServer({ adminToken: "secret-token", wakeUpCallStore });
+
+    const response = await fetch(`http://localhost:${handle.port}/wakeup-calls`);
+    expect(response.status).toBe(401);
+    wakeUpCallStore.close();
+  });
+
+  test("lists the wake-up call schedule with a valid admin token", async () => {
+    const wakeUpCallStore = new WakeUpCallStore(":memory:");
+    wakeUpCallStore.create({ timeOfDay: "07:00", label: "weekday" });
+
+    const handle = setupServer({ adminToken: "secret-token", wakeUpCallStore });
+    const response = await fetch(`http://localhost:${handle.port}/wakeup-calls`, {
+      headers: { "X-Jarvis-Admin-Token": "secret-token" },
+    });
+
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as { wakeUpCalls: { timeOfDay: string; label: string | null }[] };
+    expect(data.wakeUpCalls).toHaveLength(1);
+    expect(data.wakeUpCalls[0]?.timeOfDay).toBe("07:00");
+    wakeUpCallStore.close();
+  });
+
+  test("works without an admin token when none is configured (local dev)", async () => {
+    const wakeUpCallStore = new WakeUpCallStore(":memory:");
+    const handle = setupServer({ wakeUpCallStore });
+    const response = await fetch(`http://localhost:${handle.port}/wakeup-calls`);
+    expect(response.status).toBe(200);
+    wakeUpCallStore.close();
   });
 });

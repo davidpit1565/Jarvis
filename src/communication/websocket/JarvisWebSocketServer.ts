@@ -17,6 +17,7 @@ import type { MemoryStore } from "@/memory/MemoryStore";
 import type { ToolAuditLog } from "@/audit/ToolAuditLog";
 import type { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import type { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
@@ -126,6 +127,8 @@ export interface JarvisWebSocketServerDependencies {
    * both routes 404.
    */
   calendarClient?: GoogleCalendarClient;
+  /** Optional: enables the admin-gated GET /wakeup-calls read-only endpoint. */
+  wakeUpCallStore?: WakeUpCallStore;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -282,6 +285,10 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/reminders") {
             return this.handleRemindersHttp(req);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/wakeup-calls") {
+            return this.handleWakeUpCallsHttp(req);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/memory") {
@@ -704,6 +711,21 @@ export class JarvisWebSocketServer {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
     }
     return Response.json({ reminders: reminderStore.list(true) });
+  }
+
+  /**
+   * GET /wakeup-calls — read-only admin view of the recurring wake-up
+   * call schedule. Same admin-token gating rationale as GET /reminders.
+   */
+  private handleWakeUpCallsHttp(req: Request): Response {
+    const { adminToken, wakeUpCallStore } = this.deps;
+    if (!wakeUpCallStore) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ wakeUpCalls: wakeUpCallStore.list() });
   }
 
   /**

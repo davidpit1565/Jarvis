@@ -971,12 +971,13 @@ querying SQLite directly.
 
 ## Inspecting what JARVIS remembers
 
-`GET /reminders` and `GET /memory` are read-only JSON views of everything
-stored in `ReminderStore` (including completed reminders) and
-`MemoryStore` — for actually seeing what JARVIS is tracking without
-having to ask it in conversation. Same `X-Jarvis-Admin-Token` gating as
-`POST /pairing/approve`: required whenever an admin token is configured,
-optional only for local development with none set.
+`GET /reminders`, `GET /memory`, and `GET /wakeup-calls` are read-only
+JSON views of everything stored in `ReminderStore` (including completed
+reminders), `MemoryStore`, and `WakeUpCallStore` — for actually seeing
+what JARVIS is tracking without having to ask it in conversation. Same
+`X-Jarvis-Admin-Token` gating as `POST /pairing/approve`: required
+whenever an admin token is configured, optional only for local
+development with none set.
 
 ## Reliability
 

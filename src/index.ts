@@ -312,6 +312,7 @@ function main() {
     toolAuditLog,
     conversationHistoryStore,
     calendarClient,
+    wakeUpCallStore,
     dataDirectory: config.memoryDbPath === ":memory:" ? undefined : dirname(config.memoryDbPath),
     backupDbPaths: [
       config.memoryDbPath,
