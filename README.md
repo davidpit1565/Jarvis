@@ -768,6 +768,13 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   in `ClaudeBrain`) rather than left at the SDK's own defaults, so a
   transient 429/5xx gets more chances to recover before a phone call or
   chat turn gives up.
+- **`ConversationManager` is bounded to the last 50 user turns**, trimming
+  whole turns (never mid-turn — that could orphan half of a `tool_use`/
+  `tool_result` pair and break the next API call). The terminal chat loop
+  runs for as long as the process stays up, with no restart between
+  messages — without a cap, it would resend an ever-growing history on
+  every single API call forever, a real and unbounded cost that eventually
+  risks exceeding the model's context window outright.
 - **Every file-backed SQLite store uses WAL journal mode**, not SQLite's
   default rollback journal — lets a read and a write against the same
   store happen concurrently without blocking each other (e.g. the
