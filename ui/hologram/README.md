@@ -193,6 +193,16 @@ request reaches Core fine. Covered by `tests/integration/statusHttp.test.ts`.
 
 Covered by `tests/integration/observerBroadcast.test.ts`.
 
+Every panel sits on a flat, solid `rgba(3,12,16,0.5)` backing plate rather
+than floating bare over the scene — the Core's outer ring is large enough
+that at some viewport widths it passes directly behind a panel's heading,
+and bare text there got its first letter visually clipped by the ring
+underneath it. A solid plate keeps every panel legible regardless of what
+the Core is doing behind it. Deliberately not `backdrop-filter`: blurring
+a handful of overlapping translucent layers at once is a known Chrome
+renderer crash risk on some GPUs, so a plain flat fill is used instead —
+same visual job, zero risk, no blur cost.
+
 ## Voice reactivity — real audio analysis, no TTS to plug it into yet
 
 The Core visibly brightens, grows, and spins faster in response to live
@@ -216,6 +226,23 @@ WhatsApp voice-message waveform draws from the same `AnalyserNode` in real
 time — a flat near-zero line whenever nothing is connected, never a
 fabricated idle waveform, lighting up green the moment the mic (or, later,
 TTS output) is connected.
+
+A second, separate **VOICE panel** sits on the right side of the screen
+(below CORE STATUS) with its own 24-bar frequency spectrum
+(`#voice-spectrum`). Unlike `#voice-bars` above, which shows one averaged
+loudness value scrolling over time, this reads the same per-frame
+`AnalyserNode.getByteFrequencyData()` array directly and draws each
+frequency bin as its own bar — so you can actually see how the voice's
+frequency content is shaped (bass-heavy vs. bright, a hard consonant vs. a
+sustained vowel), not just how loud it is. Only the lower ~60% of the FFT's
+bins are drawn, since that's where speech energy concentrates and the
+upper bins would otherwise sit flat. Every bar renders at a small non-zero
+floor height even at zero signal (so the panel always reads as "a
+spectrum," not "a broken canvas") and brightens from a dim cyan-to-amber
+gradient to a fully lit one the moment real audio is flowing — same
+honesty rule as everywhere else on this page: dim/idle when nothing is
+connected, never a fabricated animation. Its heading badge flips
+IDLE → LIVE in sync with the mic connect button.
 
 ## Webcam face tracking — the Core turns to face you, for real
 
