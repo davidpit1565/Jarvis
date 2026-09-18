@@ -20,6 +20,12 @@ export interface JarvisConfig {
   deviceRegistryDbPath: string;
   /** Path to the SQLite database storing the structured tool-execution audit trail. */
   toolAuditLogDbPath: string;
+  /**
+   * IANA timezone (e.g. "Asia/Jerusalem") used to tell Claude the user's
+   * local time every turn, so relative times ("tomorrow at 9am") resolve
+   * correctly. Defaults to UTC — set this to your actual timezone.
+   */
+  timezone: string;
   /** Both must be set together to enable the optional Twilio phone gateway. */
   twilioAuthToken?: string;
   /**
@@ -110,6 +116,13 @@ export function loadConfig(): JarvisConfig {
   const deviceRegistryDbPath = process.env.JARVIS_DEVICE_REGISTRY_DB_PATH ?? "./data/jarvis-devices.sqlite";
   const toolAuditLogDbPath = process.env.JARVIS_TOOL_AUDIT_LOG_DB_PATH ?? "./data/jarvis-tool-audit.sqlite";
 
+  const timezone = process.env.JARVIS_TIMEZONE?.trim() || "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
+  } catch {
+    throw new ConfigError(`Invalid JARVIS_TIMEZONE: "${timezone}" is not a recognized IANA timezone name`);
+  }
+
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new ConfigError(`Invalid JARVIS_PORT: must be an integer between 1 and 65535`);
   }
@@ -165,6 +178,7 @@ export function loadConfig(): JarvisConfig {
     pairingDbPath,
     deviceRegistryDbPath,
     toolAuditLogDbPath,
+    timezone,
     twilioAuthToken,
     twilioPublicBaseUrl,
     twilioAllowedCallers,

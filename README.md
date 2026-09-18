@@ -120,6 +120,19 @@ memory store (`src/memory/MemoryStore.ts`) that survives restarts:
 This is the first real step toward "JARVIS knows things about you between
 conversations" rather than only within a single session.
 
+## JARVIS knows what time it actually is
+
+A real gap found in this session's own research: JARVIS never told Claude
+the current date/time at all. Training data has no idea what day it is
+right now, so "remind me tomorrow at 9am" or "in two hours" had no ground
+truth to resolve against — the model could only guess. Every turn now
+includes the current date/time in both UTC and the configured local
+timezone (`src/core/time/currentTimeNote.ts`, part of the same
+`contextProvider` mechanism as due-reminder surfacing —
+`src/core/buildContextNote.ts`). Set `JARVIS_TIMEZONE` (an IANA name like
+`Asia/Jerusalem`; validated at startup) to your actual timezone — it
+defaults to UTC, which is almost certainly not where you actually are.
+
 ## Reminders / tasks
 
 A separate SQLite-backed store (`src/reminders/ReminderStore.ts`,

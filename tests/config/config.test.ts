@@ -17,6 +17,7 @@ const ENV_KEYS = [
   "JARVIS_WEB_FETCH",
   "JARVIS_WEB_FETCH_MAX_USES",
   "JARVIS_AUDIO_WAVEFORM",
+  "JARVIS_TIMEZONE",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -185,5 +186,21 @@ describe("loadConfig", () => {
     process.env.JARVIS_AUDIO_WAVEFORM = "true";
     const config = loadConfig();
     expect(config.audioWaveformEnabled).toBe(true);
+  });
+
+  test("defaults timezone to UTC", () => {
+    const config = loadConfig();
+    expect(config.timezone).toBe("UTC");
+  });
+
+  test("reads a valid JARVIS_TIMEZONE", () => {
+    process.env.JARVIS_TIMEZONE = "Asia/Jerusalem";
+    const config = loadConfig();
+    expect(config.timezone).toBe("Asia/Jerusalem");
+  });
+
+  test("rejects an invalid JARVIS_TIMEZONE", () => {
+    process.env.JARVIS_TIMEZONE = "Not/A_Real_Zone";
+    expect(() => loadConfig()).toThrow(ConfigError);
   });
 });
