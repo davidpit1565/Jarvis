@@ -191,7 +191,10 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background: radial-gradient(circle at 50% -10%, #0d1a20 0%, var(--bg) 60%);
+    background:
+      repeating-linear-gradient(0deg, rgba(79, 214, 232, 0.03) 0px, rgba(79, 214, 232, 0.03) 1px, transparent 1px, transparent 32px),
+      repeating-linear-gradient(90deg, rgba(79, 214, 232, 0.03) 0px, rgba(79, 214, 232, 0.03) 1px, transparent 1px, transparent 32px),
+      radial-gradient(circle at 50% -10%, #0d1a20 0%, var(--bg) 60%);
     color: var(--text);
     font-family: "SF Mono", "Consolas", "Menlo", monospace;
     min-height: 100vh;
@@ -229,6 +232,38 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   }
   @media (min-width: 640px) {
     .side-panel { display: block; }
+  }
+  .hologram-ring {
+    position: relative;
+    width: 260px;
+    height: 260px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .hologram-ring::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 1px solid var(--cyan-dim);
+    opacity: 0.5;
+  }
+  .hologram-ring::after {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent 0deg 300deg, rgba(79, 214, 232, 0.45) 360deg);
+    animation: radarSweep 4s linear infinite;
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  }
+  @keyframes radarSweep {
+    to { transform: rotate(360deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hologram-ring::after { animation: none; }
   }
   .hologram-frame {
     position: relative;
@@ -339,10 +374,39 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
     gap: 16px;
   }
   section {
-    background: var(--panel);
+    position: relative;
+    background: rgba(12, 17, 24, 0.65);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 4px;
     padding: 16px 18px;
+  }
+  /* HUD corner brackets — a small accent on each panel corner, the
+     recognizable "targeting frame" look of sci-fi interfaces, done with
+     plain borders (no images) so it stays crisp at any size. */
+  section::before,
+  section::after {
+    content: "";
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-color: var(--cyan-dim);
+    border-style: solid;
+    border-width: 0;
+    pointer-events: none;
+  }
+  section::before {
+    top: -1px;
+    left: -1px;
+    border-top-width: 2px;
+    border-left-width: 2px;
+  }
+  section::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom-width: 2px;
+    border-right-width: 2px;
   }
   section h2 {
     margin: 0 0 12px;
@@ -438,8 +502,10 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   <header>
     <div class="hologram">
       <div class="side-panel" id="side-left"></div>
-      <div class="hologram-frame" id="hologram-frame">
-        <img src="/assets/hologram.jpg" class="hologram-img" alt="JARVIS" />
+      <div class="hologram-ring">
+        <div class="hologram-frame" id="hologram-frame">
+          <img src="/assets/hologram.jpg" class="hologram-img" alt="JARVIS" />
+        </div>
       </div>
       <div class="side-panel right" id="side-right"></div>
     </div>
