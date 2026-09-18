@@ -1031,6 +1031,14 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   `SIGTERM`, booted a fresh process against the same database files, and
   confirmed the device reconnected with its existing credential (no new
   pairing code needed) with its `primary` role still intact.
+- **Abandoned pairing attempts no longer accumulate in memory forever** —
+  found and fixed during this session's own review: `PairingService`'s
+  pending-pairing map is keyed by `deviceId`, which a client fully
+  controls, and an expired entry only ever got cleaned up lazily when
+  something looked it up again for that exact deviceId — which an
+  abandoned attempt, by definition, never does. `requestPairing` now
+  opportunistically purges every other device's expired pending entry on
+  each call, the same fix applied to the OAuth CSRF-state map above.
 - `GET /health` — unauthenticated, independent of Face ID lock/admin
   token/phone gateway config — wired into both `fly.toml`'s own health
   check and a Dockerfile `HEALTHCHECK`. Also reports `version`

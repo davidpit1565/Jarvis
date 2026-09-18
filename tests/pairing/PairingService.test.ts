@@ -74,6 +74,22 @@ describe("PairingService", () => {
     expect(service.getPendingPairing("imac-1")).toBeUndefined();
   });
 
+  test("requestPairing purges other devices' expired pending entries, so abandoned attempts don't accumulate forever", () => {
+    let now = 1_000_000;
+    const service = new PairingService(1000, () => now);
+    service.requestPairing("abandoned-device-1");
+    service.requestPairing("abandoned-device-2");
+
+    now += 1001; // past the TTL for both, and neither is ever approved/checked again
+
+    service.requestPairing("new-device"); // triggers the opportunistic purge
+
+    const pending = (service as unknown as { pending: Map<string, unknown> }).pending;
+    expect(pending.has("abandoned-device-1")).toBe(false);
+    expect(pending.has("abandoned-device-2")).toBe(false);
+    expect(pending.has("new-device")).toBe(true);
+  });
+
   test("revoke removes a credential, forcing re-pairing", () => {
     const service = new PairingService();
     const { code } = service.requestPairing("imac-1");

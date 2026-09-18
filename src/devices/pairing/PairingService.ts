@@ -94,12 +94,30 @@ export class PairingService {
 
   /** Starts (or restarts) a pairing attempt for a device, returning a human-facing code. */
   requestPairing(deviceId: string): RequestPairingResult {
+    this.purgeExpiredPending();
+
     const code = String(randomInt(0, 10 ** PAIRING_CODE_DIGITS)).padStart(PAIRING_CODE_DIGITS, "0");
     const createdAt = this.now();
     const expiresAt = createdAt + this.ttlMs;
 
     this.pending.set(deviceId, { deviceId, code, createdAt, expiresAt });
     return { code, expiresAt };
+  }
+
+  /**
+   * Drops any pending pairing request past its expiry that nobody ever
+   * approved/rejected/re-checked. Without this, `this.pending` (keyed by
+   * deviceId, which a client fully controls) would grow without bound
+   * from abandoned pairing attempts — an expired entry only ever gets
+   * removed lazily, when something happens to look it up again for that
+   * exact same deviceId, which an abandoned attempt by definition never
+   * does.
+   */
+  private purgeExpiredPending(): void {
+    const now = this.now();
+    for (const [deviceId, pending] of this.pending) {
+      if (now > pending.expiresAt) this.pending.delete(deviceId);
+    }
   }
 
   /**
