@@ -30,6 +30,17 @@ export interface OrchestratorDependencies {
    * (text-only) channel.
    */
   channelContext?: string;
+  /**
+   * Called fresh on every turn to get extra system-prompt context that can
+   * change between messages — e.g. due/overdue reminders. Returning
+   * undefined/empty adds nothing. Kept as a plain callback rather than a
+   * concrete dependency (a ReminderStore, say) so the Orchestrator stays
+   * decoupled from any specific source of "things worth mentioning right
+   * now" — this is what makes JARVIS proactively say "you have a reminder
+   * due" without the user having to ask, instead of only ever answering
+   * exactly what was asked.
+   */
+  contextProvider?: () => string | undefined;
 }
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -55,8 +66,9 @@ export class Orchestrator {
   constructor(private readonly deps: OrchestratorDependencies) {}
 
   async handleUserMessage(userId: string, content: string): Promise<string> {
-    const { brain, conversation, toolRegistry, eventBus, channelContext } = this.deps;
-    const systemPrompt = channelContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${channelContext}` : JARVIS_SYSTEM_PROMPT;
+    const { brain, conversation, toolRegistry, eventBus, channelContext, contextProvider } = this.deps;
+    const extraContext = [channelContext, contextProvider?.()].filter(Boolean).join("\n\n");
+    const systemPrompt = extraContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${extraContext}` : JARVIS_SYSTEM_PROMPT;
 
     if (content.length > MAX_USER_MESSAGE_LENGTH) {
       return (

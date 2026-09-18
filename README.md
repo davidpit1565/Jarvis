@@ -141,6 +141,18 @@ reminder has a lifecycle (pending, then completed), a memory doesn't:
   from `COMPLETE_REMINDER`: this is for one that should never have
   existed, not one the user actually did.
 
+**Proactive, not just reactive**: `Orchestrator` accepts an optional
+`contextProvider` callback, called fresh on every turn to add extra
+system-prompt context that can change between messages
+(`src/reminders/dueRemindersNote.ts`, wired in `src/index.ts`). Wired to
+due/overdue reminders — before this, JARVIS could only ever tell you about
+a reminder if you asked; now it's told, at the start of any conversation
+(terminal or phone), to naturally mention anything due or overdue, the way
+an actual assistant would bring it up unprompted. The provider is a plain
+callback rather than a concrete `ReminderStore` dependency, so the
+Orchestrator itself stays decoupled from any specific source of "things
+worth mentioning right now."
+
 ## Conversation history search
 
 Every user/assistant text turn (tool calls/results are excluded — protocol

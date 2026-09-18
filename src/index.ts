@@ -14,6 +14,7 @@ import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
 import { MemoryStore } from "@/memory/MemoryStore";
 import { ReminderStore } from "@/reminders/ReminderStore";
+import { dueRemindersNote } from "@/reminders/dueRemindersNote";
 import { createCreateReminderTool } from "@/tools/reminders/CreateReminderTool";
 import { createListRemindersTool } from "@/tools/reminders/ListRemindersTool";
 import { createCompleteReminderTool } from "@/tools/reminders/CompleteReminderTool";
@@ -122,6 +123,7 @@ function main() {
     deviceRegistry,
     deviceConnectionManager,
     confirmationService,
+    contextProvider: () => dueRemindersNote(reminderStore),
   });
 
   // A phone call gets its own conversation thread (a fresh ConversationManager
@@ -140,6 +142,7 @@ function main() {
       deviceConnectionManager,
       confirmationService,
       channelContext: "This conversation is happening over a live phone call right now.",
+      contextProvider: () => dueRemindersNote(reminderStore),
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }

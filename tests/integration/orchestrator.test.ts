@@ -191,6 +191,68 @@ describe("Orchestrator integration", () => {
     expect(capturedContext).toContain("live phone call");
   });
 
+  test("appends contextProvider's output to the system prompt, called fresh each turn", async () => {
+    const eventBus = new EventBus();
+    const toolRegistry = new ToolRegistry();
+    const permissionService = new PermissionService();
+    const conversation = new ConversationManager(eventBus);
+
+    const capturedContexts: string[] = [];
+    const brain: Brain = {
+      async chat(request: BrainRequest): Promise<BrainResponse> {
+        capturedContexts.push(request.context ?? "");
+        return { text: "ok", toolCalls: [], stopReason: "end_turn" };
+      },
+    };
+
+    let callCount = 0;
+    const orchestrator = new Orchestrator({
+      brain,
+      conversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      contextProvider: () => {
+        callCount++;
+        return callCount === 1 ? "You have 1 reminder due." : undefined;
+      },
+    });
+
+    await orchestrator.handleUserMessage("user-1", "hi");
+    await orchestrator.handleUserMessage("user-1", "hi again");
+
+    expect(capturedContexts[0]).toContain("You have 1 reminder due.");
+    expect(capturedContexts[1]).not.toContain("reminder due");
+  });
+
+  test("a contextProvider returning undefined leaves the system prompt at its default", async () => {
+    const eventBus = new EventBus();
+    const toolRegistry = new ToolRegistry();
+    const permissionService = new PermissionService();
+    const conversation = new ConversationManager(eventBus);
+
+    let capturedContext = "";
+    const brain: Brain = {
+      async chat(request: BrainRequest): Promise<BrainResponse> {
+        capturedContext = request.context ?? "";
+        return { text: "ok", toolCalls: [], stopReason: "end_turn" };
+      },
+    };
+
+    const orchestrator = new Orchestrator({
+      brain,
+      conversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      contextProvider: () => undefined,
+    });
+
+    await orchestrator.handleUserMessage("user-1", "hi");
+
+    expect(capturedContext).not.toContain("undefined");
+  });
+
   test("reports an unknown tool name back to Claude instead of throwing", async () => {
     const brain = new ScriptedBrain([
       {
