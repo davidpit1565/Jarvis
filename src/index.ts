@@ -20,6 +20,10 @@ import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
 import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
 import { clickElementTool } from "@/tools/system/ClickElementTool";
 import { typeTextTool } from "@/tools/system/TypeTextTool";
+import { setVolumeTool } from "@/tools/system/SetVolumeTool";
+import { toggleWifiTool } from "@/tools/system/ToggleWifiTool";
+import { createFolderTool } from "@/tools/system/CreateFolderTool";
+import { emptyTrashTool } from "@/tools/system/EmptyTrashTool";
 import { listMacRemindersTool } from "@/tools/system/ListMacRemindersTool";
 import { createMacReminderTool } from "@/tools/system/CreateMacReminderTool";
 import { completeMacReminderTool } from "@/tools/system/CompleteMacReminderTool";
@@ -249,6 +253,10 @@ function main() {
   toolRegistry.registerTool(composeEmailDraftTool);
   toolRegistry.registerTool(clickElementTool);
   toolRegistry.registerTool(typeTextTool);
+  toolRegistry.registerTool(setVolumeTool);
+  toolRegistry.registerTool(toggleWifiTool);
+  toolRegistry.registerTool(createFolderTool);
+  toolRegistry.registerTool(emptyTrashTool);
   toolRegistry.registerTool(listMacRemindersTool);
   toolRegistry.registerTool(createMacReminderTool);
   toolRegistry.registerTool(completeMacReminderTool);
@@ -784,6 +792,10 @@ function main() {
       "COMPOSE_EMAIL_DRAFT",
       "CLICK_ELEMENT",
       "TYPE_TEXT",
+      "SET_VOLUME",
+      "TOGGLE_WIFI",
+      "CREATE_FOLDER",
+      "EMPTY_TRASH",
       "LIST_MAC_REMINDERS",
       "CREATE_MAC_REMINDER",
       "COMPLETE_MAC_REMINDER",
