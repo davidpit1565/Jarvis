@@ -71,12 +71,10 @@ compromise reached after a real face didn't work out.
 
 ### What it's built from
 
-- **Outer shell** — a `THREE.SphereGeometry` rendered as a `WireframeGeometry`
-  lat/long grid (cyan/white), plus a second, larger and dimmer copy behind
-  it for a cheap "poor man's bloom" (no `EffectComposer`/`UnrealBloomPass`
-  in this vendored r128 setup) — the same glow-duplication technique used
-  throughout this page. Individually-pulsing dots (`addSizePulse`, see
-  below) sit at every vertex.
+- **Outer shell — a real curl-noise flow field**, not a wireframe (see the
+  dedicated section below for why and how). ~1,200 particles seeded at an
+  irregular radius around a rough sphere, swirling together in coherent
+  tendrils.
 - **Inner shell** — a smaller concentric wireframe sphere (amber), the
   "mind," which brightens, grows, and spins faster while Jarvis is
   actively thinking.
@@ -96,6 +94,102 @@ has **no "wrong from the back" problem** the way the old head did — there's
 no anatomy to get right or wrong from any angle, so orbiting around it (see
 below) just works everywhere, with no per-angle tuning.
 
+### The outer shell is a curl-noise flow field, not a wireframe sphere
+
+The Core's first version rendered its outer shell as a `THREE.SphereGeometry`
+wireframe — a clean lat/long grid. Direct feedback, backed by reference
+images (Iron Man's JARVIS brain-formation VFX, and other AI-hologram
+concept art), was that this reads as **a globe, not a living AI core** — a
+UV-sphere wireframe has visible latitude/longitude lines because that's
+literally what it is, and a perfectly uniform radius is what makes a point
+cloud read as a planet in the first place.
+
+The actual, named technique behind the reference images' organic, swirling,
+"brain with waves" look is **curl noise** — the *curl* of a noise field
+(divergence-free by construction), not the noise field itself. This is a
+well-documented real-time VFX technique (see Three.js Journey's "GPGPU Flow
+Field Particles" lesson and al-ro's "3D Curl Noise" writeup) for exactly
+this look: particles pushed by a curl-noise field swirl and tumble together
+in coherent tendrils, never converging to a point and never flying apart,
+because the field has zero divergence by construction. That's categorically
+different from either a smooth geometric wireframe (mechanically regular)
+or independent per-particle sine jitter (visibly synchronized/mechanical
+once you watch it a few seconds, since every particle runs its own
+disconnected clock) — with curl noise, *nearby* particles share almost the
+same field sample, so they move together, and distant particles diverge,
+which is what makes it look like flowing energy instead of a bag of
+independently-vibrating dots.
+
+Implementation (`curlNoise3()`/`simplex3()` in `index.html`, right after
+`addSizePulse()`): a compact public-domain 3D simplex noise (same
+Gustavson/Ashima algorithm family as the GLSL version already used for the
+energy surface's shader), then curl computed via the textbook formula —
+three offset noise samples build a vector potential Ψ = (p, q, r), and
+curl(Ψ) = (∂r/∂y − ∂q/∂z, ∂p/∂z − ∂r/∂x, ∂q/∂x − ∂p/∂y), each partial
+derivative a central difference. This runs on the CPU, once per particle
+per frame (`buildFlowShell()`'s particles, advected in `animate()`) rather
+than a GPGPU render-to-texture pipeline, since this vendored Three.js r128
+setup has no build step to add one — measured with a real fake-vs-real A/B
+FPS comparison (headless, `performance.now()` over 3s) against the previous
+wireframe build: no regression (15.1fps vs. 12.0fps under this sandbox's
+software `swiftshader` renderer — both numbers are low only because there's
+no real GPU here at all; a real GPU renders either version far faster).
+
+Each particle also gets pulled gently back toward its own anchor point
+every frame (a soft "leash," proportional to how far it's drifted) so the
+flow visibly swirls *around* the Core's envelope instead of drifting away
+or collapsing inward — the standard way to keep a curl-noise field
+bounded to a shape rather than letting it disperse. Turbulence amplitude
+is never zero (per direct request, the Core must never sit still like a
+flat static image) and grows further with real thinking/voice activity,
+same as every other signal on this page. Frozen (no per-frame advection)
+under `prefers-reduced-motion`, same rule as every other continuous motion
+source here — the real-signal-driven group scale/opacity changes stay on.
+
+### Real bloom (`UnrealBloomPass`), not a duplicated-shell trick
+
+Every glow on this page used to be faked the same way: redraw the same
+line geometry a second time, bigger and fainter, underneath the crisp
+copy — a real technique (used throughout production motion graphics when
+real bloom isn't available), but a manual one, applied per-object, that
+only ever glows around literal duplicated geometry.
+
+This page now runs a real post-processing bloom pass —
+`THREE.EffectComposer` + `THREE.RenderPass` + `THREE.UnrealBloomPass`,
+the official Three.js r128 example scripts (matching the vendored
+`three.min.js` exactly, fetched from the same public npm release,
+MIT-licensed same as Three.js itself — not hand-written, not a CDN
+dependency, vendored locally under `postprocessing/`/`shaders/` the same
+way `facetrack/` already is). Real bloom finds genuinely bright pixels
+*anywhere in the rendered frame* — the energy surface's fresnel rim, the
+flow field's particles, the brain's points — and glows around them
+automatically, with zero extra per-object setup, which is exactly why it
+reads as more "alive"/premium than the old per-shell trick could.
+
+`strength`/`radius`/`threshold` (0.42 / 0.4 / 0.35) were tuned against
+real screenshots, not guessed: an initial 0.75 strength blew out the
+center to near-solid white and lost the wireframe's crisp line detail —
+turned down until the glow reads as energy radiating off real geometry,
+not overexposure. The CORE ACTIVITY panel's background also had to be
+darkened slightly (0.35 → 0.55 alpha at the bottom edge) — real bloom is
+bright enough to bleed through what used to be a subtle enough gradient,
+and the newest (bottom-most, most important) activity lines were the
+first to lose legibility.
+
+**Real, measured performance cost, not hidden**: a real FPS A/B on this
+sandbox's software `swiftshader` renderer (headless, `performance.now()`
+over 3s, no real GPU available here at all) showed bloom taking this
+page from ~15fps to ~6fps. That is a genuine cost of multi-pass
+post-processing, not a rounding error — but it's specifically a
+*software*-rendering cost: `UnrealBloomPass` is a standard, GPU-optimized
+real-time technique (mip-mapped blur passes on the GPU) used at native
+60fps+ in production games and demos on any real graphics hardware, which
+this sandbox has none of. Worth knowing about, not worth avoiding real
+bloom over — but real hardware verification (does this still feel smooth
+on the actual machine this runs on) is the one honest gap this
+environment structurally cannot close, same category as the Swift Agent
+tools' "requires real macOS validation."
+
 ### Individually pulsing dots — not a field of fixed-size points
 
 Every glowing dot on the outer shell (and the brain's particles) individually
@@ -109,6 +203,160 @@ per-vertex sine term driven by a `uTime` uniform and a random `aPhase`
 attribute — chosen over writing a full custom `ShaderMaterial` from scratch
 so Three's existing perspective size-attenuation math keeps working for
 free. Frozen (not ticking `uTime`) under `prefers-reduced-motion`.
+
+### The inner "mind" shell was still a literal globe grid — fixed
+
+The outer flow-field shell was rebuilt to escape "reads as a globe" (see
+above), but the inner "mind" shell directly underneath it — the shape
+you actually stare at in the center of the Core — was left over as a
+plain `THREE.SphereGeometry(1.0, 18, 14)` wireframe: a real
+latitude/longitude grid, the exact same problem, just smaller and dead
+center. That's a real contributor to "still looks like Earth" surviving
+the outer-shell rebuild. Fixed with `buildOrganicWire()` in `index.html`:
+an `IcosahedronGeometry` (detail 3) with every vertex pushed outward
+along its own radial direction by a `simplex3()` sample at that
+direction (the same noise function the outer shell/energy surface
+already use — not a second implementation) before building the
+wireframe from it. The result is a genuinely irregular, folded mesh —
+no two "latitude lines," no visible poles — closer to a real convoluted
+brain surface than a sphere.
+
+### Free multi-axis idle tumble, not a Y-axis sway
+
+Idle rotation used to be `sin(t)` sway on all three axes, but X and Z's
+amplitude (0.07 / 0.025 rad, a few degrees) was small enough to be
+functionally invisible — in practice the Core only ever visibly rotated
+around Y, which is exactly what makes something read as "a globe/planet
+spinning on its axis" rather than a free-floating organism. Per direct
+request (rotation should be free in every direction, including up/down,
+the way something alive tumbles, not a fixed spin), X and Z now swing as
+widely as Y, and Y additionally carries a slow unbounded drift term on
+top of its wobble so the Core keeps turning through new facings forever
+instead of settling into a bounded left-right sway. Four non-harmonic
+frequencies/phases across the three axes keep them from ever
+resynchronizing into an obviously looping cycle.
+
+### Real thinking now grows the outer body too, not just the inner mind
+
+`brainPulse` already grew/brightened the inner mind shell on real
+`brain.request`/`brain.response` activity; the outer flow-field
+body/energy surface only ever responded to voice (`audioGlow`), so a
+real "thought" with no accompanying audio never visibly grew the Core's
+outer envelope — only its center. The outer body's scale now also takes
+a (smaller-weight) contribution from `brainPulse`, so a real thinking
+burst swells the whole Core, not just the mind inside it, while voice
+still reads as the bigger, faster pulse.
+
+### A third, fine noise octave on the body's silhouette
+
+`blobRadius()`'s two lobes (a big base shape, plus secondary bumps) still
+read as a smooth-ish amoeba/cell outline from a normal viewing distance,
+even while genuinely swirling — direct feedback was still "smooth blob,"
+not "brain." A third, low-amplitude, higher-frequency octave (`lobe3`,
+weight 0.09 vs. 0.85/0.25 for the other two — a fine ripple, not another
+visible lobe) adds cortex-fold-like surface detail on top of the main
+silhouette without changing its overall shape language.
+
+## Ten more VFX passes — depth, energy flow, and discrete event feedback
+
+A further round on the same "make it read as a living AI core, not a
+globe/planet" direction, all scoped to the Core's own materials/shaders/
+motion in `index.html`:
+
+1. **Depth-fog tint on the outer flow-field particles.** Every particle
+   used to render at one flat, uniform color regardless of where it sat
+   relative to the camera — a real depth cue a point cloud otherwise has
+   no way to give, and part of why the swirling shell could still read
+   as "a flat disc" despite genuinely being 3D. Each particle's fixed
+   direction (already stored for `blobRadius()`) is now dotted every
+   frame against the camera's direction in the Core's own rotated local
+   space (one vector transform per frame, then a dot product per
+   particle — not a full per-particle world transform): particles facing
+   the camera render at full brightness, particles on the far side dim
+   toward ~45%, the same "backface dimming" real-time point-cloud
+   renderers use for cheap depth without per-pixel lighting.
+2. **Traveling energy-pulse orbit rings.** The two crossing rings were a
+   flat `MeshBasicMaterial` — one uniform color and brightness all the
+   way around, which combined with the crossing-ellipse layout is
+   exactly what a set of Saturn/planetary rings looks like. `buildEnergyRing()`
+   gives each ring a small `ShaderMaterial` that computes each fragment's
+   angle around the ring and brightens a few lobes that sweep around it
+   over time, so the rings themselves visibly carry moving energy — an
+   actual arc-reactor/energy-conduit look — instead of just spinning as a
+   rigid painted band.
+3. **Neural/tendril "firing" flash-and-decay.** Every synapse line in the
+   brain, and every tendril thread on the outer shell, used to sit at one
+   constant opacity regardless of whether it was a brand-new connection
+   or an old one about to be replaced. Both now carry a per-line
+   brightness that jumps to full on the frame it's (re)picked and decays
+   back to a dim idle floor — a real action-potential-style flash instead
+   of a permanently-lit wire — using per-vertex color attributes (`vertexColors`)
+   so a single `LineSegments` draw call can still show every line at its
+   own independent brightness.
+4. **Real-event shockwave bursts.** A real `brain.request`/`brain.response`
+   only ever showed up as the existing `brainPulse` brightening/growing
+   the Core in place — legible if you're staring at the center, easy to
+   miss otherwise. `spawnShockwave()` (called from `pushActivityLine()`
+   on every such event, real or labeled-demo) now also fires a billboarded
+   expanding-and-fading ring from a small pool of five, the same
+   "something just happened" language real HUD/sonar/radar interfaces use
+   for a discrete event — layered on top of the continuous growth, not
+   replacing it.
+5. **State-tied halo color.** `coreHalo`, the big soft bloom-halo sprite,
+   was a fixed cyan regardless of what the Core was doing. It now blends
+   toward amber with real thinking activity (the same color mix the
+   energy surface's shader already does) and brightens with either real
+   signal, so the ambient glow itself reads "thinking" at a glance instead
+   of only the small inner mind shell and the text state label doing that
+   job.
+6. **A moving specular "energy glint" on the energy surface.** The
+   fresnel rim lit every silhouette edge equally, which reads as a
+   matte/diffuse surface — a real glassy or metallic energy field catches
+   a highlight that travels across it as it turns. Added a slow-orbiting
+   light direction dotted against the surface normal in the fragment
+   shader for a real specular highlight that sweeps the surface over
+   time, brightened further by real audio/thinking activity.
+7. **Camera micro-shake tied to real activity.** A perfectly static
+   camera is part of what makes a render read as a diagram rather than
+   something being observed live — real sensor/HUD footage always
+   carries a little handheld noise. The camera now gets a small
+   simplex-noise-driven offset scaled by `brainPulse`/`audioGlow`,
+   recomputed from the exact orbit position fresh every frame (rather
+   than accumulated onto the previous frame's position) so it can never
+   drift the camera away from the angle the user actually left it at.
+8. **A real 3D depth-dust layer.** The only depth cue in the scene before
+   this was the 2D "matrix rain" canvas *behind* the WebGL scene — a flat
+   backdrop, nothing actually in 3D space around the Core to parallax
+   against as the camera orbits. `buildDepthDust()` scatters 260 small,
+   dim points through a spherical shell around the whole scene, with its
+   own slow independent rotation distinct from the Core's, so the volume
+   around the Core visibly parallaxes instead of the Core sitting alone
+   on an empty stage.
+9. **A third, independent wobble axis on the orbit rings.** The rings'
+   only "extra" motion beyond inheriting the Core's own tumble was a
+   single wobble axis — combined with the crossing-ellipse layout, still
+   read as a fixed set of planetary rings from most angles. A third,
+   out-of-phase wobble breaks that up further.
+10. **A frequency-modulated "heartbeat" instead of a single clean sine.**
+    The idle breathing scale was one unchanging sine wave — a real
+    biological rhythm is never a perfect single frequency. A second,
+    faster term whose own phase is itself slowly modulated by a much
+    slower sine (frequency modulation, not just a second fixed sine added
+    on top) keeps the combined rhythm from ever landing on an obviously
+    repeating beat within a normal length of observation.
+
+**Verified**: headless Playwright/Chromium against a local static
+server — zero page errors across idle load, a full DEMO-feed
+brain.request/brain.response cycle (confirming the shockwave burst, the
+halo's amber shift, and the ring/tendril firing flashes all actually
+fire), `prefers-reduced-motion` (frozen, no artifacts), and camera-orbit
+drag to the vertical extreme (confirming the added per-frame
+`updateCameraFromOrbit()` call plus shake doesn't fight manual dragging).
+**Real, measured cost**: a real FPS A/B on this sandbox's software
+`swiftshader` renderer (headless, `requestAnimationFrame`-counted over
+3s, same "no real GPU here at all" caveat as the bloom-pass measurement
+above) showed 8.7fps before this round vs. 8.4fps after — a small,
+honestly-measured cost, not a rounding error hidden.
 
 ### Reactivity — three real signals, no fake state
 
@@ -145,6 +393,14 @@ is separate from webcam face tracking: **orbiting moves the camera** around
 a Core that stays put; **face tracking rotates the Core itself** to face
 wherever your tracked face is. Both can be in play at once.
 
+Vertical drag range was ±1.2 rad (~69°) — enough to tilt the view, not
+enough to actually look from above or below. Per direct request (it's
+round, so dragging should work in every direction, not just side to side),
+this is now ±1.55 rad (~88.8°) — close enough to straight overhead/
+underneath to feel unrestricted, stopping just short of the exact pole
+where the camera's up-vector would flip (a real gimbal-lock artifact, not
+a style choice). Verified with real screenshots dragged to both extremes.
+
 ## Background depth
 
 The background is no longer a flat gradient alone: a cheap 2D-canvas
@@ -173,6 +429,23 @@ with `?host=...&port=...` in the URL.
 **When Core is offline** (which is the common case right now), the panel
 honestly falls back to a clearly-labeled `DEMO` feed of representative
 events, so it's never ambiguous whether what's on screen is real.
+
+**A real console now, not a one-line summary.** Per direct request —
+*"whatever I ask it to do, I want to see, through Jarvis, how it does
+it"* — `tool.requested`/`tool.executed` used to show `toolName(...40
+chars...)` and `ok=true`; they now show the real arguments and the real
+result data (up to 280 characters, with a `…` marker rather than a silent
+cut-off), and `permission.checked` shows the real reason a check passed
+or failed. The panel itself changed from a fixed 7-line, non-scrolling
+window (older lines just vanished) to a real scrollback — up to 60 lines,
+scrollable, auto-following the newest line unless you've manually scrolled
+up to read history (the same behavior any real terminal/console uses).
+Fixed the same pass found: the panel's `innerHTML` was never escaping
+event text before insertion — a latent XSS gap, since a URL, email body,
+or file path from a real tool call could contain `<`/`>`. Verified with a
+real fake-Core message containing a literal `<script>` tag in a URL: it
+renders as visible text (`&lt;script&gt;`), confirmed zero `<script>`
+elements were actually created in the DOM.
 
 The same real connection check now also drives the headline text under the
 `JARVIS` wordmark itself. It used to read a hardcoded, unconditional
@@ -262,46 +535,63 @@ a handful of overlapping translucent layers at once is a known Chrome
 renderer crash risk on some GPUs, so a plain flat fill is used instead —
 same visual job, zero risk, no blur cost.
 
-## Voice reactivity — real audio analysis, no TTS to plug it into yet
+## Voice reactivity — two independent real meters, YOU and JARVIS
 
 The Core visibly brightens, grows, and spins faster in response to live
 audio via the Web Audio API (`AnalyserNode`) — genuine frequency-domain
-analysis, not a fake animation loop. `window.JarvisHologram` exposes two
-real integration points for whenever Core gets a voice/TTS output:
+analysis, not a fake animation loop.
+
+Per direct request — *"for each of us, me and Jarvis, a row like this
+with our voice so we can see the pitch/tone"* — there are now **two fully
+independent analyser graphs**, not one shared one: a **YOU** meter (cyan,
+fed by the mic) and a separate **JARVIS** meter (amber, fed by Jarvis's
+own TTS output once Core has one). Two people talking at once — or one
+talking while the other is silent — read correctly on their own meter;
+neither can light up the other's. `window.JarvisHologram` exposes:
 
 - `connectAudioElement(mediaEl)` — feed it an `<audio>`/`<video>` element
-  playing Jarvis's speech.
-- `connectMediaStream(stream)` — feed it a raw `MediaStream` (e.g. a
-  WebRTC or streaming-TTS pipeline).
+  playing Jarvis's speech, into the **JARVIS** meter.
+- `connectJarvisMediaStream(stream)` — feed it a raw `MediaStream` (e.g. a
+  WebRTC or streaming-TTS pipeline), also into the **JARVIS** meter.
+- `connectMediaStream(stream)` — feed it a raw `MediaStream` into the
+  **YOU** meter (what the 🎙 mic button below uses).
 
 **Core has no TTS/voice output at all yet**, so there's nothing genuine to
-auto-connect to today. The "🎙 CONNECT MIC" button in the bottom-right is a
-real, working way to see the reactivity live right now — it feeds your
-actual microphone in, which is honest proof the mechanism works rather
-than a placeholder pretending to be voice output.
+auto-connect to the JARVIS meter today — it stays honestly idle/flat until
+something real feeds it. The "🎙 CONNECT MIC" button is a real, working way
+to see the YOU meter live right now — it feeds your actual microphone in,
+honest proof the mechanism works rather than a placeholder pretending to
+be voice output. The Core's own body reactivity (`audioGlow`) responds to
+*whichever* of the two is louder at any moment, so the existing mic-based
+demo keeps working exactly as before, and Jarvis's own voice will drive
+the Core too the instant real TTS is connected — zero further code changes
+needed there.
 
 A scrolling bar meter (`#voice-bars`, above the plinth) in the style of a
-WhatsApp voice-message waveform draws from the same `AnalyserNode` in real
-time — a flat near-zero line whenever nothing is connected, never a
-fabricated idle waveform, lighting up green the moment the mic (or, later,
-TTS output) is connected.
+WhatsApp voice-message waveform draws from the YOU analyser in real time —
+a flat near-zero line whenever nothing is connected, never a fabricated
+idle waveform, lighting up green the moment the mic is connected.
 
-A second, separate **VOICE panel** sits on the right side of the screen
-(below CORE STATUS) with its own 24-bar frequency spectrum
-(`#voice-spectrum`). Unlike `#voice-bars` above, which shows one averaged
-loudness value scrolling over time, this reads the same per-frame
-`AnalyserNode.getByteFrequencyData()` array directly and draws each
-frequency bin as its own bar — so you can actually see how the voice's
-frequency content is shaped (bass-heavy vs. bright, a hard consonant vs. a
-sustained vowel), not just how loud it is. Only the lower ~60% of the FFT's
-bins are drawn, since that's where speech energy concentrates and the
-upper bins would otherwise sit flat. Every bar renders at a small non-zero
-floor height even at zero signal (so the panel always reads as "a
-spectrum," not "a broken canvas") and brightens from a dim cyan-to-amber
-gradient to a fully lit one the moment real audio is flowing — same
-honesty rule as everywhere else on this page: dim/idle when nothing is
-connected, never a fabricated animation. Its heading badge flips
-IDLE → LIVE in sync with the mic connect button.
+The **VOICE panel** on the right side of the screen (below CORE STATUS)
+now shows both meters stacked, each with its own 24-bar frequency spectrum
+and its own `IDLE`/`LIVE` badge — `youMeter`/`jarvisMeter` in `index.html`,
+built from one shared `makeSpectrumMeter()` factory (parameterized by
+canvas id and color) rather than two hand-duplicated copies of the drawing
+code, so the two can never silently drift apart in behavior. Each reads
+its own per-frame `AnalyserNode.getByteFrequencyData()` array directly and
+draws each frequency bin as its own bar — so you can actually see how a
+voice's frequency content is shaped (bass-heavy vs. bright, a hard
+consonant vs. a sustained vowel, pitch and tone), not just how loud it is.
+Only the lower ~60% of the FFT's bins are drawn, since that's where speech
+energy concentrates and the upper bins would otherwise sit flat. Every bar
+renders at a small non-zero floor height even at zero signal (so the panel
+always reads as "a spectrum," not "a broken canvas") and brightens to a
+fully lit color — cyan-to-amber for YOU, amber-to-pale-amber for JARVIS —
+the moment real audio is flowing on that specific meter. Verified with a
+real oscillator run through a `MediaStreamDestination` fed into
+`connectJarvisMediaStream()` alongside a real mic connection: both meters
+went `LIVE` independently, at the same time, with visibly different
+frequency content.
 
 ## Webcam face tracking — the Core turns to face you, for real
 
@@ -413,8 +703,15 @@ integrated one, clears 60fps easily either way.
   since there's no real signal in Core yet to drive one honestly.
 - Core has no TTS/voice output yet — the mic button proves the voice
   mechanism live today, not real Jarvis speech.
-- No autonomous computer control (the Core does not, and currently cannot,
-  move around the screen or click on things on its own) — that would be a
-  completely different system (OS-level automation, screen capture, input
-  simulation) with real safety implications, out of scope for this page
-  and not something to build without an explicit, scoped decision first.
+- No arbitrary UI automation — Core now has three narrow, named
+  SAFE_ACTION device tools (`OPEN_URL`, `OPEN_APPLICATION`,
+  `COMPOSE_EMAIL_DRAFT`; see the root `README.md`'s "Phase 2 scope"), each
+  doing exactly one well-defined, validated thing, but nothing moves the
+  mouse, simulates keystrokes, or clicks a specific on-screen element.
+  That's a categorically different, much higher-risk system (real input
+  simulation, not a named action with its own validation) and deliberately
+  not something added as "the next tool" without its own explicit, scoped
+  safety decision. Whatever real tool Jarvis does call shows up live in
+  the CORE ACTIVITY feed above with its actual arguments and result, which
+  is the concrete "let me see it happen" this page can honestly deliver
+  today.

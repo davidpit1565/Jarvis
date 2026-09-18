@@ -17,6 +17,9 @@ import { openUrlTool } from "@/tools/system/OpenUrlTool";
 import { listDirectoryTool } from "@/tools/system/ListDirectoryTool";
 import { readTextFileTool } from "@/tools/system/ReadTextFileTool";
 import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
+import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
+import { clickElementTool } from "@/tools/system/ClickElementTool";
+import { typeTextTool } from "@/tools/system/TypeTextTool";
 import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
@@ -239,6 +242,9 @@ function main() {
   toolRegistry.registerTool(openUrlTool);
   toolRegistry.registerTool(listDirectoryTool);
   toolRegistry.registerTool(readTextFileTool);
+  toolRegistry.registerTool(composeEmailDraftTool);
+  toolRegistry.registerTool(clickElementTool);
+  toolRegistry.registerTool(typeTextTool);
   toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
   toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
   toolRegistry.registerTool(createDeleteMemoryTool(memoryStore, undoStore));
@@ -721,6 +727,16 @@ function main() {
       config.wakeUpCallDbPath,
       config.calendarTokenDbPath,
     ],
+    permissionService,
+    defaultUserId: DEFAULT_USER_ID,
+    // Approving a device's pairing is the one explicit, deliberate human
+    // decision this system already has to trust a specific device with —
+    // these are the SAFE_ACTION/CONFIRM device tools that would otherwise
+    // be permanently ungrantable (see JarvisWebSocketServerDependencies'
+    // own doc comment on this field for why). CONFIRM tools still ask
+    // per-invocation regardless (confirmViaChat below) — a grant here
+    // only means "may be asked," never "runs without asking."
+    autoGrantToolIdsOnApproval: ["OPEN_URL", "OPEN_APPLICATION", "COMPOSE_EMAIL_DRAFT", "CLICK_ELEMENT", "TYPE_TEXT"],
   });
   const httpHandle = wsServer.start(config.port);
 

@@ -1,31 +1,27 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { DeviceTool } from "@/types/tools";
+import { validateAppName } from "./appNameValidation";
 
 /**
- * Launches a named application on the target device — e.g. "open
- * WhatsApp." Runs only on a device agent; Core has no local
- * implementation. Deliberately NOT arbitrary shell/AppleScript execution:
- * the Agent's own implementation only ever asks the OS's public app-
- * launch API to open a known application by name, the same low-privilege
- * spirit as GET_ACTIVE_APPLICATION. SAFE_ACTION: opening an app is a real,
- * visible action (unlike a READ tool) but a fully reversible, low-impact
- * one — standing-granted per device once it's approved as primary (see
- * "device.roleGranted" wiring in index.ts), not asked about every time.
+ * Launches a named application on the target device (macOS: via
+ * NSWorkspace, matched by display name — see the Agent implementation).
+ * SAFE_ACTION: it only ever launches something the user already has
+ * installed, exactly as if they'd clicked its Dock/Launchpad icon
+ * themselves — reversible (just quit it), and never reads or changes
+ * anything inside the application. There is a "quit application"
+ * counterpart (`QUIT_APPLICATION`), a separately-considered tool rather
+ * than bundled in here as "the opposite of open."
  */
 export const openApplicationTool: DeviceTool = {
   id: "OPEN_APPLICATION",
   name: "open_application",
   description:
-    "Opens/launches a named application on the target device (e.g. \"WhatsApp\", \"Google Chrome\"). " +
-    "Use the application's actual display name. Does not close, control, or interact with the app beyond " +
-    "launching it.",
+    "Launches a named application on the target device (e.g. \"Safari\", \"Mail\", \"Calendar\") — the same " +
+    "effect as the user opening it themselves from the Dock or Launchpad.",
   inputSchema: {
     type: "object",
     properties: {
-      applicationName: {
-        type: "string",
-        description: 'The application\'s name, e.g. "WhatsApp" or "Safari".',
-      },
+      applicationName: { type: "string", description: "The application's display name, e.g. \"Safari\"." },
       deviceId: {
         type: "string",
         description: "Device to open the application on. Defaults to the primary device if omitted.",
@@ -35,4 +31,7 @@ export const openApplicationTool: DeviceTool = {
   },
   requiredPermission: PermissionLevel.SAFE_ACTION,
   target: "device",
+  validateInput(input) {
+    return validateAppName(typeof input.applicationName === "string" ? input.applicationName : "");
+  },
 };

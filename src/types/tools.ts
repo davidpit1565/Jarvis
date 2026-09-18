@@ -49,6 +49,19 @@ export interface LocalTool<TInput extends Record<string, unknown> = Record<strin
  */
 export interface DeviceTool extends BaseTool {
   target: "device";
+  /**
+   * Optional extra validation beyond the JSON schema Claude already
+   * respects (which only checks shape/types, e.g. "url must be a
+   * string" — not "url must be http/https"), checked by the Orchestrator
+   * before a request is ever sent to a device. A device tool whose input
+   * has real semantic constraints (a URL's scheme, safe characters in an
+   * app name) should provide this — genuine defense in depth alongside
+   * the device agent's own validation, not a replacement for it: Core
+   * rejecting bad input means it never even reaches the wire, but the
+   * device agent (Phase 2's actual security boundary — see
+   * AgentToolRegistry's own docs) must never assume Core did this.
+   */
+  validateInput?(input: Record<string, unknown>): { valid: boolean; reason?: string };
 }
 
 export type Tool<TInput extends Record<string, unknown> = Record<string, unknown>> = LocalTool<TInput> | DeviceTool;

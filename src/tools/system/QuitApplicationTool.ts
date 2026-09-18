@@ -1,5 +1,6 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { DeviceTool } from "@/types/tools";
+import { validateAppName } from "./appNameValidation";
 
 /**
  * Quits a named, already-running application on the target device — the
@@ -32,4 +33,7 @@ export const quitApplicationTool: DeviceTool = {
   },
   requiredPermission: PermissionLevel.SAFE_ACTION,
   target: "device",
+  validateInput(input) {
+    return validateAppName(typeof input.applicationName === "string" ? input.applicationName : "");
+  },
 };

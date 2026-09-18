@@ -1,26 +1,27 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { DeviceTool } from "@/types/tools";
+import { validateUrl } from "./urlValidation";
 
 /**
- * Opens a URL in the target device's default browser — lets JARVIS act on
- * "open this on my computer" requests. Runs only on a device agent; Core
- * has no local implementation. The Agent's own implementation only
- * accepts http/https URLs via the OS's public open-URL API, never an
- * arbitrary URL scheme (some custom schemes trigger installed apps in
- * surprising ways, e.g. composing/sending something). SAFE_ACTION, same
- * reasoning as OPEN_APPLICATION: a real, visible action, but reversible
- * (just close the tab) and low-impact.
+ * Opens a URL in the target device's default browser. SAFE_ACTION, not
+ * CONFIRM/DANGEROUS: it only ever launches a browser window pointed at a
+ * URL the user's own conversation asked for — same trust level as a
+ * person clicking a link, reversible by just closing the tab, and never
+ * reads or changes anything on the device itself. Deliberately not
+ * "run this shell command" or "open this local file" — see
+ * urlValidation.ts, which rejects every scheme except http/https before
+ * this ever reaches a device.
  */
 export const openUrlTool: DeviceTool = {
   id: "OPEN_URL",
   name: "open_url",
   description:
-    "Opens a URL in the default browser on the target device. Only http/https URLs are accepted. " +
-    'Use this for "open this on my computer/Mac" requests.',
+    "Opens a URL in the default web browser on the target device. Only http/https URLs are accepted — " +
+    "this cannot open local files or any other URL scheme.",
   inputSchema: {
     type: "object",
     properties: {
-      url: { type: "string", description: "The http/https URL to open." },
+      url: { type: "string", description: "The http(s) URL to open." },
       deviceId: {
         type: "string",
         description: "Device to open the URL on. Defaults to the primary device if omitted.",
@@ -30,4 +31,7 @@ export const openUrlTool: DeviceTool = {
   },
   requiredPermission: PermissionLevel.SAFE_ACTION,
   target: "device",
+  validateInput(input) {
+    return validateUrl(typeof input.url === "string" ? input.url : "");
+  },
 };
