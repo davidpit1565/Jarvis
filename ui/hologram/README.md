@@ -143,23 +143,63 @@ a real mesh made most of that machinery unnecessary.
 ## A visible brain, not an empty shell
 
 The wireframe is just line edges, so anything placed inside the head
-volume is naturally visible through it — a warm amber cloud of ~900
-points filling most of the cranium, plus a handful of connecting
-"synapse" line segments, gives the head genuine internal structure
-instead of reading as a hollow dome. Its glow isn't a fixed animation:
-`brainPulse` (in `index.html`) brightens on real `brain.request`/
-`brain.response` activity from the observer feed (or the labeled demo
-feed when Core is offline) and decays back to a gentle idle breathing
-glow — so it's visibly "thinking harder" exactly when Jarvis actually is.
+volume is naturally visible through it — a warm amber cloud of ~1,800
+points filling most of the actual cranial cavity (from brow to crown),
+plus 80 connecting "synapse" line segments, gives the head genuine
+internal structure instead of reading as a hollow dome or a small patch.
+Sized up substantially from an original ~900-point, much smaller volume
+per direct user feedback that it looked "really small" relative to the
+head — a first, bigger attempt leaked particles through the scalp near
+the crown (the real skull narrows faster there than a simple ellipsoid
+assumes), so the final size/position was pulled in slightly to stay
+inside the actual mesh surface, verified via zoomed-in screenshots.
+
+Its glow, and now its **size**, aren't a fixed animation: `brainPulse`
+(in `index.html`) brightens *and physically grows* the brain on real
+`brain.request`/`brain.response` activity from the observer feed (or the
+labeled demo feed when Core is offline) and decays back to a gentle idle
+baseline — so it's visibly "thinking harder" (bigger and brighter, not
+just brighter) exactly when Jarvis actually is, per direct user request.
 
 **Never fully static, even at rest**: every brain particle continuously
 drifts on its own sine cycle (not a fixed structure that only moves on
-real events), and ~4 of the 46 synapse lines re-wire to new random points
-every ~1.1s, so the connections visibly re-form over time like real
-firing. The whole head also has a subtle continuous idle sway (rotation)
-and a faint "breathing" scale pulse, a little stronger while brainPulse
-is high — all gated off under `prefers-reduced-motion`, same as every
-other continuous motion source on this page.
+real events) and individually grows/shrinks in size on its own random
+phase (see "Individually pulsing dots" below), and ~4 of the 80 synapse
+lines re-wire to new random points every ~1.1s, so the connections
+visibly re-form over time like real firing. The whole head also has a
+subtle continuous idle sway (rotation) and a faint "breathing" scale
+pulse, a little stronger while brainPulse is high — all gated off under
+`prefers-reduced-motion`, same as every other continuous motion source
+on this page.
+
+## Individually pulsing dots — not a field of fixed-size points
+
+Per direct user request (comparing to Iron Man/real-Jarvis-style HUDs):
+every glowing dot — the face's surface node dots and the brain's points
+alike — individually grows and shrinks over time on its own random
+phase, rather than every dot in the field being one fixed size or
+pulsing together in lockstep. `addSizePulse()` in `index.html`
+implements this by patching the one `gl_PointSize = size;` line in
+Three.js's own built-in points vertex shader (present verbatim across
+versions, including this vendored r128) via `material.onBeforeCompile`,
+multiplying it by a per-vertex sine term driven by a `uTime` uniform and
+a random `aPhase` attribute — chosen over writing a full custom
+`ShaderMaterial` from scratch so Three's existing perspective
+size-attenuation math keeps working for free. Frozen (not ticking
+`uTime`) under `prefers-reduced-motion`, same as every other continuous
+motion source.
+
+## The mouth: a smaller "hole," not a big empty one
+
+The lat/long grid's mouth exclusion zone (see "How the face is built"
+above) was originally big enough to blank out most of the central face —
+nose, cheeks, and chin, not just the mouth cavity itself — which read as
+a large empty hole in the middle of the face rather than a small masked
+feature, per direct user feedback. Shrunk to hug just the mouth/chin
+cavity that actually causes the spherical-angle tangle, accepting a
+rougher-looking (but much smaller) tangle right at the lips instead of a
+large blank patch — a real trade-off, not a fully clean solution; see
+"Known limitations" below.
 
 ## Viewing it from any angle — drag to orbit
 

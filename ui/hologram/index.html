@@ -459,6 +459,30 @@
   // `if (brain)` so they run safely from frame 1 while this loads.
   let mouth = null;
   let brain = null;
+  let faceDotsMat = null;
+
+  // Makes a PointsMaterial's dots individually grow/shrink over time via a
+  // per-vertex random phase (a "aPhase" attribute on its geometry) instead
+  // of one fixed size for every point — the "always alive" scan-particle
+  // look (per direct user request, comparing to Iron Man/real-Jarvis-style
+  // HUDs), not a uniform pulse where the whole field swells in lockstep.
+  // Patches the one `gl_PointSize = size;` line in Three.js's own built-in
+  // points vertex shader (present verbatim across versions, including
+  // r128) via `onBeforeCompile` instead of writing a full custom
+  // ShaderMaterial from scratch — this keeps Three's existing perspective
+  // size-attenuation math for free instead of re-deriving it.
+  function addSizePulse(material, speed, amount) {
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = { value: 0 };
+      shader.vertexShader = "attribute float aPhase;\nuniform float uTime;\n" + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace(
+        "gl_PointSize = size;",
+        `gl_PointSize = size * (${(1 - amount).toFixed(2)} + ${amount.toFixed(2)} * sin(uTime * ${speed.toFixed(2)} + aPhase));`
+      );
+      material.userData.shader = shader;
+    };
+    material.needsUpdate = true;
+  }
 
   /* A visible "brain" inside the translucent skull — the rendering above
      is just line edges, so anything placed inside the head volume is
@@ -468,7 +492,10 @@
      brain.request/brain.response activity (wired further down, near the
      activity feed) — see animate() for the per-frame motion/pulse. */
   function buildBrain(centerX, centerY, centerZ, bx, by, bz) {
-    const n = 900;
+    // Denser than the original 900 — proportional to the enlarged
+    // cranial-fill volume this is now called with, so it still reads as
+    // a solid cloud rather than getting sparser as it got bigger.
+    const n = 1800;
     const basePositions = new Float32Array(n * 3);
     const phases = new Float32Array(n);
     for (let i = 0; i < n; i++) {
@@ -486,13 +513,17 @@
     const positions = basePositions.slice();
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute("aPhase", new THREE.BufferAttribute(phases, 1));
     const mat = new THREE.PointsMaterial({
       size: 0.07, map: spriteTex, transparent: true, depthWrite: false,
       blending: THREE.AdditiveBlending, color: 0xffb15c, opacity: 0.8,
     });
+    // Same per-particle "always alive" size pulse as the face dots (see
+    // addSizePulse above) — a real brain is never visually static.
+    addSizePulse(mat, 1.1, 0.3);
     const points = new THREE.Points(geo, mat);
 
-    const lineCount = 46;
+    const lineCount = 80;
     const lineEndpoints = new Array(lineCount);
     const linePositions = new Float32Array(lineCount * 2 * 3);
     function rewire(i) {
@@ -764,11 +795,19 @@
       // radius is roughly even front-to-back. Eye sockets and the mouth
       // cavity are excluded (see comment above) — the custom eye/mouth
       // accents below cover those spots instead.
+      // The mouth zone below was previously r=[1.35,1.2,1.35] — big enough
+      // to blank out most of the central face (nose, cheeks, chin, not
+      // just the mouth cavity itself), which read as a big empty hole in
+      // the middle of the face rather than a small masked feature. Shrunk
+      // to hug just the mouth/chin cavity that actually causes the
+      // spherical-angle tangle (see buildLatLongOnMesh comment above) —
+      // accepting a bit of rough grid right at the lips rather than a
+      // large blank patch.
       const latLongCenter = new THREE.Vector3(0, 1.9, 0.2);
       const latLongExclusions = [
         { c: [-0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
         { c: [0.5, 1.78, 1.9], r: [0.42, 0.32, 0.55] },
-        { c: [0, -0.1, 1.8], r: [1.35, 1.2, 1.35] },
+        { c: [0, -0.15, 2.0], r: [0.62, 0.5, 0.6] },
       ];
       const edgesGeo = buildLatLongOnMesh(trimmedTris, 22, 20, latLongCenter, latLongExclusions);
       const edgesMat = new THREE.LineBasicMaterial({
@@ -803,6 +842,14 @@
         size: 0.03, map: spriteTex, transparent: true, depthWrite: false,
         blending: THREE.AdditiveBlending, color: 0x6fd8e8, opacity: 0.65,
       });
+      // Individually growing/shrinking dots (see addSizePulse above) —
+      // per direct user request that the face read as "alive" (Iron
+      // Man/real-Jarvis-style HUD), not a field of fixed-size dots.
+      const facePhases = new Float32Array(trimmedPoints.attributes.position.count);
+      for (let i = 0; i < facePhases.length; i++) facePhases[i] = Math.random() * Math.PI * 2;
+      trimmedPoints.setAttribute("aPhase", new THREE.BufferAttribute(facePhases, 1));
+      addSizePulse(nodeMat, 1.6, 0.45);
+      faceDotsMat = nodeMat;
       modelGroup.add(new THREE.Points(trimmedPoints, nodeMat));
 
       // Bright pupil glints — the real eye sockets are already correct
@@ -834,7 +881,15 @@
       mouth = buildMouth(0, -0.11, 2.32, 1.05);
       modelGroup.add(mouth.group);
 
-      brain = buildBrain(0, 2.4, -0.9, 0.95, 0.75, 0.7);
+      // Sized to actually fill most of the cranial cavity (crown near
+      // y=3.97, brow near y=1.8) rather than a small patch only visible
+      // behind the very top of the forehead — per direct user feedback
+      // that the brain looked "really small" relative to the head. A
+      // first, bigger attempt (by=1.05, centered higher) poked particles
+      // through the scalp near the crown, since the real skull narrows
+      // faster than a simple ellipsoid there — pulled in slightly to stay
+      // safely inside the actual mesh surface.
+      brain = buildBrain(0, 2.45, -0.75, 1.15, 0.85, 1.1);
       modelGroup.add(brain.group);
 
       faceGroup.add(modelGroup);
@@ -920,6 +975,17 @@
       const brainGlow = 0.55 + Math.sin(t * 1.3) * 0.1 + brainPulse * 0.45;
       brain.pointsMat.opacity = Math.min(1, brainGlow);
       brain.lineMat.opacity = Math.min(0.55, 0.15 + brainPulse * 0.4);
+      // The brain itself physically grows while actively "thinking" (real
+      // brain.request/brain.response activity), not just brightening —
+      // per direct user request. Never fully static even at rest (a slow
+      // idle breathing term), same principle as every other motion source
+      // on this page.
+      const brainScale = 1 + brainPulse * 0.4 + (REDUCED_MOTION ? 0 : Math.sin(t * 0.5) * 0.035);
+      brain.group.scale.setScalar(brainScale);
+      if (brain.pointsMat.userData.shader) brain.pointsMat.userData.shader.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
+    }
+    if (faceDotsMat && faceDotsMat.userData.shader) {
+      faceDotsMat.userData.shader.uniforms.uTime.value = REDUCED_MOTION ? 0 : t;
     }
 
     // Continuous per-particle drift — "always thinking", not a structure
