@@ -15,19 +15,31 @@ if (!deviceId || !code) {
 }
 
 const port = process.env.JARVIS_PORT ?? "4770";
-const url = `http://localhost:${port}/pairing/approve`;
+// JARVIS_CORE_URL overrides the default localhost target, e.g.
+// https://<your-app>.fly.dev, so this CLI also works against a deployed
+// Core instance, not just one running on this machine.
+const baseUrl = process.env.JARVIS_CORE_URL ?? `http://localhost:${port}`;
+const url = `${baseUrl}/pairing/approve`;
+const adminToken = process.env.JARVIS_ADMIN_TOKEN;
 
 let response: Response;
 try {
   response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(adminToken ? { "X-Jarvis-Admin-Token": adminToken } : {}),
+    },
     body: JSON.stringify({ deviceId, code }),
   });
 } catch (error) {
   const message = error instanceof Error ? error.message : "Unknown network error";
   console.error(`Could not reach JARVIS Core at ${url}: ${message}`);
-  console.error(`Is "bun run dev" running, and is JARVIS_PORT set to ${port}?`);
+  console.error(
+    process.env.JARVIS_CORE_URL
+      ? "Is the deployed Core instance reachable at that URL?"
+      : `Is "bun run dev" running, and is JARVIS_PORT set to ${port}?`
+  );
   process.exit(1);
 }
 

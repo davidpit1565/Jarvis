@@ -14,6 +14,13 @@ export interface BrainResponse {
   toolCalls: ToolCallRequest[];
   /** Raw stop reason from the provider, kept opaque to callers. */
   stopReason: string;
+  /**
+   * Names of any provider-hosted server tools invoked this turn (e.g.
+   * "web_search") — these run entirely on the provider's infrastructure,
+   * never through the Orchestrator's tool-execution loop, so this is the
+   * only signal callers get that one fired.
+   */
+  serverToolUses?: string[];
 }
 
 /**

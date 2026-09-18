@@ -12,6 +12,7 @@ describe("PermissionService", () => {
     });
 
     expect(result.allowed).toBe(true);
+    expect(result.requiresConfirmation).toBe(false);
   });
 
   test("denies SAFE_ACTION tools without a grant", () => {
@@ -38,7 +39,20 @@ describe("PermissionService", () => {
     expect(result.allowed).toBe(true);
   });
 
-  test("denies CONFIRM-level tools even with a grant (no confirmation flow yet)", () => {
+  test("denies CONFIRM-level tools with no grant at all", () => {
+    const service = new PermissionService();
+
+    const result = service.check({
+      subject: { userId: "user-1" },
+      toolId: "SOME_TOOL",
+      requiredLevel: PermissionLevel.CONFIRM,
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.requiresConfirmation).toBe(false);
+  });
+
+  test("allows CONFIRM-level tools with a grant, but flags that confirmation is still required", () => {
     const service = new PermissionService();
     service.grant("user-1", "SOME_TOOL");
 
@@ -48,10 +62,11 @@ describe("PermissionService", () => {
       requiredLevel: PermissionLevel.CONFIRM,
     });
 
-    expect(result.allowed).toBe(false);
+    expect(result.allowed).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
   });
 
-  test("denies DANGEROUS-level tools even with a grant", () => {
+  test("allows DANGEROUS-level tools with a grant, but flags that confirmation is still required", () => {
     const service = new PermissionService();
     service.grant("user-1", "SOME_TOOL");
 
@@ -61,7 +76,8 @@ describe("PermissionService", () => {
       requiredLevel: PermissionLevel.DANGEROUS,
     });
 
-    expect(result.allowed).toBe(false);
+    expect(result.allowed).toBe(true);
+    expect(result.requiresConfirmation).toBe(true);
   });
 
   test("grants are per-user", () => {

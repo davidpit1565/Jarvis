@@ -13,7 +13,8 @@
     "approve-device": "bun run scripts/approve-device.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1"
+    "@anthropic-ai/sdk": "^0.126.0",
+    "@simplewebauthn/server": "^14.0.2"
   },
   "devDependencies": {
     "@types/bun": "latest",
