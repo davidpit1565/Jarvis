@@ -50,4 +50,49 @@ describe("dueRemindersNote", () => {
     expect(note).toContain("Task B");
     store.close();
   });
+
+  test("includes a reminder due within the upcoming window as 'coming up soon'", () => {
+    const store = new ReminderStore(":memory:");
+    const soon = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min from now
+    store.create({ text: "Dentist appointment", dueAt: soon });
+
+    const note = dueRemindersNote(store);
+    expect(note).toContain("Dentist appointment");
+    expect(note).toContain("coming up soon");
+    store.close();
+  });
+
+  test("excludes a reminder further out than the upcoming window", () => {
+    const store = new ReminderStore(":memory:");
+    const farFuture = new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString(); // 5 hours from now
+    store.create({ text: "Far future task", dueAt: farFuture });
+
+    expect(dueRemindersNote(store)).toBeUndefined();
+    store.close();
+  });
+
+  test("respects a custom upcomingWindowMs", () => {
+    const store = new ReminderStore(":memory:");
+    const inTwoHours = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    store.create({ text: "Two hour task", dueAt: inTwoHours });
+
+    expect(dueRemindersNote(store)).toBeUndefined();
+    const note = dueRemindersNote(store, 3 * 60 * 60 * 1000);
+    expect(note).toContain("Two hour task");
+    store.close();
+  });
+
+  test("shows both overdue and upcoming sections separately when both exist", () => {
+    const store = new ReminderStore(":memory:");
+    store.create({ text: "Overdue task", dueAt: "2020-01-01T00:00:00.000Z" });
+    const soon = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    store.create({ text: "Upcoming task", dueAt: soon });
+
+    const note = dueRemindersNote(store);
+    expect(note).toContain("Overdue task");
+    expect(note).toContain("Upcoming task");
+    expect(note).toContain("due now or overdue");
+    expect(note).toContain("coming up soon");
+    store.close();
+  });
 });

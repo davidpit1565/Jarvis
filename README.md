@@ -166,6 +166,11 @@ callback rather than a concrete `ReminderStore` dependency, so the
 Orchestrator itself stays decoupled from any specific source of "things
 worth mentioning right now."
 
+Overdue reminders and reminders **due soon** (within the next 60 minutes
+by default) are surfaced as two separate sections — "was due 3 days ago"
+and "starts in 20 minutes" call for a different tone, so they're never
+flattened into one list.
+
 ## Conversation history search
 
 Every user/assistant text turn (tool calls/results are excluded — protocol
