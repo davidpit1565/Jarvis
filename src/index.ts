@@ -413,10 +413,23 @@ function main() {
             activityLog.record(`Placed wake-up call${call.label ? ` (${call.label})` : ""}`);
           })
           .catch((error) => {
-            console.error(
-              `[jarvis] failed to place wake-up call ${call.id}:`,
-              error instanceof Error ? error.message : String(error)
-            );
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[jarvis] failed to place wake-up call ${call.id}:`, message);
+            activityLog.record(`Failed to place wake-up call${call.label ? ` (${call.label})` : ""}: ${message}`);
+            // A failed alarm call is silent by nature — the one thing it
+            // can't do is tell the user it didn't ring. If a Telegram
+            // push channel is configured, use it as the one channel that
+            // doesn't depend on the phone call that just failed.
+            if (telegramGateway && config.telegramOwnerChatId) {
+              telegramGateway
+                .sendMessage(
+                  config.telegramOwnerChatId,
+                  `JARVIS failed to place your wake-up call${call.label ? ` (${call.label})` : ""}: ${message}`
+                )
+                .catch(() => {
+                  // Best-effort notification about a best-effort call — already logged above either way.
+                });
+            }
           })
           .finally(() => {
             inFlightWakeUpCallIds.delete(call.id);

@@ -601,6 +601,12 @@ another reminder notification.
   the way a determined friend would, not a snooze button.
 - Real Twilio per-minute cost applies to every call actually placed —
   same pricing as the inbound gateway, just outbound-initiated.
+- **A failed alarm call now actually tells you it failed**, instead of
+  just failing silently (an alarm that doesn't ring is the one failure
+  mode where the phone itself can't tell you anything went wrong): logged
+  to the activity feed either way, and — when Telegram/`NOTIFY_USER` is
+  configured — pushed there too, since that's the one notification
+  channel that doesn't depend on the phone call that just failed.
 
 ## Calendar & Gmail integration (Google account)
 
