@@ -36,6 +36,7 @@ import { TwilioOutboundCaller } from "@/communication/phone/TwilioOutboundCaller
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { createListCalendarEventsTool } from "@/tools/calendar/ListCalendarEventsTool";
+import { createUnlinkCalendarTool } from "@/tools/calendar/UnlinkCalendarTool";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
@@ -113,6 +114,7 @@ function main() {
     : undefined;
   if (calendarClient) {
     toolRegistry.registerTool(createListCalendarEventsTool(calendarClient));
+    toolRegistry.registerTool(createUnlinkCalendarTool(calendarTokenStore));
   }
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
@@ -142,6 +144,10 @@ function main() {
   // still forces a fresh per-invocation confirmation regardless of this
   // grant — this never lets JARVIS erase the transcript silently.
   permissionService.grant(DEFAULT_USER_ID, "CLEAR_CONVERSATION_HISTORY");
+  if (calendarClient) {
+    // Same DANGEROUS reasoning as CLEAR_CONVERSATION_HISTORY above.
+    permissionService.grant(DEFAULT_USER_ID, "UNLINK_CALENDAR");
+  }
 
   const deviceRegistry = new DeviceRegistry(config.deviceRegistryDbPath);
   const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);

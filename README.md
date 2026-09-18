@@ -608,7 +608,10 @@ automated from here):
 - **`LIST_CALENDAR_EVENTS`** (`READ`) — the user's upcoming events,
   soonest first, via Google's Calendar API v3 (`src/calendar/GoogleCalendarClient.ts`,
   raw `fetch` calls, no SDK dependency, matching this project's existing
-  style — see `TwilioOutboundCaller`).
+  style — see `TwilioOutboundCaller`). **`UNLINK_CALENDAR`** (`DANGEROUS`,
+  like `CLEAR_CONVERSATION_HISTORY`) actually disconnects the linked
+  account on request — before this, the only way to undo a link was
+  manually deleting the SQLite file.
 - OAuth tokens (the refresh token and current access token) are persisted
   to their own SQLite database (`src/calendar/CalendarTokenStore.ts`,
   `JARVIS_CALENDAR_TOKEN_DB_PATH`) — access tokens are refreshed
