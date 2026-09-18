@@ -37,6 +37,7 @@ final class AgentToolRegistry {
         let registry = AgentToolRegistry()
         registry.register(GetActiveApplicationTool.make())
         registry.register(OpenApplicationTool.make())
+        registry.register(QuitApplicationTool.make())
         return registry
     }
 }
