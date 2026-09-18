@@ -421,6 +421,18 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 
+  test("throws when latitude is out of the valid -90..90 range", () => {
+    process.env.JARVIS_WEATHER_LATITUDE = "185";
+    process.env.JARVIS_WEATHER_LONGITUDE = "34.78";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("throws when longitude is out of the valid -180..180 range", () => {
+    process.env.JARVIS_WEATHER_LATITUDE = "32.08";
+    process.env.JARVIS_WEATHER_LONGITUDE = "-200";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
   test("reads JARVIS_NEWS_RSS_URL when set", () => {
     process.env.JARVIS_NEWS_RSS_URL = "https://example.com/feed.xml";
     const config = loadConfig();

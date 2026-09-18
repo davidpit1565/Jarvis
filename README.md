@@ -899,7 +899,11 @@ verification, malformed JSON, disabled-gateway 404) against the actual
 ## Weather
 
 Setting `JARVIS_WEATHER_LATITUDE`/`JARVIS_WEATHER_LONGITUDE` (both
-required together) enables **`GET_WEATHER`** (`READ`) — a real current
+required together, and validated at startup to be real coordinates —
+latitude within -90..90, longitude within -180..180, so a typo (an
+extra digit, swapped lat/lon) fails fast with a clear error instead of
+silently reaching Open-Meteo and surfacing later as a confusing runtime
+failure) enables **`GET_WEATHER`** (`READ`) — a real current
 temperature/wind/conditions lookup for that one location, and
 **`GET_WEATHER_FORECAST`** (`READ`) — the daily min/max temperature,
 conditions, and chance of rain for the next several days (defaults to 3,

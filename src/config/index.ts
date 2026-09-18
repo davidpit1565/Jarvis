@@ -367,6 +367,14 @@ export function loadConfig(): JarvisConfig {
   if ((weatherLatitudeRaw && Number.isNaN(weatherLatitude)) || (weatherLongitudeRaw && Number.isNaN(weatherLongitude))) {
     throw new ConfigError("JARVIS_WEATHER_LATITUDE and JARVIS_WEATHER_LONGITUDE must be valid numbers");
   }
+  if (
+    (weatherLatitude !== undefined && (weatherLatitude < -90 || weatherLatitude > 90)) ||
+    (weatherLongitude !== undefined && (weatherLongitude < -180 || weatherLongitude > 180))
+  ) {
+    throw new ConfigError(
+      "JARVIS_WEATHER_LATITUDE must be between -90 and 90, and JARVIS_WEATHER_LONGITUDE between -180 and 180"
+    );
+  }
 
   const weatherFieldsSet = [weatherLatitude, weatherLongitude].filter((v) => v !== undefined).length;
   if (weatherFieldsSet > 0 && weatherFieldsSet < 2) {
