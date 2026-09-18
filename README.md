@@ -777,7 +777,12 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   pairing code needed) with its `primary` role still intact.
 - `GET /health` — unauthenticated, independent of Face ID lock/admin
   token/phone gateway config — wired into both `fly.toml`'s own health
-  check and a Dockerfile `HEALTHCHECK`.
+  check and a Dockerfile `HEALTHCHECK`. Also reports `version`
+  (`package.json`'s own version, always available, zero setup) and
+  `commit` (`null` unless `JARVIS_COMMIT_SHA` is set at deploy time — e.g.
+  `fly secrets set JARVIS_COMMIT_SHA=$(git rev-parse HEAD)` — there's no CI
+  here to inject it automatically) for confirming exactly which deployed
+  commit is actually live after a redeploy.
 - Both `SIGINT` and `SIGTERM` (what Fly.io/Docker/Kubernetes actually send
   for a normal stop/redeploy) trigger the same graceful shutdown: stop
   accepting connections, close every SQLite store, then exit.

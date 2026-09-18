@@ -85,9 +85,54 @@ describe("Dashboard HTTP routes", () => {
 
     const response = await fetch(`http://localhost:${handle.port}/health`);
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { status: string; uptimeSeconds: number };
+    const body = (await response.json()) as { status: string; uptimeSeconds: number; version: string; commit: string | null };
     expect(body.status).toBe("ok");
     expect(typeof body.uptimeSeconds).toBe("number");
+    expect(typeof body.version).toBe("string");
+    expect(body.version.length).toBeGreaterThan(0);
+  });
+
+  test("GET /health reports commit as null when JARVIS_COMMIT_SHA isn't set", async () => {
+    const original = process.env.JARVIS_COMMIT_SHA;
+    delete process.env.JARVIS_COMMIT_SHA;
+    try {
+      const eventBus = new EventBus();
+      const server = new JarvisWebSocketServer({
+        deviceRegistry: new DeviceRegistry(),
+        deviceConnectionManager: new DeviceConnectionManager(eventBus),
+        pairingService: new PairingService(),
+        eventBus,
+      });
+      const handle = server.start(0);
+      activeHandle = handle;
+
+      const body = (await (await fetch(`http://localhost:${handle.port}/health`)).json()) as { commit: string | null };
+      expect(body.commit).toBeNull();
+    } finally {
+      if (original !== undefined) process.env.JARVIS_COMMIT_SHA = original;
+    }
+  });
+
+  test("GET /health reports the configured commit when JARVIS_COMMIT_SHA is set", async () => {
+    const original = process.env.JARVIS_COMMIT_SHA;
+    process.env.JARVIS_COMMIT_SHA = "abc1234";
+    try {
+      const eventBus = new EventBus();
+      const server = new JarvisWebSocketServer({
+        deviceRegistry: new DeviceRegistry(),
+        deviceConnectionManager: new DeviceConnectionManager(eventBus),
+        pairingService: new PairingService(),
+        eventBus,
+      });
+      const handle = server.start(0);
+      activeHandle = handle;
+
+      const body = (await (await fetch(`http://localhost:${handle.port}/health`)).json()) as { commit: string | null };
+      expect(body.commit).toBe("abc1234");
+    } finally {
+      if (original === undefined) delete process.env.JARVIS_COMMIT_SHA;
+      else process.env.JARVIS_COMMIT_SHA = original;
+    }
   });
 
   test("GET /dashboard serves the same page as GET /", async () => {

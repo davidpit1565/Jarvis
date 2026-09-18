@@ -1,6 +1,7 @@
 import type { Server, ServerWebSocket } from "bun";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
+import packageJson from "../../../package.json";
 import type { EventBus } from "@/core/events/EventBus";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { PairingService } from "@/devices/pairing/PairingService";
@@ -196,7 +197,17 @@ export class JarvisWebSocketServer {
           // since that's exactly the situation an uptime monitor or Fly.io
           // deploy health check needs to detect isn't a full outage.
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/health") {
-            return Response.json({ status: "ok", uptimeSeconds: process.uptime() });
+            return Response.json({
+              status: "ok",
+              uptimeSeconds: process.uptime(),
+              version: packageJson.version,
+              // Unset unless the deploy pipeline sets it explicitly — there's
+              // no CI here to inject a git SHA automatically. Documented in
+              // .env.example / README for anyone who wants to wire it up
+              // (e.g. `fly secrets set JARVIS_COMMIT_SHA=$(git rev-parse HEAD)`
+              // before `fly deploy`) to confirm exactly which commit is live.
+              commit: process.env.JARVIS_COMMIT_SHA ?? null,
+            });
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/status") {
