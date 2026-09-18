@@ -37,6 +37,20 @@ describe("RssNewsClient.getTopHeadlines", () => {
     expect(headlines).toHaveLength(2);
   });
 
+  test("never returns more than the hard cap, even if a caller passes an unreasonably large maxItems", async () => {
+    const items = Array.from(
+      { length: 30 },
+      (_, i) => `<item><title>Headline ${i}</title><link>https://example.com/${i}</link></item>`
+    ).join("\n");
+    global.fetch = (async () =>
+      new Response(`<rss><channel>${items}</channel></rss>`, { status: 200 })) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    const headlines = await client.getTopHeadlines(999);
+
+    expect(headlines.length).toBeLessThanOrEqual(20);
+  });
+
   test("returns an empty array for a feed with no items", async () => {
     global.fetch = (async () =>
       new Response("<rss><channel></channel></rss>", { status: 200 })) as unknown as typeof fetch;
@@ -81,6 +95,20 @@ describe("RssNewsClient.searchHeadlines", () => {
     const headlines = await client.searchHeadlines("headline", 1);
 
     expect(headlines).toHaveLength(1);
+  });
+
+  test("never returns more than the hard cap, even if a caller passes an unreasonably large maxItems", async () => {
+    const items = Array.from(
+      { length: 30 },
+      (_, i) => `<item><title>Matching headline ${i}</title><link>https://example.com/${i}</link></item>`
+    ).join("\n");
+    global.fetch = (async () =>
+      new Response(`<rss><channel>${items}</channel></rss>`, { status: 200 })) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    const headlines = await client.searchHeadlines("matching", 999);
+
+    expect(headlines.length).toBeLessThanOrEqual(20);
   });
 
   test("throws on a non-2xx response", async () => {

@@ -924,7 +924,9 @@ key, no account, and deliberately scoped to whichever single feed you
 configure, not a general web-wide news aggregator. The fetched feed is
 cached for 5 minutes and shared between both tools, so calling either in
 quick succession doesn't re-fetch and re-parse the whole feed; a failed
-request is never cached.
+request is never cached. Both tools' `maxItems` is capped at 20
+regardless of what's requested — same "cap unbounded results" reasoning
+as the calendar/Gmail/Spotify search caps.
 
 ## Spotify integration
 

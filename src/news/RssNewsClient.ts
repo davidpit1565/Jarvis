@@ -25,6 +25,13 @@ function decodeXmlText(raw: string): string {
 // reasoning as OpenMeteoClient's current-weather cache.
 const ITEMS_CACHE_TTL_MS = 5 * 60_000;
 
+// Same "cap unbounded results" reasoning as GoogleCalendarClient/
+// GmailClient/SpotifyClient: the tools validate maxItems is a positive
+// integer but never bounded how large it can be, so a caller passing an
+// unreasonably large value would stuff every parsed headline from the
+// feed into the tool result and conversation history.
+const MAX_HEADLINES_CAP = 20;
+
 /**
  * Free news headlines from any RSS feed the user configures — no API key,
  * no account, matching this project's "as close to free as possible"
@@ -69,13 +76,13 @@ export class RssNewsClient {
 
   async getTopHeadlines(maxItems: number = 5): Promise<NewsHeadline[]> {
     const headlines = await this.fetchAllItems();
-    return headlines.slice(0, maxItems);
+    return headlines.slice(0, Math.min(maxItems, MAX_HEADLINES_CAP));
   }
 
   /** Headlines whose title contains `query` (case-insensitive), most-recent-first order preserved from the feed. */
   async searchHeadlines(query: string, maxItems: number = 5): Promise<NewsHeadline[]> {
     const headlines = await this.fetchAllItems();
     const needle = query.toLowerCase();
-    return headlines.filter((h) => h.title.toLowerCase().includes(needle)).slice(0, maxItems);
+    return headlines.filter((h) => h.title.toLowerCase().includes(needle)).slice(0, Math.min(maxItems, MAX_HEADLINES_CAP));
   }
 }
