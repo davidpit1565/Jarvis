@@ -154,7 +154,8 @@
     .panel .bar { display: none; }
     .panel .row { white-space: normal; }
     .panel .row .val { margin-left: 5px; }
-    #activity { bottom: 17%; font-size: 9px; }
+    #activity { bottom: 17%; font-size: 9px; max-height: 15vh; }
+    #activity-lines { max-height: calc(15vh - 20px); }
     #activity .heading { flex-direction: column; align-items: flex-start; gap: 2px; }
     #jarvis-label { font-size: 16px; letter-spacing: 8px; }
     /* Real overlap found by screenshot: these two buttons kept their
@@ -190,13 +191,11 @@
 
   #activity {
     position: fixed; left: 4%; right: 4%; bottom: 20%;
-    max-height: 15vh; overflow: hidden; z-index: 4;
+    max-height: 24vh; overflow: visible; z-index: 4;
     font-size: 10.5px; line-height: 1.6; color: #7fe0c8;
     background: linear-gradient(180deg, rgba(6,14,16,0.0), rgba(6,14,16,0.35));
     border-top: 1px solid rgba(127,224,200,0.18);
     padding-top: 6px; user-select: none;
-    -webkit-mask-image: linear-gradient(to bottom, transparent, black 30%, black 85%, transparent);
-    mask-image: linear-gradient(to bottom, transparent, black 30%, black 85%, transparent);
   }
   #activity .heading {
     color: #a8f2ff; font-size: 10px; letter-spacing: 3px; opacity: 0.8;
@@ -205,8 +204,20 @@
   #activity .heading .status { font-size: 9px; letter-spacing: 1px; }
   #activity .heading .status.live { color: #8bffb0; }
   #activity .heading .status.demo { color: #ffcf7f; }
-  #activity-lines { margin-top: 4px; }
-  #activity-lines .line { opacity: 0.9; white-space: pre; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 0 5px rgba(127,224,200,0.4); }
+  /* A real scrollback now (was overflow:hidden, capped at 7 lines with a
+     fade-out — anything older just vanished). Per direct request ("I
+     always want to be able to see all its code, everything it does"),
+     this now keeps 60 lines and scrolls, auto-following the newest line
+     unless the user has manually scrolled up to read history (see the
+     wasNearBottom check in pushActivityLine()). Fades in gently at the
+     top only — the bottom edge (the live, newest line) must stay fully
+     legible, not faded out, since that's the whole point of watching it. */
+  #activity-lines {
+    margin-top: 4px; max-height: calc(24vh - 20px); overflow-y: auto;
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 12%);
+    mask-image: linear-gradient(to bottom, transparent, black 12%);
+  }
+  #activity-lines .line { opacity: 0.9; white-space: pre-wrap; word-break: break-all; text-shadow: 0 0 5px rgba(127,224,200,0.4); }
   #activity-lines .line .t { opacity: 0.55; }
   #activity-lines .line .k-tool { color: #ffd9a0; }
   #activity-lines .line .k-brain { color: #9fd8ff; }
@@ -268,8 +279,19 @@
      #voice-bars above) — "let me see how it's actually speaking," per
      direct request, styled as its own side panel matching SYSTEM STATUS/
      CORE STATUS rather than a decoration near the plinth. */
-  .panel.voice { top: 46%; }
-  #voice-spectrum { width: 100%; height: 64px; display: block; opacity: 0.9; }
+  .panel.voice { top: 40%; }
+  /* Two independent meters, per direct request: "for each of us, me and
+     Jarvis, a row like this with our voice so we can see the pitch/tone" —
+     YOU (cyan, fed by the mic button) and JARVIS (amber, fed by
+     connectAudioElement() once Core has real TTS output — see the JS
+     below) rather than one shared meter that can't tell the two apart. */
+  .voice-row { margin-top: 10px; }
+  .voice-label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 8.5px; letter-spacing: 2px; opacity: 0.85; margin-bottom: 4px;
+  }
+  .voice-label.jarvis { color: #ffb15c; }
+  #voice-spectrum, #voice-spectrum-jarvis { width: 100%; height: 48px; display: block; opacity: 0.9; }
 </style>
 </head>
 <body>
@@ -302,8 +324,15 @@
   </div>
 
   <div class="panel right voice" id="panel-voice">
-    <div class="heading">VOICE <span class="status demo" id="voice-status">IDLE</span></div>
-    <canvas id="voice-spectrum"></canvas>
+    <div class="heading">VOICE</div>
+    <div class="voice-row">
+      <div class="voice-label">YOU <span class="status demo" id="voice-status">IDLE</span></div>
+      <canvas id="voice-spectrum"></canvas>
+    </div>
+    <div class="voice-row">
+      <div class="voice-label jarvis">JARVIS <span class="status demo" id="voice-status-jarvis">IDLE</span></div>
+      <canvas id="voice-spectrum-jarvis"></canvas>
+    </div>
   </div>
 
   <div id="glitch-banner">
@@ -1401,7 +1430,23 @@
    *    Falls back to a clearly-labeled DEMO feed only when Core isn't
    *    reachable, so nothing here is ever silently pretending to be real.
    * ------------------------------------------------------------- */
-  const MAX_ACTIVITY_LINES = 7;
+  // Real tool/email/URL content (file paths, email bodies, page titles)
+  // flows through here now that tool.requested/tool.executed show full
+  // arguments and results, not just a truncated summary — none of it was
+  // ever HTML-escaped before insertion via innerHTML below, which was
+  // already a latent XSS gap (any string in an event payload containing
+  // "<" could inject markup) and matters a lot more now that more of that
+  // raw content is actually shown. Escaped once, here, at render time.
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  const MAX_ACTIVITY_LINES = 60;
   const activityLinesEl = document.getElementById("activity-lines");
   const activityStatusEl = document.getElementById("activity-status");
   const jarvisCoreStatusEl = document.getElementById("jarvis-core-status");
@@ -1415,18 +1460,37 @@
     return "";
   }
 
+  // Real tool arguments/results, not just a name and an ok=true/false —
+  // per direct request: "whatever I ask it to do, I want to see, through
+  // Jarvis, how it does it." A generous cap (280 chars, not the previous
+  // 40-60) keeps one huge payload (a long email body, a big file listing)
+  // from swallowing the whole feed, with a clear "…" marker when truncated
+  // rather than silently cutting mid-value.
+  function codeSnippet(value, maxLen = 280) {
+    const json = JSON.stringify(value);
+    if (json === undefined) return "undefined";
+    return json.length > maxLen ? json.slice(0, maxLen) + "…" : json;
+  }
+
   function describeEvent(type, payload) {
     switch (type) {
       case "brain.request": return `brain.request  messages=${payload.messageCount}`;
       case "brain.response": return `brain.response  tool_calls=${payload.toolCallCount}  "${String(payload.text || "").slice(0, 46)}"`;
-      case "tool.requested": return `tool.requested  ${payload.toolCall && payload.toolCall.toolName}(${JSON.stringify(payload.toolCall && payload.toolCall.input || {}).slice(0, 40)})`;
-      case "tool.executed": return `tool.executed  ${payload.toolName}  ok=${payload.result && payload.result.success}`;
+      case "tool.requested": {
+        const call = payload.toolCall || {};
+        return `tool.requested  ${call.toolName}(${codeSnippet(call.input || {})})`;
+      }
+      case "tool.executed": {
+        const result = payload.result || {};
+        const detail = result.success ? codeSnippet(result.data) : `error: ${codeSnippet(result.error)}`;
+        return `tool.executed  ${payload.toolName}  ok=${result.success}  ${detail}`;
+      }
       case "tool.dispatched": return `tool.dispatched  ${payload.toolName} -> device:${String(payload.deviceId).slice(0, 8)}`;
-      case "permission.checked": return `permission.checked  ${payload.toolId}  allowed=${payload.result && payload.result.allowed}`;
+      case "permission.checked": return `permission.checked  ${payload.toolId}  allowed=${payload.result && payload.result.allowed}  (${payload.result && payload.result.reason || ""})`;
       case "device.registered": return `device.registered  ${payload.device && payload.device.name}`;
       case "device.connected": return `device.connected  ${String(payload.deviceId).slice(0, 8)}`;
       case "device.disconnected": return `device.disconnected  ${String(payload.deviceId).slice(0, 8)}  (${payload.reason})`;
-      default: return `${type}  ${JSON.stringify(payload).slice(0, 60)}`;
+      default: return `${type}  ${codeSnippet(payload, 120)}`;
     }
   }
 
@@ -1434,9 +1498,15 @@
     const time = new Date(timestamp || Date.now()).toLocaleTimeString([], { hour12: false });
     activityQueue.push({ time, text: describeEvent(type, payload || {}), kind: kindFor(type) });
     if (activityQueue.length > MAX_ACTIVITY_LINES) activityQueue.shift();
+    // Only auto-scroll to the newest line if the user was already at (or
+    // near) the bottom — otherwise a fast stream of events would keep
+    // yanking the view back down while they're scrolled up reading
+    // earlier activity, the same behavior every real terminal/console uses.
+    const wasNearBottom = activityLinesEl.scrollHeight - activityLinesEl.scrollTop - activityLinesEl.clientHeight < 24;
     activityLinesEl.innerHTML = activityQueue
-      .map((l) => `<div class="line"><span class="t">${l.time}</span>  <span class="${l.kind}">${l.text}</span></div>`)
+      .map((l) => `<div class="line"><span class="t">${l.time}</span>  <span class="${l.kind}">${escapeHtml(l.text)}</span></div>`)
       .join("");
+    if (wasNearBottom) activityLinesEl.scrollTop = activityLinesEl.scrollHeight;
     if (type === "brain.request" || type === "brain.response") {
       brainPulse = 1;
       // How big was this real thought? messageCount for a request, tool
@@ -1541,6 +1611,14 @@
   let audioCtx = null;
   let analyser = null;
   let audioData = null;
+  // A second, fully independent analyser for JARVIS's own voice (TTS
+  // output), separate from the "YOU" one above (the mic) — per direct
+  // request, each of "us" gets its own real meter instead of one shared
+  // one that can't tell the two apart. Idle/flat until connectAudioElement()
+  // below is actually fed real TTS audio, same honesty rule as everywhere
+  // else: no fabricated waveform standing in for it.
+  let analyserJarvis = null;
+  let audioDataJarvis = null;
   const voiceRing = document.getElementById("voice-ring");
 
   /* WhatsApp-voice-message-style bar meter — draws real analyser data
@@ -1591,6 +1669,19 @@
     audioData = new Uint8Array(analyser.frequencyBinCount);
   }
 
+  // The Jarvis analyser shares the same AudioContext (only one is allowed
+  // per page) but is otherwise a fully separate node graph — sampling one
+  // never affects the other, so "you" talking never lights up "Jarvis"'s
+  // meter and vice versa.
+  function ensureJarvisAnalyser() {
+    ensureAudioGraph();
+    if (analyserJarvis) return;
+    analyserJarvis = audioCtx.createAnalyser();
+    analyserJarvis.fftSize = 256;
+    analyserJarvis.smoothingTimeConstant = 0.75;
+    audioDataJarvis = new Uint8Array(analyserJarvis.frequencyBinCount);
+  }
+
   function sampleAudioLevel() {
     if (!analyser) return 0;
     analyser.getByteFrequencyData(audioData);
@@ -1599,70 +1690,116 @@
     return Math.min(1, (sum / audioData.length / 255) * 2.2);
   }
 
-  /* A real per-frequency-bin spectrum, not a single averaged level like
-     #voice-bars above — draws audioData (already sampled every frame by
-     sampleAudioLevel(), reused here rather than a second analyser read)
-     directly as bars, one per frequency bin, so this actually shows how
-     the voice's frequency content is shaped over time, not just its
-     overall loudness. Flat/dim while nothing is connected, same honesty
-     rule as every other real-data element on this page. */
-  const voiceSpectrumCanvas = document.getElementById("voice-spectrum");
-  const vsCtx = voiceSpectrumCanvas.getContext("2d");
-  const voiceStatusEl = document.getElementById("voice-status");
-  const VS_BARS = 24;
-  function resizeVoiceSpectrum() {
-    const rect = voiceSpectrumCanvas.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    voiceSpectrumCanvas.width = Math.max(1, rect.width * dpr);
-    voiceSpectrumCanvas.height = Math.max(1, rect.height * dpr);
+  function sampleJarvisLevel() {
+    if (!analyserJarvis) return 0;
+    analyserJarvis.getByteFrequencyData(audioDataJarvis);
+    let sum = 0;
+    for (let i = 0; i < audioDataJarvis.length; i++) sum += audioDataJarvis[i];
+    return Math.min(1, (sum / audioDataJarvis.length / 255) * 2.2);
   }
-  resizeVoiceSpectrum();
-  window.addEventListener("resize", resizeVoiceSpectrum);
 
-  function drawVoiceSpectrum() {
-    const w = voiceSpectrumCanvas.width, h = voiceSpectrumCanvas.height;
-    vsCtx.clearRect(0, 0, w, h);
-    const barW = w / VS_BARS;
-    // Most speech energy sits in the lower half of the FFT's frequency
-    // bins — sampling only the first ~60% of them (not the full range up
-    // to the Nyquist frequency) keeps every visible bar meaningful
-    // instead of half the display sitting flat at near-zero.
-    const usableBins = analyser ? Math.floor(audioData.length * 0.6) : 0;
-    for (let i = 0; i < VS_BARS; i++) {
-      const level = analyser ? (audioData[Math.floor((i / VS_BARS) * usableBins)] / 255) : 0;
-      const barH = Math.max(h * 0.04, level * h * 0.96);
-      const x = i * barW;
-      const y = h - barH;
-      const grad = vsCtx.createLinearGradient(0, h, 0, 0);
-      grad.addColorStop(0, analyser ? "rgba(111,216,232,0.9)" : "rgba(111,216,232,0.25)");
-      grad.addColorStop(1, analyser ? "rgba(255,177,92,0.9)" : "rgba(255,177,92,0.2)");
-      vsCtx.fillStyle = grad;
-      const bw = barW * 0.62;
-      vsCtx.fillRect(x + barW * 0.19, y, bw, barH);
+  /* A real per-frequency-bin spectrum, not a single averaged level like
+     #voice-bars above — draws already-sampled analyser data directly as
+     bars, one per frequency bin, so this actually shows how a voice's
+     frequency content is shaped over time (pitch/tone), not just its
+     overall loudness. Flat/dim while nothing is connected, same honesty
+     rule as everywhere else. One shared drawing function, parameterized
+     by which analyser/data/color to use, so YOU and JARVIS are pixel-for-
+     pixel the same real technique rather than two hand-duplicated copies.
+     Every viewer that renders differently would be worth double-checking
+     against the other — sharing the code makes that impossible to drift. */
+  const VS_BARS = 24;
+  function makeSpectrumMeter(canvasId, colorStopsActive, colorStopsIdle) {
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext("2d");
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.max(1, rect.width * dpr);
+      canvas.height = Math.max(1, rect.height * dpr);
     }
+    resize();
+    window.addEventListener("resize", resize);
+    return {
+      draw(activeAnalyser, data) {
+        const w = canvas.width, h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        const barW = w / VS_BARS;
+        // Most speech energy sits in the lower half of the FFT's
+        // frequency bins — sampling only the first ~60% keeps every
+        // visible bar meaningful instead of half the display sitting
+        // flat near-zero.
+        const usableBins = activeAnalyser ? Math.floor(data.length * 0.6) : 0;
+        const stops = activeAnalyser ? colorStopsActive : colorStopsIdle;
+        for (let i = 0; i < VS_BARS; i++) {
+          const level = activeAnalyser ? (data[Math.floor((i / VS_BARS) * usableBins)] / 255) : 0;
+          const barH = Math.max(h * 0.04, level * h * 0.96);
+          const x = i * barW;
+          const y = h - barH;
+          const grad = ctx.createLinearGradient(0, h, 0, 0);
+          grad.addColorStop(0, stops[0]);
+          grad.addColorStop(1, stops[1]);
+          ctx.fillStyle = grad;
+          const bw = barW * 0.62;
+          ctx.fillRect(x + barW * 0.19, y, bw, barH);
+        }
+      },
+    };
   }
+  const voiceStatusEl = document.getElementById("voice-status");
+  const voiceStatusJarvisEl = document.getElementById("voice-status-jarvis");
+  const youMeter = makeSpectrumMeter(
+    "voice-spectrum",
+    ["rgba(111,216,232,0.9)", "rgba(255,177,92,0.9)"],
+    ["rgba(111,216,232,0.25)", "rgba(255,177,92,0.2)"]
+  );
+  const jarvisMeter = makeSpectrumMeter(
+    "voice-spectrum-jarvis",
+    ["rgba(255,177,92,0.95)", "rgba(255,209,160,0.9)"],
+    ["rgba(255,177,92,0.22)", "rgba(255,209,160,0.18)"]
+  );
 
   (function audioLoop() {
     requestAnimationFrame(audioLoop);
-    const level = sampleAudioLevel();
-    audioGlow += (level - audioGlow) * 0.25;
+    const youLevel = sampleAudioLevel();
+    const jarvisLevel = sampleJarvisLevel();
+    // The Core's own body reactivity responds to whichever of "us" is
+    // louder right now — real today via the mic (proving the mechanism
+    // works, since Core has no TTS yet), and it'll pick up Jarvis's own
+    // voice for free the moment connectAudioElement() is fed real TTS
+    // output below, with zero further changes needed here.
+    const combined = Math.max(youLevel, jarvisLevel);
+    audioGlow += (combined - audioGlow) * 0.25;
     const glow = audioGlow;
     voiceRing.style.borderColor = `rgba(111,216,232,${(glow * 0.8).toFixed(2)})`;
     voiceRing.style.transform = `scale(${1 + glow * 0.15})`;
     voiceRing.style.boxShadow = glow > 0.05 ? `0 0 ${20 + glow * 60}px rgba(111,216,232,${glow * 0.5})` : "none";
-    drawVoiceBars(analyser ? level : 0);
-    drawVoiceSpectrum();
+    drawVoiceBars(analyser ? youLevel : 0);
+    youMeter.draw(analyser, audioData);
+    jarvisMeter.draw(analyserJarvis, audioDataJarvis);
   })();
 
   window.JarvisHologram = {
-    /** Feed a live <audio> or <video> element (e.g. Jarvis's TTS playback) into the reactive visualizer. */
+    /** Feed a live <audio> or <video> element (Jarvis's TTS playback) into the JARVIS voice meter. */
     connectAudioElement(mediaEl) {
-      ensureAudioGraph();
+      ensureJarvisAnalyser();
       const source = audioCtx.createMediaElementSource(mediaEl);
-      source.connect(analyser);
-      analyser.connect(audioCtx.destination);
+      source.connect(analyserJarvis);
+      analyserJarvis.connect(audioCtx.destination);
+      voiceStatusJarvisEl.textContent = "LIVE";
+      voiceStatusJarvisEl.classList.remove("demo");
+      voiceStatusJarvisEl.classList.add("live");
     },
-    /** Feed a raw MediaStream (e.g. from getUserMedia or a WebRTC/TTS stream) into the reactive visualizer. */
+    /** Feed a raw MediaStream (e.g. from getUserMedia, or Jarvis's own TTS via WebRTC) into the JARVIS voice meter. */
+    connectJarvisMediaStream(stream) {
+      ensureJarvisAnalyser();
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyserJarvis);
+      voiceStatusJarvisEl.textContent = "LIVE";
+      voiceStatusJarvisEl.classList.remove("demo");
+      voiceStatusJarvisEl.classList.add("live");
+    },
+    /** Feed a raw MediaStream (the mic button below uses this) into the YOU voice meter. */
     connectMediaStream(stream) {
       ensureAudioGraph();
       const source = audioCtx.createMediaStreamSource(stream);

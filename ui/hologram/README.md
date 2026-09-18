@@ -232,6 +232,23 @@ with `?host=...&port=...` in the URL.
 honestly falls back to a clearly-labeled `DEMO` feed of representative
 events, so it's never ambiguous whether what's on screen is real.
 
+**A real console now, not a one-line summary.** Per direct request —
+*"whatever I ask it to do, I want to see, through Jarvis, how it does
+it"* — `tool.requested`/`tool.executed` used to show `toolName(...40
+chars...)` and `ok=true`; they now show the real arguments and the real
+result data (up to 280 characters, with a `…` marker rather than a silent
+cut-off), and `permission.checked` shows the real reason a check passed
+or failed. The panel itself changed from a fixed 7-line, non-scrolling
+window (older lines just vanished) to a real scrollback — up to 60 lines,
+scrollable, auto-following the newest line unless you've manually scrolled
+up to read history (the same behavior any real terminal/console uses).
+Fixed the same pass found: the panel's `innerHTML` was never escaping
+event text before insertion — a latent XSS gap, since a URL, email body,
+or file path from a real tool call could contain `<`/`>`. Verified with a
+real fake-Core message containing a literal `<script>` tag in a URL: it
+renders as visible text (`&lt;script&gt;`), confirmed zero `<script>`
+elements were actually created in the DOM.
+
 The same real connection check now also drives the headline text under the
 `JARVIS` wordmark itself. It used to read a hardcoded, unconditional
 "CORE ONLINE" regardless of whether anything was actually connected — the
@@ -320,46 +337,63 @@ a handful of overlapping translucent layers at once is a known Chrome
 renderer crash risk on some GPUs, so a plain flat fill is used instead —
 same visual job, zero risk, no blur cost.
 
-## Voice reactivity — real audio analysis, no TTS to plug it into yet
+## Voice reactivity — two independent real meters, YOU and JARVIS
 
 The Core visibly brightens, grows, and spins faster in response to live
 audio via the Web Audio API (`AnalyserNode`) — genuine frequency-domain
-analysis, not a fake animation loop. `window.JarvisHologram` exposes two
-real integration points for whenever Core gets a voice/TTS output:
+analysis, not a fake animation loop.
+
+Per direct request — *"for each of us, me and Jarvis, a row like this
+with our voice so we can see the pitch/tone"* — there are now **two fully
+independent analyser graphs**, not one shared one: a **YOU** meter (cyan,
+fed by the mic) and a separate **JARVIS** meter (amber, fed by Jarvis's
+own TTS output once Core has one). Two people talking at once — or one
+talking while the other is silent — read correctly on their own meter;
+neither can light up the other's. `window.JarvisHologram` exposes:
 
 - `connectAudioElement(mediaEl)` — feed it an `<audio>`/`<video>` element
-  playing Jarvis's speech.
-- `connectMediaStream(stream)` — feed it a raw `MediaStream` (e.g. a
-  WebRTC or streaming-TTS pipeline).
+  playing Jarvis's speech, into the **JARVIS** meter.
+- `connectJarvisMediaStream(stream)` — feed it a raw `MediaStream` (e.g. a
+  WebRTC or streaming-TTS pipeline), also into the **JARVIS** meter.
+- `connectMediaStream(stream)` — feed it a raw `MediaStream` into the
+  **YOU** meter (what the 🎙 mic button below uses).
 
 **Core has no TTS/voice output at all yet**, so there's nothing genuine to
-auto-connect to today. The "🎙 CONNECT MIC" button in the bottom-right is a
-real, working way to see the reactivity live right now — it feeds your
-actual microphone in, which is honest proof the mechanism works rather
-than a placeholder pretending to be voice output.
+auto-connect to the JARVIS meter today — it stays honestly idle/flat until
+something real feeds it. The "🎙 CONNECT MIC" button is a real, working way
+to see the YOU meter live right now — it feeds your actual microphone in,
+honest proof the mechanism works rather than a placeholder pretending to
+be voice output. The Core's own body reactivity (`audioGlow`) responds to
+*whichever* of the two is louder at any moment, so the existing mic-based
+demo keeps working exactly as before, and Jarvis's own voice will drive
+the Core too the instant real TTS is connected — zero further code changes
+needed there.
 
 A scrolling bar meter (`#voice-bars`, above the plinth) in the style of a
-WhatsApp voice-message waveform draws from the same `AnalyserNode` in real
-time — a flat near-zero line whenever nothing is connected, never a
-fabricated idle waveform, lighting up green the moment the mic (or, later,
-TTS output) is connected.
+WhatsApp voice-message waveform draws from the YOU analyser in real time —
+a flat near-zero line whenever nothing is connected, never a fabricated
+idle waveform, lighting up green the moment the mic is connected.
 
-A second, separate **VOICE panel** sits on the right side of the screen
-(below CORE STATUS) with its own 24-bar frequency spectrum
-(`#voice-spectrum`). Unlike `#voice-bars` above, which shows one averaged
-loudness value scrolling over time, this reads the same per-frame
-`AnalyserNode.getByteFrequencyData()` array directly and draws each
-frequency bin as its own bar — so you can actually see how the voice's
-frequency content is shaped (bass-heavy vs. bright, a hard consonant vs. a
-sustained vowel), not just how loud it is. Only the lower ~60% of the FFT's
-bins are drawn, since that's where speech energy concentrates and the
-upper bins would otherwise sit flat. Every bar renders at a small non-zero
-floor height even at zero signal (so the panel always reads as "a
-spectrum," not "a broken canvas") and brightens from a dim cyan-to-amber
-gradient to a fully lit one the moment real audio is flowing — same
-honesty rule as everywhere else on this page: dim/idle when nothing is
-connected, never a fabricated animation. Its heading badge flips
-IDLE → LIVE in sync with the mic connect button.
+The **VOICE panel** on the right side of the screen (below CORE STATUS)
+now shows both meters stacked, each with its own 24-bar frequency spectrum
+and its own `IDLE`/`LIVE` badge — `youMeter`/`jarvisMeter` in `index.html`,
+built from one shared `makeSpectrumMeter()` factory (parameterized by
+canvas id and color) rather than two hand-duplicated copies of the drawing
+code, so the two can never silently drift apart in behavior. Each reads
+its own per-frame `AnalyserNode.getByteFrequencyData()` array directly and
+draws each frequency bin as its own bar — so you can actually see how a
+voice's frequency content is shaped (bass-heavy vs. bright, a hard
+consonant vs. a sustained vowel, pitch and tone), not just how loud it is.
+Only the lower ~60% of the FFT's bins are drawn, since that's where speech
+energy concentrates and the upper bins would otherwise sit flat. Every bar
+renders at a small non-zero floor height even at zero signal (so the panel
+always reads as "a spectrum," not "a broken canvas") and brightens to a
+fully lit color — cyan-to-amber for YOU, amber-to-pale-amber for JARVIS —
+the moment real audio is flowing on that specific meter. Verified with a
+real oscillator run through a `MediaStreamDestination` fed into
+`connectJarvisMediaStream()` alongside a real mic connection: both meters
+went `LIVE` independently, at the same time, with visibly different
+frequency content.
 
 ## Webcam face tracking — the Core turns to face you, for real
 
@@ -471,8 +505,15 @@ integrated one, clears 60fps easily either way.
   since there's no real signal in Core yet to drive one honestly.
 - Core has no TTS/voice output yet — the mic button proves the voice
   mechanism live today, not real Jarvis speech.
-- No autonomous computer control (the Core does not, and currently cannot,
-  move around the screen or click on things on its own) — that would be a
-  completely different system (OS-level automation, screen capture, input
-  simulation) with real safety implications, out of scope for this page
-  and not something to build without an explicit, scoped decision first.
+- No arbitrary UI automation — Core now has three narrow, named
+  SAFE_ACTION device tools (`OPEN_URL`, `OPEN_APPLICATION`,
+  `COMPOSE_EMAIL_DRAFT`; see the root `README.md`'s "Phase 2 scope"), each
+  doing exactly one well-defined, validated thing, but nothing moves the
+  mouse, simulates keystrokes, or clicks a specific on-screen element.
+  That's a categorically different, much higher-risk system (real input
+  simulation, not a named action with its own validation) and deliberately
+  not something added as "the next tool" without its own explicit, scoped
+  safety decision. Whatever real tool Jarvis does call shows up live in
+  the CORE ACTIVITY feed above with its actual arguments and result, which
+  is the concrete "let me see it happen" this page can honestly deliver
+  today.
