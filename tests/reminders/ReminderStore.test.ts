@@ -77,4 +77,58 @@ describe("ReminderStore", () => {
     expect(store.complete("missing-id")).toBe(false);
     store.close();
   });
+
+  test("delete removes the reminder entirely", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Task" });
+
+    expect(store.delete(record.id)).toBe(true);
+    expect(store.get(record.id)).toBeNull();
+    store.close();
+  });
+
+  test("delete returns false for unknown id", () => {
+    const store = new ReminderStore(":memory:");
+    expect(store.delete("missing-id")).toBe(false);
+    store.close();
+  });
+
+  test("update changes text and dueAt", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Call mom", dueAt: "2026-09-19T18:00:00.000Z" });
+
+    const updated = store.update(record.id, { text: "Call dad", dueAt: "2026-09-19T19:00:00.000Z" });
+
+    expect(updated?.text).toBe("Call dad");
+    expect(updated?.dueAt).toBe("2026-09-19T19:00:00.000Z");
+    expect(store.get(record.id)?.text).toBe("Call dad");
+    store.close();
+  });
+
+  test("update with only one field leaves the other unchanged", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Call mom", dueAt: "2026-09-19T18:00:00.000Z" });
+
+    const updated = store.update(record.id, { text: "Call dad" });
+
+    expect(updated?.text).toBe("Call dad");
+    expect(updated?.dueAt).toBe("2026-09-19T18:00:00.000Z");
+    store.close();
+  });
+
+  test("update with dueAt: null clears the due date", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Task", dueAt: "2026-09-19T18:00:00.000Z" });
+
+    const updated = store.update(record.id, { dueAt: null });
+
+    expect(updated?.dueAt).toBeNull();
+    store.close();
+  });
+
+  test("update returns null for unknown id", () => {
+    const store = new ReminderStore(":memory:");
+    expect(store.update("missing-id", { text: "x" })).toBeNull();
+    store.close();
+  });
 });

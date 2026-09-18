@@ -133,6 +133,13 @@ reminder has a lifecycle (pending, then completed), a memory doesn't:
   first (undated ones last); pass `includeCompleted` to see everything.
 - **`COMPLETE_REMINDER`** (`SAFE_ACTION`, standing-granted) — marks one
   done by id.
+- **`UPDATE_REMINDER`** (`SAFE_ACTION`, standing-granted) — edits an
+  existing reminder's text and/or due date in place ("actually make that
+  7pm instead"), without losing its id/createdAt.
+- **`DELETE_REMINDER`** (`SAFE_ACTION`, standing-granted) — permanently
+  removes a reminder created by mistake or no longer relevant. Distinct
+  from `COMPLETE_REMINDER`: this is for one that should never have
+  existed, not one the user actually did.
 
 ## Conversation history search
 

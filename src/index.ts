@@ -17,6 +17,8 @@ import { ReminderStore } from "@/reminders/ReminderStore";
 import { createCreateReminderTool } from "@/tools/reminders/CreateReminderTool";
 import { createListRemindersTool } from "@/tools/reminders/ListRemindersTool";
 import { createCompleteReminderTool } from "@/tools/reminders/CompleteReminderTool";
+import { createDeleteReminderTool } from "@/tools/reminders/DeleteReminderTool";
+import { createUpdateReminderTool } from "@/tools/reminders/UpdateReminderTool";
 import { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import { createSearchConversationHistoryTool } from "@/tools/history/SearchConversationHistoryTool";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
@@ -84,6 +86,8 @@ function main() {
   toolRegistry.registerTool(createCreateReminderTool(reminderStore));
   toolRegistry.registerTool(createListRemindersTool(reminderStore));
   toolRegistry.registerTool(createCompleteReminderTool(reminderStore));
+  toolRegistry.registerTool(createDeleteReminderTool(reminderStore));
+  toolRegistry.registerTool(createUpdateReminderTool(reminderStore));
   toolRegistry.registerTool(createSearchConversationHistoryTool(conversationHistoryStore));
 
   const permissionService = new PermissionService();
@@ -94,6 +98,8 @@ function main() {
   permissionService.grant(DEFAULT_USER_ID, "DELETE_MEMORY");
   permissionService.grant(DEFAULT_USER_ID, "CREATE_REMINDER");
   permissionService.grant(DEFAULT_USER_ID, "COMPLETE_REMINDER");
+  permissionService.grant(DEFAULT_USER_ID, "DELETE_REMINDER");
+  permissionService.grant(DEFAULT_USER_ID, "UPDATE_REMINDER");
 
   const deviceRegistry = new DeviceRegistry(config.deviceRegistryDbPath);
   const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);

@@ -62,6 +62,24 @@ export class ReminderStore {
     return result.changes > 0;
   }
 
+  /** True delete — distinct from complete(): for a reminder that should never have existed, not one that was done. */
+  delete(id: string): boolean {
+    const result = this.db.query(`DELETE FROM reminders WHERE id = ?`).run(id);
+    return result.changes > 0;
+  }
+
+  /** Edits an existing reminder's text and/or due date — e.g. "actually make that 7pm" or fixing a typo. */
+  update(id: string, changes: { text?: string; dueAt?: string | null }): ReminderRecord | null {
+    const existing = this.get(id);
+    if (!existing) return null;
+
+    const text = changes.text ?? existing.text;
+    const dueAt = changes.dueAt !== undefined ? changes.dueAt : existing.dueAt;
+
+    this.db.query(`UPDATE reminders SET text = ?, due_at = ? WHERE id = ?`).run(text, dueAt, id);
+    return { ...existing, text, dueAt };
+  }
+
   get(id: string): ReminderRecord | null {
     const row = this.db
       .query(`SELECT id, text, due_at as dueAt, completed, created_at as createdAt FROM reminders WHERE id = ?`)
