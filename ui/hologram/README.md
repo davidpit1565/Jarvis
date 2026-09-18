@@ -156,30 +156,46 @@ approximating a human head and use one:
   flatter than the reference's clearly protruding one. One deliberate
   accent, not a lighting model rewrite.
 
-## Proportions: lens choice and a non-uniform scale, not just the mesh
+## Proportions: measured against the reference, not eyeballed
 
-Two further, non-geometry fixes closed a "this still reads as fake/
-bloated compared to the reference" gap that direct side-by-side
-comparison traced to *how the head is framed*, not just what it's made
-of:
+Three fixes closed a "this still reads as fake/bloated compared to the
+reference" gap — the first two from direct side-by-side comparison, the
+third from an actual pixel-grid measurement after a uniform-scale attempt
+made things worse in a way that showed *why* eyeballing this further
+wasn't going to work:
 
 - **A narrower camera FOV (45°→28°) at a proportionally greater
   distance** (same on-screen framing, not a zoomed-in change) — a wide
   FOV this close to a face exaggerates its real width/roundness, the
   same well-known reason portrait photographers avoid shooting close
-  with a wide-angle lens. The reference reads as flatter/more
-  telephoto-compressed; this page's camera was doing the opposite.
-- **A non-uniform scale on the head model itself** (narrower in x,
-  taller in y: `0.86x, 1.12y, 0.97z` relative to the base 0.384 scale) —
-  LeePerrySmith is a real adult male face and was never going to become
-  a slender idealized oval through camera framing alone, so the model is
-  squashed/stretched slightly to match the reference's proportions more
-  directly. This also pulls the ears in rather than needing separate
-  treatment for them. Trade-off: a perfect sphere (the eye pupils) reads
-  as a very slightly squashed ellipsoid under this same non-uniform
-  scale, since they're children of the same scaled group — not visually
-  significant at the sizes/distances involved, but a real, known
-  side-effect rather than a free fix.
+  with a wide-angle lens.
+- **A narrower x-scale on the head model itself** (`0.86x` relative to
+  the base 0.384 scale) — LeePerrySmith is a real adult male face and
+  was never going to become a slender idealized oval through camera
+  framing alone. Also pulls the ears in rather than needing separate
+  treatment for them. Trade-off: the eye pupil spheres read as very
+  slightly squashed ellipsoids under this same non-uniform scale, since
+  they're children of the same scaled group — not visually significant
+  at the sizes/distances involved, but a real, known side-effect.
+- **`compressAboveY`: a piecewise vertical reshape, not a uniform y-scale.**
+  A first attempt also stretched the model vertically (`1.12y`, uniform)
+  to fix the "too round" look — this was a real regression, flagged
+  directly: it stretched the *whole* head including an already
+  disproportionate forehead/crown, making the face read as *shorter*
+  relative to a now-taller skull. Overlaying a pixel grid on the
+  reference frame and on this page's own render (rather than continuing
+  to guess at scale numbers) measured the actual gap: the reference's
+  face (brow to chin) fills roughly 66% of the total head height (crown
+  to chin); this raw scan's own proportions put the face at only ~53%. A
+  uniform scale cannot fix a *ratio* — every uniform factor leaves that
+  ratio exactly as wrong as it started. `compressAboveY` instead
+  compresses only the mesh geometry above the brow line (y=1.78, toward
+  that same pivot) by a measured factor (0.56), leaving the face and
+  everything below completely untouched, applied once right after
+  decimation so every other layer (fill, grid, dots, brain) is built on
+  the already-corrected shape with no further special-casing needed. The
+  brain's position/size (see below) were re-tuned after this, since the
+  cranial cavity above the brow is now genuinely shorter.
 
 Real ears, a real nose, a real jaw, a real neck-into-shoulders — all
 inherent to the geometry, from any angle, with no per-feature code needed
@@ -192,15 +208,19 @@ a real mesh made most of that machinery unnecessary.
 
 The wireframe is just line edges, so anything placed inside the head
 volume is naturally visible through it — a warm amber cloud of ~1,800
-points filling most of the actual cranial cavity (from brow to crown),
-plus 80 connecting "synapse" line segments, gives the head genuine
-internal structure instead of reading as a hollow dome or a small patch.
-Sized up substantially from an original ~900-point, much smaller volume
-per direct user feedback that it looked "really small" relative to the
-head — a first, bigger attempt leaked particles through the scalp near
-the crown (the real skull narrows faster there than a simple ellipsoid
-assumes), so the final size/position was pulled in slightly to stay
-inside the actual mesh surface, verified via zoomed-in screenshots.
+points filling most of the actual cranial cavity (from the brow to the
+crown), plus 80 connecting "synapse" line segments, gives the head
+genuine internal structure instead of reading as a hollow dome or a
+small patch. Sized up substantially from an original ~900-point, much
+smaller volume per direct user feedback that it looked "really small"
+relative to the head. Its exact size/position has been re-tuned twice
+since: once when a bigger attempt leaked particles through the scalp
+near the crown (the real skull narrows faster there than a simple
+ellipsoid assumes), and again after `compressAboveY` (see "Proportions"
+above) genuinely shortened the cranial cavity above the brow, which
+needed a smaller vertical radius to still fit cleanly inside it — both
+verified via zoomed-in screenshots checking the crown specifically for
+leaking particles.
 
 Its glow, and now its **size**, aren't a fixed animation: `brainPulse`
 (in `index.html`) brightens *and physically grows* the brain on real

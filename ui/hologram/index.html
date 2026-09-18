@@ -804,6 +804,29 @@
       );
       const simplified = new THREE.SimplifyModifier().modify(merged, removeCount);
 
+      // Measured, not eyeballed: overlaying a pixel grid on the reference
+      // frame and on our own render showed the reference's face (brow to
+      // chin) fills ~66% of the total head height (crown to chin), while
+      // this raw scan's own proportions put the face at only ~53% — a
+      // proportionally much taller forehead/crown than the reference. A
+      // uniform vertical scale (tried in an earlier round) can't fix a
+      // *ratio* problem — it stretches the wrong-proportioned forehead
+      // right along with everything else, which is what made the face
+      // read as "short" relative to a now-taller skull, a real
+      // regression flagged directly. This compresses only the geometry
+      // above the brow line (`pivotY`) toward it, leaving the face and
+      // everything below completely untouched, to hit the measured
+      // target ratio instead of guessing at a single scale number again.
+      function compressAboveY(geometry, pivotY, factor) {
+        const pos = geometry.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+          const y = pos.getY(i);
+          if (y > pivotY) pos.setY(i, pivotY + (y - pivotY) * factor);
+        }
+        pos.needsUpdate = true;
+      }
+      compressAboveY(simplified, 1.78, 0.56);
+
       // Crop off the scan's real wide shoulders (see clipTrianglesByY
       // above) — the reference is a slender neck fading to almost nothing,
       // not a wide torso, and this was the single biggest silhouette
@@ -815,16 +838,18 @@
       const modelGroup = new THREE.Group();
       // The source scan is natively ~8 units across; scale it down to
       // this scene's existing camera-distance/panel/plinth proportions.
-      // Non-uniform on purpose (narrower in x, taller in y) — direct
-      // side-by-side comparison against the reference showed this real
-      // scan reads as noticeably wider/rounder than the reference's more
-      // slender oval face even after the camera-lens fix above; LeePerrySmith
-      // is a real adult male face and isn't going to become a slender
-      // idealized oval through camera framing alone, so this pulls the
-      // whole head in horizontally and stretches it vertically slightly
-      // instead — cheap, and it also pulls the ears in rather than
-      // needing separate treatment for them.
-      modelGroup.scale.set(0.384 * 0.86, 0.384 * 1.12, 0.384 * 0.97);
+      // Narrower in x only now — direct side-by-side comparison against
+      // the reference showed this real scan reads as noticeably wider
+      // than the reference's more slender oval face even after the
+      // camera-lens fix above; also pulls the ears in rather than needing
+      // separate treatment for them. The vertical stretch tried in an
+      // earlier round (1.12y) is gone — it stretched the whole head
+      // uniformly, including the already-too-tall forehead/crown region,
+      // making the face read as proportionally *shorter* relative to a
+      // now-taller skull, a real regression. compressAboveY (above) fixes
+      // the actual crown/face ratio directly instead; this scale is back
+      // to a neutral 1.0 in y.
+      modelGroup.scale.set(0.384 * 0.86, 0.384, 0.384 * 0.97);
 
       // Eye, mouth, and nostril ellipsoids (raw mesh space). A *hard*
       // triangle cut at these was tried for the solid fill mesh and
@@ -1021,15 +1046,14 @@
       mouth = buildMouth(0, -0.11, 2.32, 1.05);
       modelGroup.add(mouth.group);
 
-      // Sized to actually fill most of the cranial cavity (crown near
-      // y=3.97, brow near y=1.8) rather than a small patch only visible
-      // behind the very top of the forehead — per direct user feedback
-      // that the brain looked "really small" relative to the head. A
-      // first, bigger attempt (by=1.05, centered higher) poked particles
-      // through the scalp near the crown, since the real skull narrows
-      // faster than a simple ellipsoid there — pulled in slightly to stay
-      // safely inside the actual mesh surface.
-      brain = buildBrain(0, 2.45, -0.75, 1.15, 0.85, 1.1);
+      // Sized to fill most of the cranial cavity between the brow
+      // (y=1.78, the compressAboveY pivot — unaffected) and the new,
+      // compressed crown (was y=3.97, now 1.78+(3.97-1.78)*0.56≈3.0) —
+      // recomputed to match after compressAboveY shortened the available
+      // vertical space above the brow; kept sized to still read as large
+      // per earlier direct feedback that it looked "really small," while
+      // staying inside the now-shorter cavity.
+      brain = buildBrain(0, 2.1, -0.75, 0.9, 0.3, 0.95);
       modelGroup.add(brain.group);
 
       faceGroup.add(modelGroup);
