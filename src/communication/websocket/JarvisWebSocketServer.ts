@@ -493,7 +493,19 @@ export class JarvisWebSocketServer {
           // HOLOGRAM_UI_DIR above. Same lock check as "/" (a real
           // WebAuthn-gated screen makes sense here too once this is
           // reachable from the open internet, not just localhost).
-          if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/hologram" || url.pathname === "/hologram/")) {
+          // Without the trailing slash, the browser resolves this page's
+          // relative asset paths (`./three.min.js`, `./shaders/...`) against
+          // `/` instead of `/hologram/` — they 404 into the catch-all
+          // WebSocket-endpoint text response, wrong MIME type, and the
+          // browser refuses to execute them ("THREE is not defined"),
+          // silently killing the whole script before any button listener
+          // ever gets attached. Redirect instead of serving the same HTML
+          // at both URLs, so every relative path in the page always
+          // resolves under `/hologram/`, which the route below actually serves.
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/hologram") {
+            return new Response(null, { status: 302, headers: { Location: "/hologram/" } });
+          }
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/hologram/") {
             const { webAuthnService } = this.deps;
             const locked = webAuthnService?.hasCredentials() && !this.hasValidSession(req);
             if (locked) return new Response(LOCK_HTML, { headers: { "Content-Type": "text/html" } });
