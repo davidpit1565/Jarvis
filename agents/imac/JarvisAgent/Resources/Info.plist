@@ -30,5 +30,7 @@ calls fail silently with no prompt ever shown.
     <string>JARVIS listens for "Hey JARVIS" to hear voice commands. Audio is only sent to JARVIS Core after that wake phrase is heard.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>JARVIS transcribes your microphone on-device to detect the "Hey JARVIS" wake phrase and understand voice commands.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>JARVIS reads and creates reminders in your Reminders app when you ask it to.</string>
 </dict>
 </plist>

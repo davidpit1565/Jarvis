@@ -45,6 +45,9 @@ final class AgentToolRegistry {
         registry.register(ComposeEmailDraftTool.make())
         registry.register(ClickElementTool.make())
         registry.register(TypeTextTool.make())
+        registry.register(ListMacRemindersTool.make())
+        registry.register(CreateMacReminderTool.make())
+        registry.register(CompleteMacReminderTool.make())
         return registry
     }
 }

@@ -110,6 +110,20 @@ What's new in Phase 2:
   validation" below for what's verified vs. still needs a real Mac (both
   of these specifically also need the Accessibility permission granted
   to the Agent, which no earlier tool required).
+- **macOS Reminders integration** (`LIST_MAC_REMINDERS`, `CREATE_MAC_REMINDER`,
+  `COMPLETE_MAC_REMINDER`): reads and writes the user's real macOS
+  Reminders app via EventKit's public `EKEventStore` API — never
+  AppleScript's `tell application "Reminders"`. Deliberately distinct
+  from JARVIS's own SQLite-backed `ReminderStore`/`CREATE_REMINDER`
+  family: those are a JARVIS-only task list, these three write into the
+  actual Reminders app the user (and Siri, and their other Apple
+  devices) already sees. All three are `SAFE_ACTION` — reversible by
+  editing the reminder back in the Reminders app. `COMPLETE_MAC_REMINDER`
+  finds its target by an exact title match among incomplete reminders,
+  refusing to guess when zero or multiple match — same discipline as
+  `CLICK_ELEMENT`. Requires the Agent's `Info.plist` to declare
+  `NSRemindersFullAccessUsageDescription` (added) and the user to grant
+  Reminders access when macOS first prompts for it.
 - **Bilingual (Hebrew + English) conversation**: a fixed system instruction
   (`src/core/brain/systemPrompt.ts`) tells Claude to detect and respond in
   the user's language, including mixed Hebrew/English in one message. Tool
