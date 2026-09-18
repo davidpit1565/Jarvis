@@ -272,16 +272,24 @@ function main() {
     );
     const wakeUpTwimlUrl = new URL("/voice/wakeup-connected", config.twilioPublicBaseUrl!).toString();
 
-    // Every 30s rather than tied to setInterval's own drift-prone timing —
-    // WakeUpCallStore's lastTriggeredDate check makes this idempotent, so
-    // a slightly early/late or occasionally doubled tick never double-dials.
+    // WakeUpCallStore's lastTriggeredDate check makes each tick idempotent
+    // ONCE a call has actually completed — but a call stays due for up to
+    // two ticks within the same matching minute (checks run every 30s),
+    // so a placeCall() that's still in flight when the next tick fires
+    // (a slow/stuck network request) would otherwise be dialed again
+    // before markTriggered() ever runs. inFlightWakeUpCallIds closes that
+    // gap: a call id is tracked as soon as placeCall() starts, not only
+    // once it resolves.
+    const inFlightWakeUpCallIds = new Set<string>();
+
     wakeUpInterval = setInterval(() => {
       const now = new Date();
       const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
       const todayDateStr = formatDateKey(now, config.timezone);
-      const due = getDueWakeUpCalls(wakeUpCallStore.list(), nowTimeOfDay, todayDateStr);
+      const due = getDueWakeUpCalls(wakeUpCallStore.list(), nowTimeOfDay, todayDateStr, inFlightWakeUpCallIds);
 
       for (const call of due) {
+        inFlightWakeUpCallIds.add(call.id);
         outboundCaller
           .placeCall(config.ownerPhoneNumber!, wakeUpTwimlUrl)
           .then(() => {
@@ -293,6 +301,9 @@ function main() {
               `[jarvis] failed to place wake-up call ${call.id}:`,
               error instanceof Error ? error.message : String(error)
             );
+          })
+          .finally(() => {
+            inFlightWakeUpCallIds.delete(call.id);
           });
       }
     }, 30_000);

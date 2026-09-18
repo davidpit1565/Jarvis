@@ -39,6 +39,18 @@ describe("getDueWakeUpCalls", () => {
     const call = makeCall({ timeOfDay: "07:00", lastTriggeredDate: "2026-01-14" });
     expect(getDueWakeUpCalls([call], "07:00", "2026-01-15")).toEqual([call]);
   });
+
+  test("excludes a call whose id is in excludeIds, even though it's otherwise due", () => {
+    const call = makeCall({ id: "call-in-flight", timeOfDay: "07:00" });
+    const due = getDueWakeUpCalls([call], "07:00", "2026-01-15", new Set(["call-in-flight"]));
+    expect(due).toEqual([]);
+  });
+
+  test("still includes a due call whose id isn't in excludeIds", () => {
+    const call = makeCall({ id: "call-2", timeOfDay: "07:00" });
+    const due = getDueWakeUpCalls([call], "07:00", "2026-01-15", new Set(["some-other-call"]));
+    expect(due).toEqual([call]);
+  });
 });
 
 describe("formatTimeOfDay", () => {

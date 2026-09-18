@@ -567,9 +567,14 @@ another reminder notification.
   entirely through conversation.
 - A scheduler tick every 30 seconds (`src/index.ts`) checks the schedule
   against the current time in `JARVIS_TIMEZONE` and places any due call
-  via `TwilioOutboundCaller` (Twilio's REST API) — idempotent by design
-  (`lastTriggeredDate` per entry), so an occasional double tick can never
-  double-dial.
+  via `TwilioOutboundCaller` (Twilio's REST API). Guarded against
+  double-dialing two ways: `lastTriggeredDate` per entry once a call
+  actually completes, and an in-memory in-flight set
+  (`getDueWakeUpCalls`'s `excludeIds`) for the narrower case a placeCall()
+  is still in flight (a slow/stuck request) when the next tick fires
+  within the same matching minute — found and fixed during this session's
+  own review, since `lastTriggeredDate` alone only closes the gap after
+  the call already finished.
 - When you answer, JARVIS doesn't play a canned recording — it asks its
   own brain for an opening line first (via the same `channelContext`
   mechanism used for regular calls, but framed as "you placed this call,
