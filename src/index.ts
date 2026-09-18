@@ -47,6 +47,7 @@ import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/TwilioVoiceGateway";
+import { TelegramGateway, type TelegramSession } from "@/communication/telegram/TelegramGateway";
 import { ActivityLog } from "@/core/activity/ActivityLog";
 import { WebAuthnStore } from "@/auth/WebAuthnStore";
 import { WebAuthnService } from "@/auth/WebAuthnService";
@@ -300,6 +301,32 @@ function main() {
         )
       : undefined;
 
+  // A Telegram chat gets its own conversation thread, like a phone call,
+  // but kept for the life of the process rather than one call's duration —
+  // a chat has no natural "hang up." Scoped on purpose: JARVIS only ever
+  // sees messages sent to this specific bot, in chats it's been added to.
+  function createTelegramSession(_chatId: string): TelegramSession {
+    const telegramConversation = new ConversationManager(eventBus);
+    const telegramOrchestrator = new Orchestrator({
+      brain,
+      conversation: telegramConversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService: phoneConfirmationService,
+      channelContext: "This conversation is happening over Telegram right now.",
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+    });
+    return { orchestrator: telegramOrchestrator, userId: DEFAULT_USER_ID };
+  }
+
+  const telegramGateway =
+    config.telegramBotToken && config.telegramWebhookSecret
+      ? new TelegramGateway(config.telegramBotToken, createTelegramSession, config.telegramAllowedChatIds)
+      : undefined;
+
   let wakeUpInterval: ReturnType<typeof setInterval> | undefined;
   if (wakeUpCallsEnabled) {
     toolRegistry.registerTool(createCreateWakeUpCallTool(wakeUpCallStore));
@@ -365,6 +392,8 @@ function main() {
     twilioAuthToken: config.twilioAuthToken,
     twilioPublicBaseUrl: config.twilioPublicBaseUrl,
     twilioAllowedCallers: config.twilioAllowedCallers,
+    telegramGateway,
+    telegramWebhookSecret: config.telegramWebhookSecret,
     adminToken: config.adminToken,
     webAuthnService,
     sessionStore,
@@ -460,6 +489,18 @@ function main() {
         "Set TWILIO_ALLOWED_CALLERS before giving the number to anyone but yourself."
     );
   }
+  console.log(
+    telegramGateway
+      ? "Telegram gateway: enabled (POST /telegram/webhook)"
+      : "Telegram gateway: disabled (set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET to enable)"
+  );
+  if (telegramGateway && (!config.telegramAllowedChatIds || config.telegramAllowedChatIds.length === 0)) {
+    console.warn(
+      "[jarvis] WARNING: Telegram gateway is enabled with no TELEGRAM_ALLOWED_CHAT_IDS set — " +
+        "anyone who finds and messages the bot reaches full JARVIS, including tools like SAVE_MEMORY. " +
+        "Set TELEGRAM_ALLOWED_CHAT_IDS before sharing the bot with anyone but yourself."
+    );
+  }
 
   activityLogForCrashHandlers = activityLog;
 
@@ -506,6 +547,7 @@ function main() {
     permissionService,
     confirmationService,
     phoneGateway,
+    telegramGateway,
     eventBus,
   };
 }

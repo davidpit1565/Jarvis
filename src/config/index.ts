@@ -78,6 +78,18 @@ export interface JarvisConfig {
   twilioVoicePitch?: string;
   twilioVoiceRate?: string;
   /**
+   * Bot token (from @BotFather) and webhook secret required together to
+   * enable the optional Telegram gateway — a scoped alternative to "give
+   * JARVIS access to all my Telegram messages": the user adds this
+   * specific bot to specific chats, and JARVIS only ever sees messages
+   * sent to it there, never anything else on the account.
+   */
+  telegramBotToken?: string;
+  /** Verifies incoming webhook requests actually came from Telegram (the `X-Telegram-Bot-Api-Secret-Token` header Telegram echoes back, set via setWebhook's own `secret_token` field). */
+  telegramWebhookSecret?: string;
+  /** Numeric Telegram chat IDs allowed to talk to the bot; empty/unset means any chat that finds/adds the bot can. */
+  telegramAllowedChatIds?: string[];
+  /**
    * Shared secret required on POST /pairing/approve. Mandatory once the
    * phone gateway is configured, since that makes this same server
    * reachable from the public internet — without it, the pairing code
@@ -251,6 +263,20 @@ export function loadConfig(): JarvisConfig {
     );
   }
 
+  const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined;
+  const telegramWebhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || undefined;
+  const telegramAllowedChatIds = process.env.TELEGRAM_ALLOWED_CHAT_IDS?.split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+
+  const telegramFieldsSet = [telegramBotToken, telegramWebhookSecret].filter(Boolean).length;
+  if (telegramFieldsSet > 0 && telegramFieldsSet < 2) {
+    throw new ConfigError(
+      "TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET must both be set together (or neither) to enable the " +
+        "Telegram gateway — the secret is what proves an incoming webhook request actually came from Telegram."
+    );
+  }
+
   return {
     anthropicApiKey,
     port,
@@ -287,6 +313,9 @@ export function loadConfig(): JarvisConfig {
     googleClientId,
     googleClientSecret,
     calendarTokenDbPath,
+    telegramBotToken,
+    telegramWebhookSecret,
+    telegramAllowedChatIds,
   };
 }
 

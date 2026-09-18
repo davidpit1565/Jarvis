@@ -20,6 +20,7 @@ import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import type { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
+import type { TelegramGateway } from "@/communication/telegram/TelegramGateway";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
 import { DASHBOARD_HTML, LOCK_HTML } from "./dashboard";
 import type { WebAuthnService } from "@/auth/WebAuthnService";
@@ -129,6 +130,15 @@ export interface JarvisWebSocketServerDependencies {
   calendarClient?: GoogleCalendarClient;
   /** Optional: enables the admin-gated GET /wakeup-calls read-only endpoint. */
   wakeUpCallStore?: WakeUpCallStore;
+  /**
+   * Both required together to enable POST /telegram/webhook; otherwise it
+   * 404s. `telegramWebhookSecret` must match the `X-Telegram-Bot-Api-Secret-Token`
+   * header Telegram sends on every webhook request (configured via
+   * setWebhook's own `secret_token` field) — without it, anyone who
+   * discovers the webhook URL could inject fake "incoming messages."
+   */
+  telegramGateway?: TelegramGateway;
+  telegramWebhookSecret?: string;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -249,6 +259,10 @@ export class JarvisWebSocketServer {
 
           if (req.method === "POST" && url.pathname.startsWith("/voice/")) {
             return await this.handleVoiceWebhook(req, url);
+          }
+
+          if (req.method === "POST" && url.pathname === "/telegram/webhook") {
+            return await this.handleTelegramWebhook(req);
           }
 
           // A WebSocket handshake is itself an HTTP GET with an Upgrade
@@ -584,6 +598,41 @@ export class JarvisWebSocketServer {
   }
 
   /**
+   * Handles Telegram's Bot API webhook, after verifying the
+   * `X-Telegram-Bot-Api-Secret-Token` header Telegram echoes on every
+   * request (set once via setWebhook's own `secret_token` field) against
+   * the configured secret. A missing or invalid secret is always
+   * rejected — an unauthenticated webhook here would let anyone drive
+   * JARVIS's tools with a fabricated "incoming message," no real Telegram
+   * account required. Always responds 200 once the secret checks out —
+   * Telegram retries a webhook that doesn't get a 2xx, and message
+   * handling failures are already turned into a spoken-style error reply
+   * inside TelegramGateway itself, never a thrown error here.
+   */
+  private async handleTelegramWebhook(req: Request): Promise<Response> {
+    const { telegramGateway, telegramWebhookSecret } = this.deps;
+    if (!telegramGateway || !telegramWebhookSecret) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
+    if (secret !== telegramWebhookSecret) {
+      console.error("[jarvis] rejected Telegram webhook: invalid or missing secret token");
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    let update: unknown;
+    try {
+      update = await req.json();
+    } catch {
+      return new Response("Bad request: invalid JSON", { status: 400 });
+    }
+
+    await telegramGateway.handleUpdate(update);
+    return new Response(null, { status: 200 });
+  }
+
+  /**
    * Handles one Twilio Media Streams WebSocket message. Twilio's own
    * schema (https://www.twilio.com/docs/voice/media-streams/websocket-messages):
    * {event: "connected"|"start"|"media"|"stop", media?: {track, payload, ...}, ...}.
@@ -633,6 +682,7 @@ export class JarvisWebSocketServer {
       deviceRegistry,
       toolRegistry,
       phoneGateway,
+      telegramGateway,
       activityLog,
       webAuthnService,
       audioLevelBroadcaster,
@@ -663,6 +713,7 @@ export class JarvisWebSocketServer {
       devices,
       tools,
       phoneGatewayEnabled: Boolean(phoneGateway),
+      telegramGatewayEnabled: Boolean(telegramGateway),
       activity: activityLog?.list() ?? [],
       webAuthnConfigured: webAuthnService?.hasCredentials() ?? true,
       audioWaveformEnabled: Boolean(audioLevelBroadcaster),

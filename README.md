@@ -673,6 +673,64 @@ automated from here):
   server-issued `state` value (real CSRF protection), independent of the
   admin token, since Google's own redirect has no way to carry a header.
 
+## Telegram integration
+
+Lets you talk to JARVIS through Telegram, from a bot you add to specific
+chats — a scoped alternative to "give JARVIS access to all my messages,"
+not a general Telegram inbox reader. There is no code path here that reads
+anything outside a chat this specific bot was added to, and (once
+`TELEGRAM_ALLOWED_CHAT_IDS` is set) that chat is explicitly allowlisted.
+
+**Setup** (Telegram, one-time, done manually):
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram, send `/newbot`,
+   and follow its prompts to get a bot token.
+2. Set `TELEGRAM_BOT_TOKEN` (the token from step 1) and
+   `TELEGRAM_WEBHOOK_SECRET` (any long random value, e.g.
+   `openssl rand -hex 32`) as environment variables/secrets on wherever
+   JARVIS runs.
+3. Register the webhook with Telegram (a one-time call, from your own
+   machine, not automated by JARVIS itself):
+   ```
+   curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+     -d "url=<JARVIS_PUBLIC_BASE_URL>/telegram/webhook" \
+     -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+   ```
+4. Optionally set `TELEGRAM_ALLOWED_CHAT_IDS` to a comma-separated
+   allowlist of numeric chat IDs (see "Security controls" below) —
+   recommended before adding the bot to more than your own chat. Your own
+   chat ID shows up in the first message JARVIS fails to send if it's not
+   yet allowlisted, or via `@userinfobot` on Telegram.
+5. Message the bot — JARVIS answers, and the same chat keeps its own
+   conversation thread for as long as the process runs (unlike a phone
+   call, a chat has no natural "hang up").
+
+**What's implemented:**
+
+- `POST /telegram/webhook` (`src/communication/telegram/TelegramGateway.ts`)
+  verifies the `X-Telegram-Bot-Api-Secret-Token` header Telegram echoes on
+  every request against `TELEGRAM_WEBHOOK_SECRET` before processing
+  anything — an unauthenticated webhook here would let anyone drive
+  JARVIS's tools with a fabricated "incoming message," no real Telegram
+  account required.
+- Each chat gets its own `ConversationManager`/`Orchestrator`, created on
+  first message and kept in memory for the life of the process — same
+  JARVIS, same tools, separate conversation per chat.
+- A brain/tool failure mid-message gets a spoken-style error reply back to
+  the chat (`"Sorry, something went wrong on my end..."`), never a
+  silently dropped message or a crashed webhook handler.
+- Only plain text messages are handled — photos, stickers, and other
+  message types are silently ignored, since there's nothing meaningful for
+  JARVIS to do with them today.
+
+**Not yet verified**: never exercised against a real Telegram bot/account
+— this needs the @BotFather + setWebhook setup above, which hasn't been
+done in this environment. What's covered by real tests
+(`tests/telegram/`) is the gateway logic (allowlist enforcement, session
+reuse per chat, error-reply fallback) and HTTP routing (secret-token
+verification, malformed JSON, disabled-gateway 404) against the actual
+`Bun.serve` server.
+
 ## Live audio waveform (see JARVIS's voice on a call)
 
 Setting `JARVIS_AUDIO_WAVEFORM=true` adds a live waveform to the
@@ -894,6 +952,12 @@ conversations too, not just the current one.
   call from any other number is turned away with a spoken message before
   it reaches the Orchestrator — signature verification alone only proves
   the request came from Twilio, not who's on the call.
+- Every Telegram webhook request's secret token is verified against
+  `TELEGRAM_WEBHOOK_SECRET` before it reaches the Orchestrator; a missing
+  or wrong secret is rejected with `403`. Optional chat allowlist
+  (`TELEGRAM_ALLOWED_CHAT_IDS`), same reasoning as the phone caller
+  allowlist above: secret-token verification alone only proves the
+  request came from Telegram, not which chat it's from.
 - Optional Face ID/Touch ID lock for the dashboard (see below): real
   WebAuthn, not a custom biometric integration; registering the first
   credential requires `JARVIS_ADMIN_TOKEN` so setup can't be hijacked.

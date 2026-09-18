@@ -29,6 +29,9 @@ const ENV_KEYS = [
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
   "JARVIS_CALENDAR_TOKEN_DB_PATH",
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_WEBHOOK_SECRET",
+  "TELEGRAM_ALLOWED_CHAT_IDS",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -303,6 +306,34 @@ describe("loadConfig", () => {
 
   test("rejects an invalid JARVIS_TIMEZONE", () => {
     process.env.JARVIS_TIMEZONE = "Not/A_Real_Zone";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("loads Telegram settings when bot token and webhook secret are both set", () => {
+    process.env.TELEGRAM_BOT_TOKEN = "123:abc";
+    process.env.TELEGRAM_WEBHOOK_SECRET = "shh";
+    process.env.TELEGRAM_ALLOWED_CHAT_IDS = "111,222";
+
+    const config = loadConfig();
+    expect(config.telegramBotToken).toBe("123:abc");
+    expect(config.telegramWebhookSecret).toBe("shh");
+    expect(config.telegramAllowedChatIds).toEqual(["111", "222"]);
+  });
+
+  test("leaves Telegram settings undefined when none are set", () => {
+    const config = loadConfig();
+    expect(config.telegramBotToken).toBeUndefined();
+    expect(config.telegramWebhookSecret).toBeUndefined();
+    expect(config.telegramAllowedChatIds).toBeUndefined();
+  });
+
+  test("throws when only the Telegram bot token is set, without the webhook secret", () => {
+    process.env.TELEGRAM_BOT_TOKEN = "123:abc";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("throws when only the Telegram webhook secret is set, without the bot token", () => {
+    process.env.TELEGRAM_WEBHOOK_SECRET = "shh";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 });
