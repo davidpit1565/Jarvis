@@ -664,6 +664,31 @@ If `TWILIO_AUTH_TOKEN`/`TWILIO_PUBLIC_BASE_URL` aren't set, the `/voice/*`
 routes don't exist at all (`404`) and nothing else changes — the phone
 gateway is fully optional.
 
+### Text JARVIS (SMS)
+
+The same Twilio number the phone gateway answers calls on can also receive
+texts — at zero extra setup, since it reuses `TWILIO_AUTH_TOKEN`/
+`TWILIO_PUBLIC_BASE_URL` (and the caller allowlist, `TWILIO_ALLOWED_CALLERS`,
+if you've set one) rather than needing a separate number or secret. In the
+Twilio console, set the phone number's **messaging** webhook (not the voice
+one) to `https://<your-app>.fly.dev/sms/incoming`, method `HTTP POST`. Each
+number gets its own ongoing conversation thread, exactly like Telegram — no
+"hang up" between texts, so JARVIS remembers context across a whole text
+conversation, not just one message at a time.
+
+**One real limitation**: a `CONFIRM`/`DANGEROUS` tool (e.g. deleting
+something, publishing a reel) can't be confirmed over SMS and is always
+auto-denied, the same as on a phone call — Twilio's inbound SMS webhook
+expects a synchronous reply within a few seconds, so there's no way to hold
+that request open and answer it from whatever text arrives next. Everything
+read-only or `SAFE_ACTION` (checking your calendar, reminders, weather,
+news, saving a memory) works normally. If you need to actually approve
+something, use Telegram or the terminal instead — both are reliable enough
+two-way channels to support the real yes/no round trip.
+
+If `TWILIO_AUTH_TOKEN`/`TWILIO_PUBLIC_BASE_URL` aren't set, `/sms/incoming`
+doesn't exist at all (`404`), same as the voice routes.
+
 ### Cloud deployment
 
 To make JARVIS reachable by Twilio without keeping a personal machine on

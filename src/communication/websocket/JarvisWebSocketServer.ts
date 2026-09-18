@@ -23,6 +23,7 @@ import type { PermissionService } from "@/permissions/PermissionService";
 import type { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { DeviceConnectionManager } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
+import type { TwilioSmsGateway } from "@/communication/phone/TwilioSmsGateway";
 import type { TelegramGateway } from "@/communication/telegram/TelegramGateway";
 import type { DeviceVoiceGateway } from "@/communication/voice/DeviceVoiceGateway";
 import type { LockdownService } from "@/core/lockdown/LockdownService";
@@ -83,6 +84,12 @@ export interface JarvisWebSocketServerDependencies {
   activityLog?: ActivityLog;
   /** All three required together to enable the Twilio phone gateway; otherwise its routes 404. */
   phoneGateway?: TwilioVoiceGateway;
+  /**
+   * Enables POST /sms/incoming, gated on the exact same twilioAuthToken/
+   * twilioPublicBaseUrl as the phone gateway — texting rides the same
+   * Twilio number, no separate config.
+   */
+  smsGateway?: TwilioSmsGateway;
   twilioAuthToken?: string;
   twilioPublicBaseUrl?: string;
   /**
@@ -434,6 +441,10 @@ export class JarvisWebSocketServer {
 
           if (req.method === "POST" && url.pathname.startsWith("/voice/")) {
             return await this.handleVoiceWebhook(req, url);
+          }
+
+          if (req.method === "POST" && url.pathname === "/sms/incoming") {
+            return await this.handleSmsWebhook(req, url);
           }
 
           if (req.method === "POST" && url.pathname === "/telegram/webhook") {
@@ -936,6 +947,48 @@ export class JarvisWebSocketServer {
       default:
         return new Response("Not found", { status: 404 });
     }
+  }
+
+  /**
+   * Routes Twilio's inbound SMS webhook, after verifying `X-Twilio-Signature`
+   * exactly like /voice/* — an unauthenticated webhook here would let
+   * anyone drive JARVIS's tools with a fabricated "text message," no real
+   * SMS required. Shares the phone gateway's own caller allowlist
+   * (twilioAllowedCallers): the same person(s) trusted to call JARVIS are
+   * trusted to text it, one allowlist rather than two to keep in sync.
+   */
+  private async handleSmsWebhook(req: Request, url: URL): Promise<Response> {
+    const { smsGateway, twilioAuthToken, twilioPublicBaseUrl, twilioAllowedCallers } = this.deps;
+
+    if (!smsGateway || !twilioAuthToken || !twilioPublicBaseUrl) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    const formData = await req.formData();
+    const params: Record<string, string> = {};
+    for (const [key, value] of formData.entries()) {
+      if (typeof value === "string") params[key] = value;
+    }
+
+    const publicUrl = new URL(url.pathname + url.search, twilioPublicBaseUrl).toString();
+    const signature = req.headers.get("X-Twilio-Signature");
+
+    if (!verifyTwilioSignature(twilioAuthToken, publicUrl, params, signature)) {
+      console.error(`[jarvis] rejected SMS webhook to ${url.pathname}: invalid or missing Twilio signature`);
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    const fromNumber = params.From;
+    if (!fromNumber) {
+      return new Response("Bad request: missing From", { status: 400 });
+    }
+
+    if (twilioAllowedCallers && twilioAllowedCallers.length > 0 && !twilioAllowedCallers.includes(fromNumber)) {
+      console.error(`[jarvis] rejected text from disallowed number: ${fromNumber}`);
+      return new Response(`<?xml version="1.0" encoding="UTF-8"?><Response/>`, { headers: { "Content-Type": "text/xml" } });
+    }
+
+    return await smsGateway.handleIncomingSms(fromNumber, params.Body ?? "");
   }
 
   /**
