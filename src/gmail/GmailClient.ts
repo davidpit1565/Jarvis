@@ -9,6 +9,7 @@ const GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messa
 const TOKEN_EXPIRY_SAFETY_MARGIN_MS = 60_000;
 
 const MAX_RESULTS_CAP = 10;
+const MAX_BODY_LENGTH = 4000;
 
 /**
  * Gmail access via raw fetch calls to the Gmail v1 REST API — read/search
@@ -157,11 +158,17 @@ export class GmailClient {
     const header = (name: string) =>
       data.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
 
+    const rawBody = data.payload ? this.extractPlainTextBody(data.payload) : "";
+    const body =
+      rawBody.length > MAX_BODY_LENGTH
+        ? `${rawBody.slice(0, MAX_BODY_LENGTH)}\n\n[... truncated, ${rawBody.length - MAX_BODY_LENGTH} more characters]`
+        : rawBody;
+
     return {
       subject: header("Subject") || "(no subject)",
       from: header("From"),
       date: header("Date"),
-      body: data.payload ? this.extractPlainTextBody(data.payload) : "",
+      body,
     };
   }
 

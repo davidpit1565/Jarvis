@@ -181,6 +181,48 @@ describe("GmailClient.getMessageBody", () => {
     const { client } = makeClient(makeLinkedTokenStore());
     await expect(client.getMessageBody("missing")).rejects.toThrow(/404/);
   });
+
+  test("truncates a body longer than the cap, with a trailer noting how much was cut", async () => {
+    const longBody = "x".repeat(5000);
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          payload: {
+            mimeType: "text/plain",
+            body: { data: Buffer.from(longBody, "utf8").toString("base64url") },
+            headers: [{ name: "Subject", value: "Long" }],
+          },
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const message = await client.getMessageBody("m1");
+
+    expect(message.body.startsWith("x".repeat(4000))).toBe(true);
+    expect(message.body.length).toBeLessThan(longBody.length);
+    expect(message.body).toContain("truncated, 1000 more characters");
+  });
+
+  test("does not truncate a body under the cap", async () => {
+    const shortBody = "a normal length email body";
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          payload: {
+            mimeType: "text/plain",
+            body: { data: Buffer.from(shortBody, "utf8").toString("base64url") },
+            headers: [{ name: "Subject", value: "Short" }],
+          },
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const message = await client.getMessageBody("m1");
+
+    expect(message.body).toBe(shortBody);
+  });
 });
 
 describe("GmailClient.getMessageCount", () => {
