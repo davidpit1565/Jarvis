@@ -4,7 +4,15 @@ export interface UndoableCalendarEventCreation {
   summary: string;
 }
 
-export type UndoableAction = UndoableCalendarEventCreation;
+export interface UndoableCalendarEventDeletion {
+  type: "calendar_event_deleted";
+  summary: string;
+  start: string;
+  end: string;
+  location: string | null;
+}
+
+export type UndoableAction = UndoableCalendarEventCreation | UndoableCalendarEventDeletion;
 
 /**
  * Tracks exactly one undoable action — the most recent one — so "undo

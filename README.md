@@ -681,11 +681,15 @@ automated from here):
   actually disconnects the linked account on request — before this, the
   only way to undo a link was manually deleting the SQLite file.
 - **`UNDO_LAST_ACTION`** (`SAFE_ACTION`, standing-granted) — "undo that"
-  right after JARVIS creates a calendar event actually reverses it, via a
-  single-slot `UndoStore` (`src/core/undo/UndoStore.ts`) that tracks only
-  the one most recent reversible action, not a full history to walk back
-  through. In-memory only, like `PermissionService`'s grants; recording a
-  new action always replaces whatever was there.
+  right after JARVIS creates *or deletes* a calendar event actually
+  reverses it, via a single-slot `UndoStore` (`src/core/undo/UndoStore.ts`)
+  that tracks only the one most recent reversible action, not a full
+  history to walk back through. Undoing a deletion recreates the event
+  from details `DELETE_CALENDAR_EVENT` fetches right before deleting it
+  (summary/start/end/location) — a deletion is only actually reversible
+  if something remembered what was deleted. In-memory only, like
+  `PermissionService`'s grants; recording a new action always replaces
+  whatever was there.
 - **`SEARCH_EMAIL`** (`READ`) — searches the linked Gmail inbox using
   Gmail's own search syntax (`from:x`, `is:unread`, `subject:invoice`,
   `newer_than:2d`, ...) and returns matching messages' subject, sender,

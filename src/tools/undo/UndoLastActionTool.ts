@@ -31,7 +31,16 @@ export function createUndoLastActionTool(undoStore: UndoStore, calendarClient: G
           await calendarClient.deleteEvent(action.eventId);
           return { success: true, data: { undone: action.type, summary: action.summary } };
         }
-        return { success: false, error: `Don't know how to undo action type: ${action.type}` };
+        if (action.type === "calendar_event_deleted") {
+          await calendarClient.createEvent({
+            summary: action.summary,
+            start: action.start,
+            end: action.end,
+            location: action.location,
+          });
+          return { success: true, data: { undone: action.type, summary: action.summary } };
+        }
+        return { success: false, error: `Don't know how to undo action type: ${(action as { type: string }).type}` };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }

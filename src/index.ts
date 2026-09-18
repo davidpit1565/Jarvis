@@ -152,7 +152,7 @@ function main() {
     toolRegistry.registerTool(createSearchCalendarEventsTool(calendarClient));
     toolRegistry.registerTool(createGetCalendarEventTool(calendarClient));
     toolRegistry.registerTool(createCreateCalendarEventTool(calendarClient, undoStore));
-    toolRegistry.registerTool(createDeleteCalendarEventTool(calendarClient));
+    toolRegistry.registerTool(createDeleteCalendarEventTool(calendarClient, undoStore));
     toolRegistry.registerTool(createUnlinkCalendarTool(calendarTokenStore));
     toolRegistry.registerTool(createUndoLastActionTool(undoStore, calendarClient));
   }
