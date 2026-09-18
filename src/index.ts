@@ -45,6 +45,7 @@ import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { createListCalendarEventsTool } from "@/tools/calendar/ListCalendarEventsTool";
 import { createSearchCalendarEventsTool } from "@/tools/calendar/SearchCalendarEventsTool";
 import { createGetCalendarEventTool } from "@/tools/calendar/GetCalendarEventTool";
+import { createUpdateCalendarEventTool } from "@/tools/calendar/UpdateCalendarEventTool";
 import { createUnlinkCalendarTool } from "@/tools/calendar/UnlinkCalendarTool";
 import { createCreateCalendarEventTool } from "@/tools/calendar/CreateCalendarEventTool";
 import { createDeleteCalendarEventTool } from "@/tools/calendar/DeleteCalendarEventTool";
@@ -155,6 +156,7 @@ function main() {
     toolRegistry.registerTool(createListCalendarEventsTool(calendarClient));
     toolRegistry.registerTool(createSearchCalendarEventsTool(calendarClient));
     toolRegistry.registerTool(createGetCalendarEventTool(calendarClient));
+    toolRegistry.registerTool(createUpdateCalendarEventTool(calendarClient));
     toolRegistry.registerTool(createCreateCalendarEventTool(calendarClient, undoStore));
     toolRegistry.registerTool(createDeleteCalendarEventTool(calendarClient, undoStore));
     toolRegistry.registerTool(createUnlinkCalendarTool(calendarTokenStore));

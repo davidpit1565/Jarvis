@@ -355,6 +355,58 @@ describe("GoogleCalendarClient.createEvent", () => {
   });
 });
 
+describe("GoogleCalendarClient.updateEvent", () => {
+  test("sends a PATCH with only the given fields, and maps the result", async () => {
+    let capturedMethod: string | undefined;
+    let capturedBody: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedMethod = init?.method;
+      capturedBody = init?.body as string;
+      return new Response(
+        JSON.stringify({
+          id: "ev1",
+          summary: "Dentist (moved)",
+          location: "New clinic",
+          start: { dateTime: "2026-01-20T11:00:00Z" },
+          end: { dateTime: "2026-01-20T11:30:00Z" },
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const event = await client.updateEvent("ev1", { start: "2026-01-20T11:00:00Z", end: "2026-01-20T11:30:00Z" });
+
+    expect(capturedMethod).toBe("PATCH");
+    const body = JSON.parse(capturedBody!);
+    expect(body).toEqual({ start: { dateTime: "2026-01-20T11:00:00Z" }, end: { dateTime: "2026-01-20T11:30:00Z" } });
+    expect(event.summary).toBe("Dentist (moved)");
+  });
+
+  test("clears location when passed null", async () => {
+    let capturedBody: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response(
+        JSON.stringify({ id: "ev1", start: { dateTime: "2026-01-20T11:00:00Z" }, end: { dateTime: "2026-01-20T11:30:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.updateEvent("ev1", { location: null });
+
+    expect(JSON.parse(capturedBody!)).toEqual({ location: "" });
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.updateEvent("ev1", { summary: "New" })).rejects.toThrow(/400/);
+  });
+});
+
 describe("GoogleCalendarClient.deleteEvent", () => {
   test("succeeds on a 204 response", async () => {
     global.fetch = (async () => new Response(null, { status: 204 })) as unknown as typeof fetch;

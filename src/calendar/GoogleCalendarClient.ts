@@ -313,6 +313,55 @@ export class GoogleCalendarClient {
     };
   }
 
+  /**
+   * Edits an existing event's summary/time/location in place via a PATCH
+   * (only the given fields are sent, so anything unset here — like
+   * attendees — is left untouched by Google) — without this, the only
+   * way to change anything about an event was delete-then-recreate,
+   * which loses its id and drops attendees/description for no reason.
+   */
+  async updateEvent(
+    eventId: string,
+    changes: { summary?: string; start?: string; end?: string; location?: string | null }
+  ): Promise<CalendarEvent> {
+    const accessToken = await this.getValidAccessToken();
+
+    const body: Record<string, unknown> = {};
+    if (changes.summary !== undefined) body.summary = changes.summary;
+    if (changes.start !== undefined) body.start = { dateTime: changes.start };
+    if (changes.end !== undefined) body.end = { dateTime: changes.end };
+    if (changes.location !== undefined) body.location = changes.location ?? "";
+
+    const response = await fetch(`${GOOGLE_CALENDAR_EVENTS_URL}/${encodeURIComponent(eventId)}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Google Calendar event update failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+
+    const item = (await response.json()) as {
+      id: string;
+      summary?: string;
+      location?: string;
+      start: { dateTime?: string; date?: string };
+      end: { dateTime?: string; date?: string };
+    };
+
+    return {
+      id: item.id,
+      summary: item.summary ?? "(no title)",
+      start: item.start.dateTime ?? item.start.date ?? "",
+      end: item.end.dateTime ?? item.end.date ?? "",
+      location: item.location ?? null,
+    };
+  }
+
   /** Deletes an event from the user's primary calendar by its id. */
   async deleteEvent(eventId: string): Promise<void> {
     const accessToken = await this.getValidAccessToken();

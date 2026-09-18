@@ -688,10 +688,14 @@ automated from here):
   id (from a prior list/search result), including its description and
   attendee emails, which listing/searching don't return — for "what's
   that meeting about" or "who's invited."
-- **`CREATE_CALENDAR_EVENT`** and **`DELETE_CALENDAR_EVENT`** (both
-  `SAFE_ACTION`, standing-granted, matching `create_reminder`/
-  `delete_reminder`) — real write access: JARVIS can actually put
-  something on the calendar or take it off, not just read it. The OAuth
+- **`CREATE_CALENDAR_EVENT`**, **`UPDATE_CALENDAR_EVENT`**, and
+  **`DELETE_CALENDAR_EVENT`** (all `SAFE_ACTION`, standing-granted,
+  matching `create_reminder`/`update_reminder`/`delete_reminder`) — real
+  write access: JARVIS can actually put something on the calendar, edit
+  it in place, or take it off, not just read it. `UPDATE_CALENDAR_EVENT`
+  sends a partial PATCH (only the given fields), so editing an event's
+  time doesn't require deleting and recreating it — which would drop its
+  attendees/description for no reason. The OAuth
   scope requested is full `.../auth/calendar` (not `.readonly`) for
   exactly this reason — the permission-level check at the tool layer is
   what actually gates when writes happen, not the OAuth scope.
