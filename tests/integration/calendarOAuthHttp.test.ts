@@ -67,6 +67,22 @@ describe("GET /calendar/oauth/start", () => {
     expect(location).toContain("accounts.google.com");
     expect(location).toContain("client_id=id");
   });
+
+  test("too many attempts from the same IP are rate-limited with 429", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    const calendarClient = new GoogleCalendarClient("id", "secret", "https://example.com/calendar/oauth/callback", tokenStore);
+    const handle = setupServer({ adminToken: ADMIN_TOKEN, calendarClient });
+
+    let lastStatus = 0;
+    for (let i = 0; i < 11; i++) {
+      const response = await fetch(`http://localhost:${handle.port}/calendar/oauth/start?token=wrong`, {
+        redirect: "manual",
+      });
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
+  });
 });
 
 describe("GET /calendar/oauth/callback", () => {

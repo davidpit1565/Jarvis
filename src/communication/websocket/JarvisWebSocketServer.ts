@@ -424,7 +424,7 @@ export class JarvisWebSocketServer {
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/calendar/oauth/start") {
-            return this.handleCalendarOAuthStart(req, url);
+            return this.handleCalendarOAuthStart(req, url, server);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/calendar/oauth/callback") {
@@ -976,12 +976,17 @@ export class JarvisWebSocketServer {
    * read-only Calendar access. Gated by the admin token as a query
    * parameter (`?token=...`), not a header: this is a route the user
    * navigates to directly in a browser to reach Google's consent screen,
-   * which a fetch header can't do.
+   * which a fetch header can't do. Rate-limited per client IP, same
+   * defense-in-depth as the other admin-token-gated routes — a token
+   * passed in a URL is otherwise guessable at no cost beyond a 401.
    */
-  private handleCalendarOAuthStart(req: Request, url: URL): Response {
+  private handleCalendarOAuthStart(req: Request, url: URL, server: BunServer): Response {
     const { adminToken, calendarClient } = this.deps;
     if (!calendarClient || !adminToken) {
       return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "calendar-oauth-start"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
     }
     if (!constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });

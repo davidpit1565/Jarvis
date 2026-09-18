@@ -761,9 +761,12 @@ automated from here):
   parameter** (`?token=...`), not the `X-Jarvis-Admin-Token` header used
   everywhere else — this route is meant to be opened directly in a
   browser to reach Google's consent screen, which a fetch header can't
-  do. `GET /calendar/oauth/callback` is protected by a single-use,
-  server-issued `state` value (real CSRF protection), independent of the
-  admin token, since Google's own redirect has no way to carry a header.
+  do. Rate-limited per client IP (same `RateLimiter` as pairing/login/
+  backup), so guessing the token from a URL isn't free — past the limit,
+  `429` without even checking it. `GET /calendar/oauth/callback` is
+  protected by a single-use, server-issued `state` value (real CSRF
+  protection), independent of the admin token, since Google's own
+  redirect has no way to carry a header.
 
 ## Telegram integration
 
