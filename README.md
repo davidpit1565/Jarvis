@@ -692,6 +692,11 @@ automated from here):
   whatever a specific query matches, not a dump of the whole mailbox. This
   is the scoped alternative to "give JARVIS access to all my messages":
   real, working email search, without a blanket mailbox grant.
+- **`GET_EMAIL`** (`READ`) — fetches one message's full plain-text body by
+  id (from a prior `search_email` result), for when the user asks what an
+  email actually says rather than just whether it exists. Same
+  `gmail.readonly` boundary as search; walks a multipart message's parts
+  preferring `text/plain` over `text/html`.
 - OAuth tokens (the refresh token and current access token) are persisted
   to their own SQLite database (`src/calendar/CalendarTokenStore.ts`,
   `JARVIS_CALENDAR_TOKEN_DB_PATH`) — access tokens are refreshed

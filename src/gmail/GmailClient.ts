@@ -99,6 +99,72 @@ export class GmailClient {
     };
   }
 
+  /**
+   * Extracts the best plain-text body out of a Gmail message payload,
+   * walking multipart parts depth-first and preferring `text/plain` over
+   * `text/html` (Gmail sends both for most real mail) — falls back to the
+   * top-level body if the message isn't multipart at all.
+   */
+  private extractPlainTextBody(payload: {
+    mimeType?: string;
+    body?: { data?: string };
+    parts?: Array<{ mimeType?: string; body?: { data?: string }; parts?: unknown[] }>;
+  }): string {
+    const decode = (data: string) => Buffer.from(data, "base64url").toString("utf8");
+
+    if (payload.mimeType === "text/plain" && payload.body?.data) {
+      return decode(payload.body.data);
+    }
+
+    if (payload.parts) {
+      const plainPart = payload.parts.find((p) => p.mimeType === "text/plain" && p.body?.data);
+      if (plainPart?.body?.data) return decode(plainPart.body.data);
+
+      for (const part of payload.parts) {
+        const nested = this.extractPlainTextBody(part as typeof payload);
+        if (nested) return nested;
+      }
+    }
+
+    if (payload.body?.data) return decode(payload.body.data);
+    return "";
+  }
+
+  /** The full plain-text body of one message, given its id (from a search result). */
+  async getMessageBody(id: string): Promise<{ subject: string; from: string; date: string; body: string }> {
+    const accessToken = await this.getValidAccessToken();
+
+    const url = new URL(`${GMAIL_MESSAGES_URL}/${encodeURIComponent(id)}`);
+    url.searchParams.set("format", "full");
+
+    const response = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gmail message fetch failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+
+    const data = (await response.json()) as {
+      payload?: {
+        mimeType?: string;
+        body?: { data?: string };
+        headers?: Array<{ name: string; value: string }>;
+        parts?: Array<{ mimeType?: string; body?: { data?: string }; parts?: unknown[] }>;
+      };
+    };
+
+    const header = (name: string) =>
+      data.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
+
+    return {
+      subject: header("Subject") || "(no subject)",
+      from: header("From"),
+      date: header("Date"),
+      body: data.payload ? this.extractPlainTextBody(data.payload) : "",
+    };
+  }
+
   /** Searches the linked account's mailbox using Gmail's own search syntax (e.g. "from:x is:unread"). */
   async searchMessages(query: string, maxResults: number = 5): Promise<EmailSummary[]> {
     const accessToken = await this.getValidAccessToken();

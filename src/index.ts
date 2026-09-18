@@ -47,6 +47,7 @@ import { UndoStore } from "@/core/undo/UndoStore";
 import { createUndoLastActionTool } from "@/tools/undo/UndoLastActionTool";
 import { GmailClient } from "@/gmail/GmailClient";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
+import { createGetEmailTool } from "@/tools/gmail/GetEmailTool";
 import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
 import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
 import { RssNewsClient } from "@/news/RssNewsClient";
@@ -156,6 +157,7 @@ function main() {
     : undefined;
   if (gmailClient) {
     toolRegistry.registerTool(createSearchEmailTool(gmailClient));
+    toolRegistry.registerTool(createGetEmailTool(gmailClient));
   }
 
   const weatherEnabled = config.weatherLatitude !== undefined && config.weatherLongitude !== undefined;

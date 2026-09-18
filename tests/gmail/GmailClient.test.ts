@@ -105,3 +105,80 @@ describe("GmailClient.searchMessages", () => {
     await expect(client.searchMessages("is:unread")).rejects.toThrow(/400/);
   });
 });
+
+describe("GmailClient.getMessageBody", () => {
+  test("throws when no account is linked", async () => {
+    const { client } = makeClient();
+    await expect(client.getMessageBody("m1")).rejects.toThrow(/no google account linked/i);
+  });
+
+  test("decodes a text/plain body directly on the payload", async () => {
+    const bodyText = "Hello, this is the email body.";
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          payload: {
+            mimeType: "text/plain",
+            body: { data: Buffer.from(bodyText, "utf8").toString("base64url") },
+            headers: [
+              { name: "Subject", value: "Hi" },
+              { name: "From", value: "alice@example.com" },
+              { name: "Date", value: "Mon, 1 Jan 2026 10:00:00 +0000" },
+            ],
+          },
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const message = await client.getMessageBody("m1");
+
+    expect(message).toEqual({
+      subject: "Hi",
+      from: "alice@example.com",
+      date: "Mon, 1 Jan 2026 10:00:00 +0000",
+      body: bodyText,
+    });
+  });
+
+  test("prefers the text/plain part over text/html in a multipart message", async () => {
+    const plainText = "plain body";
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          payload: {
+            mimeType: "multipart/alternative",
+            headers: [{ name: "Subject", value: "Multi" }],
+            parts: [
+              { mimeType: "text/html", body: { data: Buffer.from("<b>html body</b>", "utf8").toString("base64url") } },
+              { mimeType: "text/plain", body: { data: Buffer.from(plainText, "utf8").toString("base64url") } },
+            ],
+          },
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const message = await client.getMessageBody("m1");
+
+    expect(message.body).toBe(plainText);
+  });
+
+  test("falls back to an empty body when nothing decodable is found", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ payload: { headers: [] } }), { status: 200 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const message = await client.getMessageBody("m1");
+
+    expect(message.body).toBe("");
+    expect(message.subject).toBe("(no subject)");
+  });
+
+  test("throws on a non-2xx response", async () => {
+    global.fetch = (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.getMessageBody("missing")).rejects.toThrow(/404/);
+  });
+});
