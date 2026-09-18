@@ -22,6 +22,7 @@ const ENV_KEYS = [
   "TWILIO_FROM_NUMBER",
   "JARVIS_OWNER_PHONE_NUMBER",
   "JARVIS_WAKEUP_CALL_DB_PATH",
+  "JARVIS_ANTHROPIC_BASE_URL",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -110,6 +111,17 @@ describe("loadConfig", () => {
 
     process.env.TWILIO_FROM_NUMBER = "+15005550006";
     expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("leaves anthropicBaseUrl undefined by default", () => {
+    const config = loadConfig();
+    expect(config.anthropicBaseUrl).toBeUndefined();
+  });
+
+  test("loads an explicit JARVIS_ANTHROPIC_BASE_URL override", () => {
+    process.env.JARVIS_ANTHROPIC_BASE_URL = "http://localhost:20128";
+    const config = loadConfig();
+    expect(config.anthropicBaseUrl).toBe("http://localhost:20128");
   });
 
   test("defaults JARVIS_WAKEUP_CALL_DB_PATH", () => {

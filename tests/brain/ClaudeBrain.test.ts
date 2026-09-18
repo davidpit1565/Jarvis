@@ -10,6 +10,28 @@ describe("ClaudeBrain reliability tuning", () => {
     expect(client.maxRetries).toBe(4);
     expect(client.timeout).toBe(30_000);
   });
+
+  test("defaults to the real Anthropic API", () => {
+    const brain = new ClaudeBrain("sk-ant-test-key");
+    expect(brain.baseUrl).toBe("https://api.anthropic.com");
+  });
+
+  test("honors an explicit baseUrl override", () => {
+    const brain = new ClaudeBrain("sk-ant-test-key", { baseUrl: "http://localhost:20128" });
+    expect(brain.baseUrl).toBe("http://localhost:20128");
+  });
+
+  test("never picks up the ambient ANTHROPIC_BASE_URL env var on its own", () => {
+    const original = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = "http://some-unrelated-local-proxy:9999";
+    try {
+      const brain = new ClaudeBrain("sk-ant-test-key");
+      expect(brain.baseUrl).toBe("https://api.anthropic.com");
+    } finally {
+      if (original === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = original;
+    }
+  });
 });
 
 const ECHO_TOOL: ToolDefinition = {

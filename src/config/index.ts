@@ -102,6 +102,17 @@ export interface JarvisConfig {
    * if small, extra cost, so this is never silently turned on.
    */
   audioWaveformEnabled: boolean;
+  /**
+   * Overrides the Anthropic API base URL — explicit opt-in only, for
+   * pointing JARVIS's brain at a local Anthropic-compatible model gateway
+   * instead of Anthropic's own metered API, for cost reasons. Unset (the
+   * default) means the real Anthropic API, always; this is never picked
+   * up from the ambient ANTHROPIC_BASE_URL environment variable that other
+   * tools on the same machine might set, only from this JARVIS-specific
+   * variable, so JARVIS never silently starts talking to some unrelated
+   * local proxy just because it happened to be running.
+   */
+  anthropicBaseUrl?: string;
 }
 
 class ConfigError extends Error {}
@@ -174,6 +185,7 @@ export function loadConfig(): JarvisConfig {
   }
 
   const audioWaveformEnabled = process.env.JARVIS_AUDIO_WAVEFORM?.trim().toLowerCase() === "true";
+  const anthropicBaseUrl = process.env.JARVIS_ANTHROPIC_BASE_URL?.trim() || undefined;
 
   const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID?.trim() || undefined;
   const twilioFromNumber = process.env.TWILIO_FROM_NUMBER?.trim() || undefined;
@@ -225,6 +237,7 @@ export function loadConfig(): JarvisConfig {
     webFetchEnabled,
     webFetchMaxUses,
     audioWaveformEnabled,
+    anthropicBaseUrl,
   };
 }
 

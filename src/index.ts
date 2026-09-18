@@ -134,6 +134,7 @@ function main() {
     webSearchMaxUses: config.webSearchMaxUses,
     webFetchEnabled: config.webFetchEnabled,
     webFetchMaxUses: config.webFetchMaxUses,
+    baseUrl: config.anthropicBaseUrl,
   });
   const confirmationService = new ConfirmationService(confirmViaChat);
 

@@ -30,6 +30,16 @@ export interface ClaudeBrainOptions {
    */
   webFetchEnabled?: boolean;
   webFetchMaxUses?: number;
+  /**
+   * Overrides the Anthropic API base URL — a deliberate, explicit opt-in
+   * only, distinct from the SDK's own ambient ANTHROPIC_BASE_URL support
+   * (see the constructor comment below for why that's never honored
+   * silently). Meant for pointing JARVIS at a local Anthropic-compatible
+   * gateway (e.g. a self-hosted model router) instead of Anthropic's own
+   * API, for cost reasons. Unset means "talk to the real Anthropic API,"
+   * always.
+   */
+  baseUrl?: string;
 }
 
 /**
@@ -53,11 +63,14 @@ export class ClaudeBrain implements Brain {
     this.webSearchMaxUses = options.webSearchMaxUses ?? 5;
     this.webFetchEnabled = options.webFetchEnabled ?? false;
     this.webFetchMaxUses = options.webFetchMaxUses ?? 5;
-    // baseURL is pinned explicitly: the Anthropic SDK otherwise honors an
-    // ambient ANTHROPIC_BASE_URL environment variable, which on a
-    // developer's machine may point at an unrelated local proxy/router
-    // (e.g. a different AI tool) — JARVIS must always talk to the real
-    // Anthropic API regardless of what else is configured on the host.
+    // baseURL defaults to the real Anthropic API and is pinned there
+    // unless `options.baseUrl` is explicitly given: the Anthropic SDK
+    // otherwise honors an ambient ANTHROPIC_BASE_URL environment variable,
+    // which on a developer's machine may point at an unrelated local
+    // proxy/router (e.g. a different AI tool) — JARVIS must never silently
+    // pick that up. A deliberate `options.baseUrl` (from JARVIS's own
+    // JARVIS_ANTHROPIC_BASE_URL config, not the ambient SDK one) is the
+    // only way to point this at anything else.
     //
     // maxRetries/timeout are set explicitly rather than left at the SDK's
     // own defaults (2 retries, 10 minutes) — 4 retries gives a call on a
@@ -67,7 +80,17 @@ export class ClaudeBrain implements Brain {
     // blocking a phone call or chat turn far longer than a human would
     // ever wait. The SDK already backs off between retries and honors the
     // API's Retry-After header — there is no reason to reimplement that.
-    this.client = new Anthropic({ apiKey, baseURL: ANTHROPIC_API_BASE_URL, maxRetries: 4, timeout: 30_000 });
+    this.client = new Anthropic({
+      apiKey,
+      baseURL: options.baseUrl ?? ANTHROPIC_API_BASE_URL,
+      maxRetries: 4,
+      timeout: 30_000,
+    });
+  }
+
+  /** Exposed for testing/diagnostics — the actual API base URL this instance talks to. */
+  get baseUrl(): string {
+    return this.client.baseURL;
   }
 
   async chat(request: BrainRequest): Promise<BrainResponse> {

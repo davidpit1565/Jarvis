@@ -836,6 +836,47 @@ pricing for — an unlisted model reports cost as unavailable (`null`)
 rather than guessing, since a wrong number is worse than none for
 something you're explicitly watching to keep near-free.
 
+## Running the brain through a local model gateway instead of Anthropic's API
+
+`JARVIS_ANTHROPIC_BASE_URL` points `ClaudeBrain` at any Anthropic-compatible
+HTTP endpoint instead of `api.anthropic.com` — the way to actually cut
+Claude API cost to (near) zero if you already run a local model
+gateway/router (e.g. [OmniRoute](https://github.com/diegosouzapw/OmniRoute)
+or similar Claude Code-style local routers) that exposes free or
+subscription-included model access through an Anthropic-shaped API.
+
+**What this actually changes, and what it doesn't:**
+
+- **It only changes where the brain's model calls go.** It has nothing to
+  do with how your phone reaches JARVIS — that's entirely the phone
+  gateway/dashboard's own networking (see "Phone gateway" and "Cloud
+  deployment" above), and needs its own public URL (Fly.io, or a tunnel
+  like ngrok/Cloudflare Tunnel if you run Core on your own machine)
+  regardless of which model backend the brain talks to.
+- **A local gateway only runs while the machine running it is on and
+  reachable from wherever JARVIS Core itself runs.** If JARVIS Core runs
+  on the same machine as the gateway (e.g. your Mac, in a terminal), this
+  works with no extra networking; if Core runs elsewhere (Fly.io), the
+  gateway would need to be reachable from there too, not just from your
+  Mac's terminal.
+- **A gateway that swaps in a different, non-Claude model to stay free is
+  a real quality tradeoff, not a free lunch.** JARVIS's tool-calling
+  reliability, personality, and Hebrew/English handling are tuned against
+  actual Claude models — a different backend model, however capable in
+  general, may follow the system prompt and tool-use protocol noticeably
+  less reliably. Worth testing directly rather than assuming it'll behave
+  the same.
+- **The `estimatedCostUsd` figure in `GET /status` stops reflecting
+  reality** once requests aren't actually billed at Anthropic's own
+  rates — it would keep computing a hypothetical Anthropic cost for
+  requests that may not cost anything (or that are billed completely
+  differently) through the gateway.
+- Deliberately never read from the ambient `ANTHROPIC_BASE_URL`
+  environment variable the Anthropic SDK itself would otherwise honor —
+  only from this JARVIS-specific variable — so JARVIS never silently
+  starts talking to some unrelated local proxy just because one happens
+  to be running on the same machine for a different tool.
+
 ## Backups
 
 `GET /backup` downloads a single gzip'd tar of every SQLite database
