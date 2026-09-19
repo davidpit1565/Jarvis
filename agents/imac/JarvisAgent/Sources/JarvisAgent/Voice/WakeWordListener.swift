@@ -37,7 +37,34 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
 
     private var lastTranscriptUpdate = Date()
     private var pendingCommandText: String?
+    /// Set the moment the wake phrase itself is heard with nothing after
+    /// it yet; cleared once either a command follows (see
+    /// `pendingCommandText`) or the silence check speaks the standing
+    /// greeting instead. Without this, "Hey JARVIS" said alone did
+    /// nothing at all — `checkForSilence` only ever fired for a
+    /// non-empty command.
+    private var awaitingCommandAfterWake = false
+    private var wakePhraseWasHebrew = false
     private var silenceCheckTimer: Timer?
+
+    /// Spoken when the wake phrase is heard with no command following it —
+    /// "Hey JARVIS" alone should always get an answer, not silence.
+    private static let wakeOnlyGreetingEnglish = "Hey David, how can I help you today?"
+    private static let wakeOnlyGreetingHebrew = "היי דיוויד, איך אפשר לעזור?"
+    /// Spoken immediately on a detected clap, before any command is heard —
+    /// a clap alone (no "Hey JARVIS" needed) should get an instant reply.
+    private static let clapGreeting = "Yes? What do you need?"
+
+    private let clapDetector = ClapDetector()
+    /// True from the moment a clap is detected until either a command
+    /// follows it (dispatched the same way a wake-phrase command is) or
+    /// `clapCommandModeTimeout` elapses with nothing said. Distinct from
+    /// `awaitingCommandAfterWake`: a clap has no wake phrase in the
+    /// transcript to strip, so the *entire* next transcript is the
+    /// command, not just the text after a matched phrase.
+    private var clapCommandModeActive = false
+    private var clapCommandModeStartedAt = Date.distantPast
+    private static let clapCommandModeTimeout: TimeInterval = 8.0
 
     /// How long to wait after speech stops updating before treating whatever
     /// followed the wake phrase as the complete command.
@@ -100,6 +127,11 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
+            if self?.clapDetector.process(buffer) == true {
+                DispatchQueue.main.async {
+                    self?.handleClapDetected()
+                }
+            }
         }
 
         audioEngine.prepare()
@@ -150,8 +182,31 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
         }
     }
 
+    /// Fired on a detected clap (see ClapDetector) — the audio-tap
+    /// equivalent of `handleTranscriptUpdate` matching a wake phrase.
+    /// Ignored while already in an active clap-command window so a
+    /// clap's own decay/room echo, or a second clap David makes on
+    /// purpose per "once or twice," doesn't reset the greeting or the
+    /// listening window.
+    private func handleClapDetected() {
+        guard !clapCommandModeActive else { return }
+        clapCommandModeActive = true
+        clapCommandModeStartedAt = Date()
+        lastTranscriptUpdate = Date()
+        speak(Self.clapGreeting)
+        // Fresh transcript buffer so whatever's said next is the command
+        // on its own, not appended to anything already in the buffer.
+        beginRecognitionTask()
+    }
+
     private func handleTranscriptUpdate(_ transcript: String) {
         lastTranscriptUpdate = Date()
+
+        if clapCommandModeActive {
+            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            pendingCommandText = trimmed.isEmpty ? nil : trimmed
+            return
+        }
 
         let lowered = transcript.lowercased()
         guard
@@ -163,16 +218,42 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
 
         let afterWakePhrase = String(transcript[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         pendingCommandText = afterWakePhrase.isEmpty ? nil : afterWakePhrase
+        if afterWakePhrase.isEmpty {
+            awaitingCommandAfterWake = true
+            wakePhraseWasHebrew = matchedPhrase.contains("ג'רוויס") || matchedPhrase.contains("גרוויס")
+        } else {
+            awaitingCommandAfterWake = false
+        }
     }
 
     private func checkForSilence() {
-        guard let pendingCommandText, !pendingCommandText.isEmpty else { return }
+        // A clap with nothing ever said after it shouldn't leave the
+        // listener stuck treating the next ordinary sentence (with no
+        // wake phrase in it) as a command — time it out independently of
+        // the shorter per-word silence threshold below.
+        if clapCommandModeActive, pendingCommandText == nil,
+           Date().timeIntervalSince(clapCommandModeStartedAt) >= Self.clapCommandModeTimeout {
+            clapCommandModeActive = false
+        }
+
         guard Date().timeIntervalSince(lastTranscriptUpdate) >= Self.silenceThresholdSeconds else { return }
 
-        self.pendingCommandText = nil
-        onTranscriptReady?(pendingCommandText)
-        // Fresh transcript buffer for the next wake phrase, so the just-
-        // dispatched command's words can't linger and get matched again.
-        beginRecognitionTask()
+        if let pendingCommandText, !pendingCommandText.isEmpty {
+            self.pendingCommandText = nil
+            awaitingCommandAfterWake = false
+            clapCommandModeActive = false
+            onTranscriptReady?(pendingCommandText)
+            // Fresh transcript buffer for the next wake phrase, so the
+            // just-dispatched command's words can't linger and get
+            // matched again.
+            beginRecognitionTask()
+            return
+        }
+
+        if awaitingCommandAfterWake {
+            awaitingCommandAfterWake = false
+            speak(wakePhraseWasHebrew ? Self.wakeOnlyGreetingHebrew : Self.wakeOnlyGreetingEnglish)
+            beginRecognitionTask()
+        }
     }
 }

@@ -38,11 +38,16 @@ export class ReminderStore {
     `);
     this.db.run(`CREATE INDEX IF NOT EXISTS idx_reminders_due_at ON reminders(due_at)`);
 
-    // A database created before `recurrence` existed won't have the
-    // column — SQLite has no "ADD COLUMN IF NOT EXISTS," so this just
-    // ignores the error when the column is already there.
+    // A database created before `recurrence`/`notified_at` existed won't
+    // have the column — SQLite has no "ADD COLUMN IF NOT EXISTS," so this
+    // just ignores the error when the column is already there.
     try {
       this.db.run(`ALTER TABLE reminders ADD COLUMN recurrence TEXT`);
+    } catch {
+      // already exists
+    }
+    try {
+      this.db.run(`ALTER TABLE reminders ADD COLUMN notified_at TEXT`);
     } catch {
       // already exists
     }
@@ -56,10 +61,13 @@ export class ReminderStore {
       completed: false,
       createdAt: new Date().toISOString(),
       recurrence: input.recurrence ?? null,
+      notifiedAt: null,
     };
 
     this.db
-      .query(`INSERT INTO reminders (id, text, due_at, completed, created_at, recurrence) VALUES (?, ?, ?, 0, ?, ?)`)
+      .query(
+        `INSERT INTO reminders (id, text, due_at, completed, created_at, recurrence, notified_at) VALUES (?, ?, ?, 0, ?, ?, NULL)`
+      )
       .run(record.id, record.text, record.dueAt, record.createdAt, record.recurrence);
 
     return record;
@@ -68,11 +76,26 @@ export class ReminderStore {
   /** Pending reminders by default (what "what do I need to do" should see); pass true to include completed ones too. */
   list(includeCompleted: boolean = false): ReminderRecord[] {
     const query = includeCompleted
-      ? `SELECT id, text, due_at as dueAt, completed, created_at as createdAt, recurrence FROM reminders ORDER BY (due_at IS NULL), due_at ASC, created_at ASC`
-      : `SELECT id, text, due_at as dueAt, completed, created_at as createdAt, recurrence FROM reminders WHERE completed = 0 ORDER BY (due_at IS NULL), due_at ASC, created_at ASC`;
+      ? `SELECT id, text, due_at as dueAt, completed, created_at as createdAt, recurrence, notified_at as notifiedAt FROM reminders ORDER BY (due_at IS NULL), due_at ASC, created_at ASC`
+      : `SELECT id, text, due_at as dueAt, completed, created_at as createdAt, recurrence, notified_at as notifiedAt FROM reminders WHERE completed = 0 ORDER BY (due_at IS NULL), due_at ASC, created_at ASC`;
 
     const rows = this.db.query(query).all() as Array<Omit<ReminderRecord, "completed"> & { completed: number }>;
     return rows.map((row) => ({ ...row, completed: row.completed === 1 }));
+  }
+
+  /**
+   * A due, pending reminder JARVIS hasn't yet pushed a notification for —
+   * the input to the scheduler in index.ts that actually sends one at the
+   * right time, instead of the reminder only ever surfacing if the user
+   * happens to talk to JARVIS again after it's due.
+   */
+  getDueUnnotified(nowIso: string): ReminderRecord[] {
+    return this.list().filter((r) => r.dueAt !== null && r.dueAt <= nowIso && r.notifiedAt === null);
+  }
+
+  /** Records that a due-reminder push notification actually went out, so the scheduler doesn't send it again. */
+  markNotified(id: string, nowIso: string): void {
+    this.db.query(`UPDATE reminders SET notified_at = ? WHERE id = ?`).run(nowIso, id);
   }
 
   /**
@@ -113,17 +136,20 @@ export class ReminderStore {
     const text = changes.text ?? existing.text;
     const dueAt = changes.dueAt !== undefined ? changes.dueAt : existing.dueAt;
     const recurrence = changes.recurrence !== undefined ? changes.recurrence : existing.recurrence;
+    // A re-dated reminder should get a fresh notification at its new
+    // time, not stay silenced by one already sent for the old time.
+    const notifiedAt = changes.dueAt !== undefined && changes.dueAt !== existing.dueAt ? null : existing.notifiedAt;
 
     this.db
-      .query(`UPDATE reminders SET text = ?, due_at = ?, recurrence = ? WHERE id = ?`)
-      .run(text, dueAt, recurrence, id);
-    return { ...existing, text, dueAt, recurrence };
+      .query(`UPDATE reminders SET text = ?, due_at = ?, recurrence = ?, notified_at = ? WHERE id = ?`)
+      .run(text, dueAt, recurrence, notifiedAt, id);
+    return { ...existing, text, dueAt, recurrence, notifiedAt };
   }
 
   get(id: string): ReminderRecord | null {
     const row = this.db
       .query(
-        `SELECT id, text, due_at as dueAt, completed, created_at as createdAt, recurrence FROM reminders WHERE id = ?`
+        `SELECT id, text, due_at as dueAt, completed, created_at as createdAt, recurrence, notified_at as notifiedAt FROM reminders WHERE id = ?`
       )
       .get(id) as (Omit<ReminderRecord, "completed"> & { completed: number }) | null;
     if (!row) return null;

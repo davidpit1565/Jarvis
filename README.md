@@ -261,6 +261,18 @@ by default) are surfaced as two separate sections — "was due 3 days ago"
 and "starts in 20 minutes" call for a different tone, so they're never
 flattened into one list.
 
+**Push notifications at the actual due time**: the mechanism above only
+ever surfaced a reminder if the user happened to talk to JARVIS again
+after it came due. A separate 30-second scheduler tick in `src/index.ts`
+now checks `ReminderStore.getDueUnnotified()` and pushes a real Telegram
+notification — "⏰ Reminder: ...", so it actually reaches the user instead
+of waiting to be asked. A `notified_at` column (persisted, so this
+survives a restart — no in-memory-only state to lose) stops the same
+reminder from notifying twice; editing a reminder to a new due date
+(`UPDATE_REMINDER`) clears it, so a re-dated reminder gets a fresh
+notification at its new time rather than staying silenced by one already
+sent for the old one.
+
 ## Conversation history search
 
 Every user/assistant text turn (tool calls/results are excluded — protocol
@@ -975,6 +987,26 @@ hands-free, no typing.
   exact same `PermissionService` checks, tool allowlist, and audit log
   as every other channel — see the iMac Agent's own README for the full
   security note.
+- **"Hey JARVIS" alone now always gets an answer.** Previously, saying
+  the wake phrase with no command following it did nothing at all — only
+  a non-empty command after the phrase ever triggered a reply. Now, a
+  pause after the bare wake phrase speaks a standing greeting ("Hey
+  David, how can I help you today?", or the Hebrew equivalent when the
+  Hebrew wake phrase was heard) instead of staying silent.
+- **Clap to activate** (`Voice/ClapDetector.swift`): one clap, detected
+  from the same microphone tap already used for speech recognition (no
+  second audio session), gets an instant spoken "Yes? What do you need?"
+  and opens an ~8-second window where the *next thing said* — no wake
+  phrase required — is sent as a command. Detects a clap by shape (a
+  loud, very short, broadband spike right after relative quiet against a
+  rolling noise floor), not by trying to fingerprint "clap" specifically,
+  since a lightweight on-device detector can't do real spectral analysis
+  reliably. The thresholds are a starting point, not a tuned result —
+  like the rest of this Swift source, they've never run against a real
+  microphone/room, and will likely need adjusting on the actual Mac (too
+  sensitive: false triggers on doors/keyboard clacks; too insensitive:
+  claps missed) — see `ClapDetector.swift`'s own doc comment for exactly
+  which constants to tune first.
 
 **Status:** source-complete but **unvalidated against a real
 microphone/Core** — see `agents/imac/JarvisAgent/README.md`'s "What
