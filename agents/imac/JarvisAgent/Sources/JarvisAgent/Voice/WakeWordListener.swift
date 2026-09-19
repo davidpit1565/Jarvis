@@ -19,14 +19,28 @@ import Speech
 /// acceptable for a Mac that's usually plugged in; nothing here is ever
 /// sent anywhere until the wake phrase is actually heard.
 final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
-    /// Called with the text spoken after the wake phrase, once a pause is detected.
-    var onTranscriptReady: ((String) -> Void)?
+    /// Called with the text spoken after the wake phrase, once a pause is
+    /// detected, plus which language the reply should be forced into:
+    /// "en", "he", or "" (no forced language — let Claude auto-detect, as
+    /// it does everywhere else) for a clap-triggered command with no
+    /// wake phrase to signal a language from.
+    var onTranscriptReady: ((String, String) -> Void)?
 
-    /// English + Hebrew wake phrases — matched case-insensitively against
-    /// the running transcript. Loose on purpose (a few natural variants)
-    /// since real speech recognition rarely produces the exact same
-    /// wording twice.
-    private static let wakePhrasePatterns = ["hey jarvis", "hi jarvis", "ok jarvis", "היי ג'רוויס", "היי גרוויס"]
+    /// Two distinct wake phrases, deliberately mapped to two distinct
+    /// forced reply languages — "Hey/Hi/OK JARVIS" always gets an English
+    /// reply, "Jarvis Shomea"/"ג'רוויס שומע" always gets a Hebrew one,
+    /// regardless of what language the command itself is spoken in. Matched
+    /// case-insensitively, loose on purpose (a few natural variants) since
+    /// real speech recognition rarely produces the exact same wording
+    /// twice. NOTE: the recognizer below is locked to en-US (see its own
+    /// comment) — a genuinely Hebrew utterance is unlikely to transcribe
+    /// as Hebrew script at all, so the Hebrew-lettered patterns here are
+    /// mostly a no-op today; "jarvis shomea"/"jarvis shoma" (said in an
+    /// English-sounding way) is what actually reaches this list in
+    /// practice until multi-locale recognition is added.
+    private static let englishWakePhrases = ["hey jarvis", "hi jarvis", "ok jarvis"]
+    private static let hebrewWakePhrases = ["jarvis shomea", "jarvis shoma", "ג'רוויס שומע", "גרוויס שומע", "היי ג'רוויס", "היי גרוויס"]
+    private static let wakePhrasePatterns = englishWakePhrases + hebrewWakePhrases
 
     private let audioEngine = AVAudioEngine()
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -44,7 +58,10 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     /// nothing at all — `checkForSilence` only ever fired for a
     /// non-empty command.
     private var awaitingCommandAfterWake = false
-    private var wakePhraseWasHebrew = false
+    /// Which wake phrase bucket matched — "en" or "he" — used both for the
+    /// bare-wake-phrase standing greeting and, once a command follows, the
+    /// language directive sent to Core in `onTranscriptReady`.
+    private var pendingCommandLanguage = "en"
     private var silenceCheckTimer: Timer?
 
     /// Spoken when the wake phrase is heard with no command following it —
@@ -218,12 +235,8 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
 
         let afterWakePhrase = String(transcript[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         pendingCommandText = afterWakePhrase.isEmpty ? nil : afterWakePhrase
-        if afterWakePhrase.isEmpty {
-            awaitingCommandAfterWake = true
-            wakePhraseWasHebrew = matchedPhrase.contains("ג'רוויס") || matchedPhrase.contains("גרוויס")
-        } else {
-            awaitingCommandAfterWake = false
-        }
+        pendingCommandLanguage = Self.hebrewWakePhrases.contains(matchedPhrase) ? "he" : "en"
+        awaitingCommandAfterWake = afterWakePhrase.isEmpty
     }
 
     private func checkForSilence() {
@@ -240,9 +253,14 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
 
         if let pendingCommandText, !pendingCommandText.isEmpty {
             self.pendingCommandText = nil
+            let wasClapTriggered = clapCommandModeActive
             awaitingCommandAfterWake = false
             clapCommandModeActive = false
-            onTranscriptReady?(pendingCommandText)
+            // A clap has no wake phrase to signal a language from — pass
+            // "" so Core lets Claude auto-detect, same as every other
+            // channel, instead of forcing whatever `pendingCommandLanguage`
+            // happens to still hold from a previous wake-phrase turn.
+            onTranscriptReady?(pendingCommandText, wasClapTriggered ? "" : pendingCommandLanguage)
             // Fresh transcript buffer for the next wake phrase, so the
             // just-dispatched command's words can't linger and get
             // matched again.
@@ -252,7 +270,7 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
 
         if awaitingCommandAfterWake {
             awaitingCommandAfterWake = false
-            speak(wakePhraseWasHebrew ? Self.wakeOnlyGreetingHebrew : Self.wakeOnlyGreetingEnglish)
+            speak(pendingCommandLanguage == "he" ? Self.wakeOnlyGreetingHebrew : Self.wakeOnlyGreetingEnglish)
             beginRecognitionTask()
         }
     }

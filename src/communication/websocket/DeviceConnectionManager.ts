@@ -68,6 +68,30 @@ export class DeviceConnectionManager {
     }
   }
 
+  /**
+   * Pushes a native OS notification (banner + sound) to a connected
+   * device — the Agent's own `show_notification` `device.command`
+   * handler (see main.swift) posts it via `UNUserNotificationCenter`.
+   * Distinct from `voice.reply`: this isn't a spoken response to a live
+   * voice turn, it's an unprompted push (a due reminder, an automation
+   * rule's result) that should reach the user even away from the
+   * keyboard, the same role Telegram's `NOTIFY_USER` plays when
+   * Telegram is configured — this works without any external service
+   * configured at all, as long as a device is paired and connected.
+   * Silently does nothing if the given device isn't currently connected
+   * (mirrors every other best-effort push in this codebase): a missed
+   * native notification when the Mac is asleep/disconnected isn't worth
+   * surfacing as an error, the caller's own fallback channel (if any)
+   * covers it.
+   */
+  sendNotification(deviceId: string, title: string, body: string): void {
+    const connection = this.connections.get(deviceId);
+    if (!connection) return;
+    connection.send(
+      JSON.stringify(makeEnvelope("device.command", { command: "show_notification", args: { title, body } }, deviceId, randomUUID()))
+    );
+  }
+
   /** Sends a raw envelope to a device without expecting a correlated response. */
   send(deviceId: string, raw: string): void {
     const connection = this.connections.get(deviceId);

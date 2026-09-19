@@ -754,6 +754,13 @@ function main() {
           );
         });
       }
+      // Native on-device push, independent of Telegram being configured
+      // at all — a paired Mac already has everything this needs, no
+      // separate bot/account setup required.
+      const primaryDevice = deviceRegistry.getPrimaryDevice();
+      if (primaryDevice) {
+        deviceConnectionManager.sendNotification(primaryDevice.id, "JARVIS Reminder", reminder.text);
+      }
     }
   }, 30_000);
 

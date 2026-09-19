@@ -733,7 +733,7 @@ export class JarvisWebSocketServer {
       case "voice.transcript": {
         const { deviceVoiceGateway } = this.deps;
         if (deviceVoiceGateway && message.deviceId) {
-          deviceVoiceGateway.handleTranscript(message.deviceId, message.payload.text).catch((error) => {
+          deviceVoiceGateway.handleTranscript(message.deviceId, message.payload.text, message.payload.wakeWord).catch((error) => {
             console.error(`[jarvis] voice.transcript handling threw for device ${message.deviceId}:`, error);
           });
         }
