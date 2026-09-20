@@ -1,12 +1,44 @@
 export interface JarvisConfig {
   /** "anthropic" (default) or "groq" — which Brain implementation src/index.ts constructs. */
   brainProvider: "anthropic" | "groq";
-  /** Required when brainProvider is "anthropic"; undefined for a Groq-only setup. */
+  /**
+   * True only when JARVIS_BRAIN_PROVIDER was actually set in the
+   * environment (as opposed to defaulting to "anthropic" because it was
+   * unset). AIRouter uses this to distinguish "I explicitly want this
+   * provider" from "no preference stated" — an explicit choice is never
+   * overridden by AI_FREE_FIRST, only used for fallback/failure recovery,
+   * so someone who already has JARVIS_BRAIN_PROVIDER set sees zero
+   * behavior change.
+   */
+  brainProviderExplicit: boolean;
+  /** Required when brainProvider is "anthropic"; optional (but usable as an AIRouter fallback/secondary) otherwise. */
   anthropicApiKey?: string;
-  /** Required when brainProvider is "groq"; may also be set alongside "anthropic" for no reason today, but unused unless brainProvider is "groq". */
+  /** Required when brainProvider is "groq"; optional (but usable as an AIRouter fallback/secondary) otherwise. */
   groqApiKey?: string;
   /** Groq model id; unset uses GroqBrain's own default (a real tool-calling-capable free-tier model). */
   groqModel?: string;
+  /**
+   * Whether AIRouter should prefer a free-tier provider (currently: Groq)
+   * over a paid one when no explicit JARVIS_BRAIN_PROVIDER is set and
+   * more than one provider is configured. Defaults to true — "free
+   * first" is the whole point of the router existing. Ignored entirely
+   * when brainProviderExplicit is true.
+   */
+  aiFreeFirst: boolean;
+  /**
+   * Optional explicit fallback provider AIRouter switches to when the
+   * primary provider's call fails (network error, 5xx, rate limit).
+   * Unset means AIRouter still falls back to whichever *other* provider
+   * happens to be configured, if any — this only lets you pin exactly
+   * which one.
+   */
+  aiFallbackProvider?: "anthropic" | "groq";
+  /** Optional daily USD cap on paid-provider spend (estimated); unset means unlimited. See CostTracker. */
+  maxDailyCostUsd?: number;
+  /** Optional monthly USD cap on paid-provider spend (estimated); unset means unlimited. See CostTracker. */
+  maxMonthlyCostUsd?: number;
+  /** Path to the SQLite database storing AIRouter's per-call estimated-cost records (CostTracker). */
+  aiCostDbPath: string;
   port: number;
   memoryDbPath: string;
   /** Path to the SQLite database storing registered Face ID/Touch ID (WebAuthn) credentials. */
@@ -259,9 +291,51 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError(`Invalid JARVIS_BRAIN_PROVIDER: "${brainProviderRaw}" — must be "anthropic" or "groq"`);
   }
   const brainProvider = brainProviderRaw as "anthropic" | "groq";
-  const anthropicApiKey = brainProvider === "anthropic" ? requireEnv("ANTHROPIC_API_KEY") : undefined;
-  const groqApiKey = brainProvider === "groq" ? requireEnv("GROQ_API_KEY") : process.env.GROQ_API_KEY?.trim() || undefined;
+  const brainProviderExplicit = Boolean(process.env.JARVIS_BRAIN_PROVIDER?.trim());
+  // Both keys are read unconditionally now (rather than the previous
+  // all-or-nothing "only the selected provider's key exists at all") so
+  // AIRouter can register whichever providers are actually configured,
+  // regardless of which one JARVIS_BRAIN_PROVIDER names — a Groq-primary
+  // setup can still carry an Anthropic key as its fallback, and vice
+  // versa. The provider named by brainProvider is still the one that MUST
+  // be present, exactly as before.
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY?.trim() || undefined;
+  const groqApiKey = process.env.GROQ_API_KEY?.trim() || undefined;
+  if (brainProvider === "anthropic" && !anthropicApiKey) {
+    throw new ConfigError("Missing required environment variable: ANTHROPIC_API_KEY");
+  }
+  if (brainProvider === "groq" && !groqApiKey) {
+    throw new ConfigError("Missing required environment variable: GROQ_API_KEY");
+  }
+  if (!anthropicApiKey && !groqApiKey) {
+    throw new ConfigError(
+      "No AI provider is configured — set ANTHROPIC_API_KEY and/or GROQ_API_KEY so AIRouter has at least one Brain to use."
+    );
+  }
   const groqModel = process.env.JARVIS_GROQ_MODEL?.trim() || undefined;
+
+  const aiFreeFirstRaw = process.env.AI_FREE_FIRST?.trim().toLowerCase();
+  const aiFreeFirst = aiFreeFirstRaw === undefined || aiFreeFirstRaw === "" ? true : aiFreeFirstRaw === "true";
+
+  const aiFallbackProviderRaw = process.env.AI_FALLBACK_PROVIDER?.trim().toLowerCase() || undefined;
+  if (aiFallbackProviderRaw && aiFallbackProviderRaw !== "anthropic" && aiFallbackProviderRaw !== "groq") {
+    throw new ConfigError(`Invalid AI_FALLBACK_PROVIDER: "${aiFallbackProviderRaw}" — must be "anthropic" or "groq"`);
+  }
+  const aiFallbackProvider = aiFallbackProviderRaw as "anthropic" | "groq" | undefined;
+
+  const maxDailyCostUsdRaw = process.env.MAX_DAILY_COST_USD?.trim();
+  const maxDailyCostUsd = maxDailyCostUsdRaw ? Number(maxDailyCostUsdRaw) : undefined;
+  if (maxDailyCostUsdRaw && (Number.isNaN(maxDailyCostUsd) || maxDailyCostUsd! <= 0)) {
+    throw new ConfigError("Invalid MAX_DAILY_COST_USD: must be a positive number");
+  }
+
+  const maxMonthlyCostUsdRaw = process.env.MAX_MONTHLY_COST_USD?.trim();
+  const maxMonthlyCostUsd = maxMonthlyCostUsdRaw ? Number(maxMonthlyCostUsdRaw) : undefined;
+  if (maxMonthlyCostUsdRaw && (Number.isNaN(maxMonthlyCostUsd) || maxMonthlyCostUsd! <= 0)) {
+    throw new ConfigError("Invalid MAX_MONTHLY_COST_USD: must be a positive number");
+  }
+
+  const aiCostDbPath = process.env.JARVIS_AI_COST_DB_PATH ?? "./data/jarvis-ai-cost.sqlite";
   const port = Number(process.env.JARVIS_PORT ?? "4770");
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
   const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
@@ -484,9 +558,15 @@ export function loadConfig(): JarvisConfig {
 
   return {
     brainProvider,
+    brainProviderExplicit,
     anthropicApiKey,
     groqApiKey,
     groqModel,
+    aiFreeFirst,
+    aiFallbackProvider,
+    maxDailyCostUsd,
+    maxMonthlyCostUsd,
+    aiCostDbPath,
     port,
     memoryDbPath,
     webauthnDbPath,

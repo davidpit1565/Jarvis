@@ -5,6 +5,9 @@ import { EventBus } from "@/core/events/EventBus";
 import { ConversationManager } from "@/core/conversation/ConversationManager";
 import { ClaudeBrain, DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { GroqBrain } from "@/core/brain/GroqBrain";
+import { AIProviderRegistry } from "@/core/brain/AIProviderRegistry";
+import { AIRouter } from "@/core/brain/AIRouter";
+import { CostTracker } from "@/core/cost/CostTracker";
 import type { Brain } from "@/types/brain";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
@@ -393,22 +396,43 @@ function main() {
   const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
   const conversation = new ConversationManager(eventBus);
-  // "groq" is a genuine $0 alternative (no credit card, real tool-calling
-  // support on the free tier) — see GroqBrain's own doc comment and
-  // README's "Free ($0) brain: Groq" section for the honest quality
-  // tradeoff. loadConfig() already guarantees the matching API key is
-  // set for whichever provider is selected.
-  const brain: Brain =
-    config.brainProvider === "groq"
-      ? new GroqBrain(config.groqApiKey!, { model: config.groqModel })
-      : new ClaudeBrain(config.anthropicApiKey!, {
-          webSearchEnabled: config.webSearchEnabled,
-          webSearchMaxUses: config.webSearchMaxUses,
-          webFetchEnabled: config.webFetchEnabled,
-          webFetchMaxUses: config.webFetchMaxUses,
-          baseUrl: config.anthropicBaseUrl,
-          fallbackModel: config.fallbackModel,
-        });
+  // AIProviderRegistry holds whichever Brain(s) we could actually
+  // construct from the API keys present — never require both. "groq" is
+  // a genuine $0 alternative (no credit card, real tool-calling support
+  // on the free tier); see GroqBrain's own doc comment and README's
+  // "Free ($0) brain: Groq" section for the honest quality tradeoff.
+  const aiRegistry = new AIProviderRegistry();
+  if (config.groqApiKey) {
+    aiRegistry.register("groq", new GroqBrain(config.groqApiKey, { model: config.groqModel }), "free");
+  }
+  if (config.anthropicApiKey) {
+    aiRegistry.register(
+      "anthropic",
+      new ClaudeBrain(config.anthropicApiKey, {
+        webSearchEnabled: config.webSearchEnabled,
+        webSearchMaxUses: config.webSearchMaxUses,
+        webFetchEnabled: config.webFetchEnabled,
+        webFetchMaxUses: config.webFetchMaxUses,
+        baseUrl: config.anthropicBaseUrl,
+        fallbackModel: config.fallbackModel,
+      }),
+      "paid"
+    );
+  }
+  const costTracker = new CostTracker(config.aiCostDbPath);
+  // AIRouter is a drop-in Brain: with only one provider configured it
+  // just calls that one, exactly as before. JARVIS_BRAIN_PROVIDER, when
+  // explicitly set, always wins as the primary — AI_FREE_FIRST only
+  // decides between providers when no explicit choice was made, so an
+  // existing single-provider deployment sees no behavior change.
+  const brain: Brain = new AIRouter(aiRegistry, costTracker, {
+    freeFirst: config.aiFreeFirst,
+    explicitProvider: config.brainProviderExplicit ? config.brainProvider : undefined,
+    fallbackProvider: config.aiFallbackProvider,
+    maxDailyCostUsd: config.maxDailyCostUsd,
+    maxMonthlyCostUsd: config.maxMonthlyCostUsd,
+    eventBus,
+  });
   const confirmationService = new ConfirmationService(confirmViaChat);
   const phoneConfirmationService = new ConfirmationService(denyPhoneConfirmation);
 
@@ -1144,6 +1168,7 @@ function main() {
     activityLog.close();
     toolAuditLog.close();
     tokenUsageStore.close();
+    costTracker.close();
     deviceRegistry.close();
     pairingService.close();
     webAuthnStore.close();

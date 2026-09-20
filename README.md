@@ -1785,6 +1785,57 @@ that's the whole reason this was possible without touching
   explicitly set — this never silently changes behavior for an existing
   deployment.
 
+## AIRouter: free-first routing with fallback and a cost budget
+
+`src/index.ts` no longer constructs a single `Brain` directly. It builds
+an `AIProviderRegistry` (`src/core/brain/AIProviderRegistry.ts`) holding
+whichever `Brain`s it could actually construct — `GROQ_API_KEY` present
+registers a `GroqBrain` tagged `free`, `ANTHROPIC_API_KEY` present
+registers a `ClaudeBrain` tagged `paid` — never requiring both, and both
+can now be set at once. `AIRouter` (`src/core/brain/AIRouter.ts`) wraps
+that registry and implements `Brain` itself, so it's a drop-in
+replacement everywhere a `Brain` is passed (`Orchestrator` needed no
+changes).
+
+Routing policy, honestly stated:
+
+- **`JARVIS_BRAIN_PROVIDER` set explicitly** always wins as the primary
+  provider — `AI_FREE_FIRST` never switches away from it. This is the
+  "zero behavior change for an existing deployment" guarantee: if you
+  already have this set to one provider with no fallback configured,
+  nothing about how JARVIS picks a provider changes.
+- **`AI_FREE_FIRST`** (default `true`) — when `JARVIS_BRAIN_PROVIDER` is
+  left unset and both providers are configured, AIRouter tries Groq
+  first.
+- **Only one provider configured** — AIRouter just uses it, exactly like
+  the old direct construction did. No crash, no routing overhead.
+- **A call fails** (network error, 5xx, rate limit) — AIRouter retries
+  once against `AI_FALLBACK_PROVIDER` if set and configured, or otherwise
+  whichever other provider happens to be configured. It emits an
+  `ai.providerFallback` event on the shared `EventBus` either way, so
+  this is visible, not silent. With only one provider configured there's
+  nothing to fall back to, and the original error propagates.
+- **A cost budget is set** (`MAX_DAILY_COST_USD`/`MAX_MONTHLY_COST_USD`)
+  and already met — AIRouter refuses to call a *paid* provider for that
+  request. It uses a free provider instead if one is configured, or
+  throws a clear `BudgetExceededError` if not. A free provider is never
+  restricted by a budget cap — it's already $0.
+- **Neither `ANTHROPIC_API_KEY` nor `GROQ_API_KEY` is set** —
+  `loadConfig()` throws a clear config error at startup; JARVIS never
+  starts with zero usable brains.
+
+`CostTracker` (`src/core/cost/CostTracker.ts`) is a small SQLite log
+(same house style as `ReminderStore`: constructor takes a db path,
+`close()` method) of every call's *estimated* cost — Groq is always
+exactly `$0`; Anthropic is estimated from the response's token usage at
+rough, clearly-approximate per-token rates (or a flat per-call constant
+when no usage is reported at all), documented in the file itself as an
+approximation, not real billing data. This is separate from — and does
+not replace — the existing all-time `costAlertThresholdUsd`/
+`TokenUsageStore` warning feature described above; `CostTracker` is
+time-windowed (today/this month) specifically so `MAX_DAILY_COST_USD`/
+`MAX_MONTHLY_COST_USD` can mean what they say.
+
 ## Free ($0) hosting: Cloudflare Tunnel instead of Fly.io
 
 Fly.io (see "Cloud deployment" above) is a real, small, but **not actually

@@ -50,6 +50,11 @@ const ENV_KEYS = [
   "JARVIS_CHECKIN_AFTER_HOURS",
   "JARVIS_MORNING_BRIEFING_TIME",
   "JARVIS_COST_ALERT_THRESHOLD_USD",
+  "AI_FREE_FIRST",
+  "AI_FALLBACK_PROVIDER",
+  "MAX_DAILY_COST_USD",
+  "MAX_MONTHLY_COST_USD",
+  "JARVIS_AI_COST_DB_PATH",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -628,6 +633,86 @@ describe("loadConfig", () => {
   test("rejects a non-numeric JARVIS_COST_ALERT_THRESHOLD_USD", () => {
     process.env.JARVIS_COST_ALERT_THRESHOLD_USD = "not-a-number";
     expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults brainProviderExplicit to false when JARVIS_BRAIN_PROVIDER is unset", () => {
+    const config = loadConfig();
+    expect(config.brainProviderExplicit).toBe(false);
+  });
+
+  test("sets brainProviderExplicit to true when JARVIS_BRAIN_PROVIDER is explicitly set", () => {
+    process.env.JARVIS_BRAIN_PROVIDER = "anthropic";
+    const config = loadConfig();
+    expect(config.brainProviderExplicit).toBe(true);
+  });
+
+  test("allows both ANTHROPIC_API_KEY and GROQ_API_KEY to be set together", () => {
+    process.env.GROQ_API_KEY = "gsk-test";
+    const config = loadConfig();
+    expect(config.anthropicApiKey).toBe("sk-ant-test-key");
+    expect(config.groqApiKey).toBe("gsk-test");
+  });
+
+  test("throws when neither ANTHROPIC_API_KEY nor GROQ_API_KEY is set", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults aiFreeFirst to true", () => {
+    const config = loadConfig();
+    expect(config.aiFreeFirst).toBe(true);
+  });
+
+  test("reads AI_FREE_FIRST=false", () => {
+    process.env.AI_FREE_FIRST = "false";
+    const config = loadConfig();
+    expect(config.aiFreeFirst).toBe(false);
+  });
+
+  test("leaves aiFallbackProvider undefined by default", () => {
+    const config = loadConfig();
+    expect(config.aiFallbackProvider).toBeUndefined();
+  });
+
+  test("reads a valid AI_FALLBACK_PROVIDER", () => {
+    process.env.GROQ_API_KEY = "gsk-test";
+    process.env.AI_FALLBACK_PROVIDER = "groq";
+    const config = loadConfig();
+    expect(config.aiFallbackProvider).toBe("groq");
+  });
+
+  test("rejects an invalid AI_FALLBACK_PROVIDER", () => {
+    process.env.AI_FALLBACK_PROVIDER = "gpt5";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("leaves maxDailyCostUsd/maxMonthlyCostUsd undefined by default", () => {
+    const config = loadConfig();
+    expect(config.maxDailyCostUsd).toBeUndefined();
+    expect(config.maxMonthlyCostUsd).toBeUndefined();
+  });
+
+  test("reads MAX_DAILY_COST_USD and MAX_MONTHLY_COST_USD when set", () => {
+    process.env.MAX_DAILY_COST_USD = "5";
+    process.env.MAX_MONTHLY_COST_USD = "50";
+    const config = loadConfig();
+    expect(config.maxDailyCostUsd).toBe(5);
+    expect(config.maxMonthlyCostUsd).toBe(50);
+  });
+
+  test("rejects a non-positive MAX_DAILY_COST_USD", () => {
+    process.env.MAX_DAILY_COST_USD = "0";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("rejects a non-positive MAX_MONTHLY_COST_USD", () => {
+    process.env.MAX_MONTHLY_COST_USD = "-1";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults aiCostDbPath", () => {
+    const config = loadConfig();
+    expect(config.aiCostDbPath).toBe("./data/jarvis-ai-cost.sqlite");
   });
 
   test("reads TELEGRAM_OWNER_CHAT_ID when set", () => {
