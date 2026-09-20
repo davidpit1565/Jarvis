@@ -751,14 +751,19 @@ doesn't exist at all (`404`), same as the voice routes.
 To make JARVIS reachable by Twilio without keeping a personal machine on
 and connected, this repo includes a `Dockerfile` and a `fly.toml` for
 [Fly.io](https://fly.io) — a straightforward host for a small always-on
-service with a free HTTPS URL. The full one-time setup is documented as
-comments at the top of `fly.toml`: `fly launch --no-deploy`, create a
-volume for the persistent memory database, set secrets
-(`ANTHROPIC_API_KEY`, `TWILIO_AUTH_TOKEN`, then `TWILIO_PUBLIC_BASE_URL`
-once the app's URL is known), `fly deploy`, then point the Twilio number
-at `<app>.fly.dev/voice/incoming`. Any other Docker-friendly host (Railway,
-Render, a VPS) works the same way using the same `Dockerfile` — `fly.toml`
-is just the one this repo ships a ready config for.
+service with an HTTPS URL. **Not actually free**: Fly.io ended its
+no-credit-card free allowance years ago — a small always-on machine plus a
+persistent volume is a real, if small, recurring cost. The full one-time
+setup is documented as comments at the top of `fly.toml`: `fly launch
+--no-deploy`, create a volume for the persistent memory database, set
+secrets (`ANTHROPIC_API_KEY`, `TWILIO_AUTH_TOKEN`, then
+`TWILIO_PUBLIC_BASE_URL` once the app's URL is known), `fly deploy`, then
+point the Twilio number at `<app>.fly.dev/voice/incoming`. Any other
+Docker-friendly host (Railway, Render, a VPS) works the same way using the
+same `Dockerfile` — `fly.toml` is just the one this repo ships a ready
+config for. **If genuinely $0 hosting matters more than not depending on a
+personal machine's uptime**, see "Free ($0) hosting: Cloudflare Tunnel
+instead of Fly.io" below instead.
 
 **Not yet verified**: the `Dockerfile` was written and reviewed but not
 built or run in this environment (no Docker daemon available here). Build
@@ -1680,6 +1685,59 @@ that's the whole reason this was possible without touching
 - Default remains `anthropic` unless `JARVIS_BRAIN_PROVIDER` is
   explicitly set — this never silently changes behavior for an existing
   deployment.
+
+## Free ($0) hosting: Cloudflare Tunnel instead of Fly.io
+
+Fly.io (see "Cloud deployment" above) is a real, small, but **not actually
+free** recurring cost once a volume and an always-on machine are involved —
+Fly ended its no-credit-card free allowance years ago. If JARVIS's Mac
+(running `JarvisAgent`) is already on and connected for the device-control
+tools to work at all, running Core on that same Mac and exposing it with a
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+is a genuine $0 alternative: no new machine, no card on file, a real HTTPS
+URL Twilio/Telegram/the browser can all reach.
+
+**Trade-off, stated honestly**: Core only answers while that Mac is on,
+awake (no sleep — see "Hey JARVIS" voice section on `caffeinate`), and has
+network access — the same requirement `JarvisAgent` already has. This is
+not "more fragile than Fly.io", just a different failure mode (a Mac reboot
+vs. a cloud provider outage) — decide based on how reliably the Mac itself
+stays up.
+
+**Setup** (`cloudflared` runs as its own background service, independent of
+Core — start it once, it persists across Mac restarts):
+
+1. Install: `brew install cloudflared` (or download from Cloudflare's
+   releases page if Homebrew isn't set up).
+2. `cloudflared tunnel login` — opens a browser, pick the domain you want to
+   use (any domain in a free Cloudflare account; a domain you already own
+   works, or use Cloudflare's own free subdomain options).
+3. `cloudflared tunnel create jarvis-core` — creates the tunnel and a
+   credentials file under `~/.cloudflared/`.
+4. Route a hostname to it: `cloudflared tunnel route dns jarvis-core jarvis.yourdomain.com`
+   (replace with your actual domain/subdomain).
+5. Create `~/.cloudflared/config.yml`:
+   ```yaml
+   tunnel: jarvis-core
+   credentials-file: /Users/<you>/.cloudflared/<tunnel-id>.json
+   ingress:
+     - hostname: jarvis.yourdomain.com
+       service: http://localhost:4770
+     - service: http_status:404
+   ```
+   (port `4770` matches `JARVIS_PORT` in `.env` — adjust if you changed it.)
+6. Run it as an always-on background service so it survives reboots:
+   `sudo cloudflared service install` then `sudo launchctl start com.cloudflare.cloudflared`.
+7. Set `TWILIO_PUBLIC_BASE_URL=https://jarvis.yourdomain.com` and
+   `JARVIS_PUBLIC_BASE_URL=https://jarvis.yourdomain.com` in `.env` (same
+   variables the Fly.io path already documents), then run Core normally on
+   the Mac (`bun run src/index.ts`, or as its own `launchd`/background
+   service alongside `JarvisAgent`).
+
+**What doesn't change**: every existing security control (`JARVIS_ADMIN_TOKEN`,
+Twilio signature verification, Telegram webhook secret, the allowlists) works
+identically — the tunnel is just how traffic reaches `localhost:4770`; it
+carries no special trust of its own.
 
 ## Running the brain through a local model gateway instead of Anthropic's API
 
