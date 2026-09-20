@@ -17,6 +17,22 @@ const YES_PATTERN = /^\s*(yes|y|כן|אישור|confirm)\s*$/i;
 const NO_PATTERN = /^\s*(no|n|לא|ביטול|cancel)\s*$/i;
 
 /**
+ * Wraps a voice command with an explicit reply-language directive when the
+ * wake phrase forced one ("Hey JARVIS" -> "en", "Jarvis Shomea" -> "he") —
+ * without this, Claude's own bilingual auto-detection (see systemPrompt.ts)
+ * would pick the command's own language, so a Hebrew sentence said after
+ * the English wake phrase would still get answered in Hebrew instead of
+ * the forced English the user actually asked for by using that phrase.
+ * `language` is `undefined` for every other channel and for a
+ * clap-triggered command, which fall back to plain auto-detection as before.
+ */
+function applyLanguageDirective(text: string, language: string | undefined): string {
+  if (language === "en") return `[Reply in English regardless of what language this is in] ${text}`;
+  if (language === "he") return `[ענה בעברית בלי קשר לשפה של המשפט הזה] ${text}`;
+  return text;
+}
+
+/**
  * Routes wake-word-triggered voice transcripts from a paired device (the
  * Mac agent today, an iPhone one later) through the same
  * `Orchestrator.handleUserMessage` path as every other channel (Telegram,
@@ -77,7 +93,7 @@ export class DeviceVoiceGateway {
    * silently dropped one, and a failure sending *that* is only logged, not
    * thrown, so it can never crash the WebSocket message handler.
    */
-  async handleTranscript(deviceId: string, text: string): Promise<void> {
+  async handleTranscript(deviceId: string, text: string, forcedLanguage?: string): Promise<void> {
     const pendingResolve = this.pendingConfirmations.get(deviceId);
     if (pendingResolve) {
       if (YES_PATTERN.test(text)) {
@@ -98,7 +114,10 @@ export class DeviceVoiceGateway {
 
     const session = this.getOrCreateSession(deviceId);
     try {
-      const reply = await session.orchestrator.handleUserMessage(session.userId, text);
+      const reply = await session.orchestrator.handleUserMessage(
+        session.userId,
+        applyLanguageDirective(text, forcedLanguage)
+      );
       this.sendReply(deviceId, reply);
     } catch (error) {
       console.error(`[jarvis] voice transcript handling failed for device ${deviceId}:`, error);

@@ -215,4 +215,73 @@ describe("ReminderStore", () => {
     expect(updated?.recurrence).toBeNull();
     store.close();
   });
+
+  test("new reminders start unnotified", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Task", dueAt: "2026-09-19T18:00:00.000Z" });
+
+    expect(record.notifiedAt).toBeNull();
+    store.close();
+  });
+
+  test("getDueUnnotified finds a due, unnotified reminder", () => {
+    const store = new ReminderStore(":memory:");
+    store.create({ text: "Task", dueAt: "2026-01-15T08:00:00.000Z" });
+
+    const due = store.getDueUnnotified("2026-01-15T09:00:00.000Z");
+    expect(due).toHaveLength(1);
+    store.close();
+  });
+
+  test("getDueUnnotified excludes a reminder not yet due", () => {
+    const store = new ReminderStore(":memory:");
+    store.create({ text: "Task", dueAt: "2026-01-15T10:00:00.000Z" });
+
+    const due = store.getDueUnnotified("2026-01-15T09:00:00.000Z");
+    expect(due).toHaveLength(0);
+    store.close();
+  });
+
+  test("getDueUnnotified excludes an undated reminder", () => {
+    const store = new ReminderStore(":memory:");
+    store.create({ text: "Task" });
+
+    const due = store.getDueUnnotified("2026-01-15T09:00:00.000Z");
+    expect(due).toHaveLength(0);
+    store.close();
+  });
+
+  test("markNotified excludes the reminder from further getDueUnnotified results", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Task", dueAt: "2026-01-15T08:00:00.000Z" });
+
+    store.markNotified(record.id, "2026-01-15T09:00:00.000Z");
+
+    expect(store.getDueUnnotified("2026-01-15T09:00:00.000Z")).toHaveLength(0);
+    expect(store.get(record.id)?.notifiedAt).toBe("2026-01-15T09:00:00.000Z");
+    store.close();
+  });
+
+  test("update to a new dueAt clears notifiedAt so it can notify again", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Task", dueAt: "2026-01-15T08:00:00.000Z" });
+    store.markNotified(record.id, "2026-01-15T09:00:00.000Z");
+
+    const updated = store.update(record.id, { dueAt: "2026-01-16T08:00:00.000Z" });
+
+    expect(updated?.notifiedAt).toBeNull();
+    expect(store.getDueUnnotified("2026-01-16T09:00:00.000Z")).toHaveLength(1);
+    store.close();
+  });
+
+  test("update that doesn't change dueAt preserves notifiedAt", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Task", dueAt: "2026-01-15T08:00:00.000Z" });
+    store.markNotified(record.id, "2026-01-15T09:00:00.000Z");
+
+    const updated = store.update(record.id, { text: "Updated task" });
+
+    expect(updated?.notifiedAt).toBe("2026-01-15T09:00:00.000Z");
+    store.close();
+  });
 });

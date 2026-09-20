@@ -7,6 +7,16 @@ function makeStubOrchestrator(handle: (userId: string, message: string) => Promi
   return { handleUserMessage: handle } as unknown as Orchestrator;
 }
 
+/** Captures exactly what text reached the orchestrator, to assert on any language directive prepended to it. */
+function makeCapturingOrchestrator(): { orchestrator: Orchestrator; receivedMessages: string[] } {
+  const receivedMessages: string[] = [];
+  const orchestrator = makeStubOrchestrator(async (_userId, message) => {
+    receivedMessages.push(message);
+    return "ok";
+  });
+  return { orchestrator, receivedMessages };
+}
+
 function stubDeviceConnectionManager(): {
   manager: DeviceConnectionManager;
   calls: Array<{ deviceId: string; text: string }>;
@@ -60,6 +70,38 @@ describe("DeviceVoiceGateway.handleTranscript", () => {
     await expect(gateway.handleTranscript("mac-1", "do something")).resolves.toBeUndefined();
     expect(calls).toHaveLength(1);
     expect(calls[0]!.text).toMatch(/something went wrong/i);
+  });
+
+  test("forces an English reply directive when the wake phrase was the English one", async () => {
+    const { manager } = stubDeviceConnectionManager();
+    const { orchestrator, receivedMessages } = makeCapturingOrchestrator();
+    const gateway = new DeviceVoiceGateway(manager, () => ({ orchestrator, userId: "local-user" }));
+
+    await gateway.handleTranscript("mac-1", "מה השעה", "en");
+
+    expect(receivedMessages[0]).toMatch(/^\[Reply in English/);
+    expect(receivedMessages[0]).toContain("מה השעה");
+  });
+
+  test("forces a Hebrew reply directive when the wake phrase was Jarvis Shomea", async () => {
+    const { manager } = stubDeviceConnectionManager();
+    const { orchestrator, receivedMessages } = makeCapturingOrchestrator();
+    const gateway = new DeviceVoiceGateway(manager, () => ({ orchestrator, userId: "local-user" }));
+
+    await gateway.handleTranscript("mac-1", "what's the weather", "he");
+
+    expect(receivedMessages[0]).toMatch(/^\[ענה בעברית/);
+    expect(receivedMessages[0]).toContain("what's the weather");
+  });
+
+  test("applies no language directive when no forced language is given (e.g. a clap-triggered command)", async () => {
+    const { manager } = stubDeviceConnectionManager();
+    const { orchestrator, receivedMessages } = makeCapturingOrchestrator();
+    const gateway = new DeviceVoiceGateway(manager, () => ({ orchestrator, userId: "local-user" }));
+
+    await gateway.handleTranscript("mac-1", "what's on my calendar");
+
+    expect(receivedMessages[0]).toBe("what's on my calendar");
   });
 });
 

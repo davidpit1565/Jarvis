@@ -38,10 +38,10 @@ describe("CREATE_REMINDER tool", () => {
 
   test("creates a dated reminder", async () => {
     const tool = createCreateReminderTool(store);
-    const result = await tool.execute({ text: "Call mom", dueAt: "2026-09-19T18:00:00.000Z" }, context);
+    const result = await tool.execute({ text: "Call mom", dueAt: "2030-09-19T18:00:00.000Z" }, context);
 
     expect(result.success).toBe(true);
-    expect(store.list()[0]?.dueAt).toBe("2026-09-19T18:00:00.000Z");
+    expect(store.list()[0]?.dueAt).toBe("2030-09-19T18:00:00.000Z");
   });
 
   test("rejects an empty text", async () => {
@@ -67,7 +67,7 @@ describe("CREATE_REMINDER tool", () => {
   test("creates a recurring reminder with a dueAt", async () => {
     const tool = createCreateReminderTool(store);
     const result = await tool.execute(
-      { text: "Take medication", dueAt: "2026-09-19T18:00:00.000Z", recurrence: "daily" },
+      { text: "Take medication", dueAt: "2030-09-19T18:00:00.000Z", recurrence: "daily" },
       context
     );
 
@@ -78,7 +78,7 @@ describe("CREATE_REMINDER tool", () => {
   test("rejects an invalid recurrence value", async () => {
     const tool = createCreateReminderTool(store);
     const result = await tool.execute(
-      { text: "Task", dueAt: "2026-09-19T18:00:00.000Z", recurrence: "hourly" as never },
+      { text: "Task", dueAt: "2030-09-19T18:00:00.000Z", recurrence: "hourly" as never },
       context
     );
     expect(result.success).toBe(false);
@@ -206,7 +206,7 @@ describe("DELETE_REMINDER tool", () => {
   });
 
   test("records the deleted reminder's fields to the undo store, when given one", async () => {
-    const record = store.create({ text: "Buy milk", dueAt: "2026-09-19T18:00:00.000Z", recurrence: "daily" });
+    const record = store.create({ text: "Buy milk", dueAt: "2030-09-19T18:00:00.000Z", recurrence: "daily" });
     const undoStore = new UndoStore();
     const tool = createDeleteReminderTool(store, undoStore);
 
@@ -215,7 +215,7 @@ describe("DELETE_REMINDER tool", () => {
     expect(undoStore.takeLast()).toEqual({
       type: "reminder_deleted",
       text: "Buy milk",
-      dueAt: "2026-09-19T18:00:00.000Z",
+      dueAt: "2030-09-19T18:00:00.000Z",
       recurrence: "daily",
     });
   });
@@ -248,17 +248,17 @@ describe("UPDATE_REMINDER tool", () => {
   });
 
   test("updates text and dueAt", async () => {
-    const record = store.create({ text: "Call mom", dueAt: "2026-09-19T18:00:00.000Z" });
+    const record = store.create({ text: "Call mom", dueAt: "2030-09-19T18:00:00.000Z" });
     const tool = createUpdateReminderTool(store);
 
-    const result = await tool.execute({ id: record.id, text: "Call dad", dueAt: "2026-09-19T19:00:00.000Z" }, context);
+    const result = await tool.execute({ id: record.id, text: "Call dad", dueAt: "2030-09-19T19:00:00.000Z" }, context);
 
     expect(result.success).toBe(true);
     expect(store.get(record.id)?.text).toBe("Call dad");
   });
 
   test("clears dueAt when passed null", async () => {
-    const record = store.create({ text: "Task", dueAt: "2026-09-19T18:00:00.000Z" });
+    const record = store.create({ text: "Task", dueAt: "2030-09-19T18:00:00.000Z" });
     const tool = createUpdateReminderTool(store);
 
     const result = await tool.execute({ id: record.id, dueAt: null }, context);
@@ -297,7 +297,7 @@ describe("UPDATE_REMINDER tool", () => {
   });
 
   test("sets recurrence on an existing reminder", async () => {
-    const record = store.create({ text: "Task", dueAt: "2026-09-19T18:00:00.000Z" });
+    const record = store.create({ text: "Task", dueAt: "2030-09-19T18:00:00.000Z" });
     const tool = createUpdateReminderTool(store);
 
     const result = await tool.execute({ id: record.id, recurrence: "weekly" }, context);
@@ -307,7 +307,7 @@ describe("UPDATE_REMINDER tool", () => {
   });
 
   test("clears recurrence when passed null — stops it from repeating", async () => {
-    const record = store.create({ text: "Task", dueAt: "2026-09-19T18:00:00.000Z", recurrence: "daily" });
+    const record = store.create({ text: "Task", dueAt: "2030-09-19T18:00:00.000Z", recurrence: "daily" });
     const tool = createUpdateReminderTool(store);
 
     const result = await tool.execute({ id: record.id, recurrence: null }, context);

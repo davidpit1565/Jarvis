@@ -916,6 +916,41 @@ function main() {
     }
   }, 30_000);
 
+  // Reminder due-notifications: "remind me in an hour" previously only
+  // ever surfaced if the user happened to talk to JARVIS again after the
+  // time passed (dueRemindersNote is only injected as per-turn context).
+  // This tick actually pushes a notification the moment a reminder comes
+  // due, the same way NOTIFY_USER/automation rules reach the user without
+  // them asking first. `notifiedAt` (persisted, not in-memory) makes this
+  // safe across restarts: a reminder already notified stays that way, and
+  // one edited to a new due date (ReminderStore.update clears notifiedAt)
+  // is treated as due again.
+  const reminderNotificationInterval = setInterval(() => {
+    const nowIso = new Date().toISOString();
+    const due = reminderStore.getDueUnnotified(nowIso);
+
+    for (const reminder of due) {
+      reminderStore.markNotified(reminder.id, nowIso);
+      const message = `⏰ Reminder: ${reminder.text}`;
+      activityLog.record(`Reminder notification sent: ${reminder.text.slice(0, 100)}`);
+      if (telegramGateway && config.telegramOwnerChatId) {
+        telegramGateway.sendMessage(config.telegramOwnerChatId, message).catch((error) => {
+          console.error(
+            "[jarvis] failed to send reminder notification:",
+            error instanceof Error ? error.message : String(error)
+          );
+        });
+      }
+      // Native on-device push, independent of Telegram being configured
+      // at all — a paired Mac already has everything this needs, no
+      // separate bot/account setup required.
+      const primaryDevice = deviceRegistry.getPrimaryDevice();
+      if (primaryDevice) {
+        deviceConnectionManager.sendNotification(primaryDevice.id, "JARVIS Reminder", reminder.text);
+      }
+    }
+  }, 30_000);
+
   const wsServer = new JarvisWebSocketServer({
     deviceRegistry,
     deviceConnectionManager,
@@ -1119,6 +1154,7 @@ function main() {
     if (weeklyDigestInterval) clearInterval(weeklyDigestInterval);
     if (checkinInterval) clearInterval(checkinInterval);
     if (morningBriefingInterval) clearInterval(morningBriefingInterval);
+    clearInterval(reminderNotificationInterval);
     clearInterval(automationRuleInterval);
     calendarTokenStore.close();
     spotifyTokenStore.close();

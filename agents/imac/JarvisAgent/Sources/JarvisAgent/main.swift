@@ -5,6 +5,7 @@
 
 import AppKit
 import Foundation
+import UserNotifications
 
 final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDelegate {
     private let deviceId = DeviceIdentity.loadOrCreate()
@@ -32,10 +33,21 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             NSApplication.shared.terminate(nil)
         }
 
-        wakeWordListener.onTranscriptReady = { [weak self] text in
-            self?.sendVoiceTranscript(text)
+        wakeWordListener.onTranscriptReady = { [weak self] text, language in
+            self?.sendVoiceTranscript(text, forcedLanguage: language)
         }
         wakeWordListener.start()
+
+        // Native notification permission — needed for show_notification
+        // (due reminders, automation results) to actually appear as a
+        // banner, independent of Telegram being configured at all.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error {
+                Logger.shared.log("Notification authorization request failed: \(error.localizedDescription)")
+            } else if !granted {
+                Logger.shared.log("Notification permission not granted — show_notification will silently do nothing.")
+            }
+        }
 
         connection.connect()
     }
@@ -107,8 +119,32 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             }
             statusBar.update(status: .connected, deviceName: Host.current().localizedName)
 
+        case "show_notification":
+            let title = (envelope.payload.args?["title"]?.value as? String) ?? "JARVIS"
+            let body = (envelope.payload.args?["body"]?.value as? String) ?? ""
+            showNotification(title: title, body: body)
+
         default:
             Logger.shared.log("Unhandled device.command: \(envelope.payload.command)")
+        }
+    }
+
+    /// Posts a native macOS notification banner — the on-device push
+    /// counterpart to Telegram's NOTIFY_USER, for when the user hasn't
+    /// (or hasn't yet) connected Telegram at all. Silently does nothing if
+    /// notification permission was never granted (see the authorization
+    /// request in applicationDidFinishLaunching) — the same best-effort
+    /// posture as every other push channel in this codebase.
+    private func showNotification(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                Logger.shared.log("Failed to post notification: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -142,10 +178,14 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
 
     /// Sends a wake-word-triggered voice command to Core, once the "Hey
     /// JARVIS" listener has captured what followed the wake phrase.
-    private func sendVoiceTranscript(_ text: String) {
+    /// `forcedLanguage` carries which wake phrase was used — "en"/"he" — so
+    /// Core can force the reply's language instead of only auto-detecting
+    /// it from the command text; "" (a clap-triggered command has no wake
+    /// phrase to read a language from) leaves auto-detection in place.
+    private func sendVoiceTranscript(_ text: String, forcedLanguage: String) {
         let envelope = MessageFactory.makeEnvelope(
             type: "voice.transcript",
-            payload: VoiceTranscriptPayload(text: text, wakeWord: nil),
+            payload: VoiceTranscriptPayload(text: text, wakeWord: forcedLanguage.isEmpty ? nil : forcedLanguage),
             deviceId: deviceId
         )
         guard let data = try? JSONEncoder().encode(envelope) else {

@@ -214,4 +214,30 @@ describe("DeviceConnectionManager", () => {
 
     await expect(manager.sendToolRequest("imac-1", "some_tool", {})).rejects.toThrow(/socket write failed/);
   });
+
+  test("sendNotification sends a show_notification device.command with the given title/body", () => {
+    const eventBus = new EventBus();
+    const manager = new DeviceConnectionManager(eventBus);
+    const connection = new MockDeviceConnection();
+    manager.registerConnection("imac-1", connection);
+
+    manager.sendNotification("imac-1", "JARVIS Reminder", "Call the dentist");
+
+    expect(connection.sent).toHaveLength(1);
+    const envelope = JSON.parse(connection.sent[0]!) as {
+      deviceId: string;
+      type: string;
+      payload: { command: string; args: { title: string; body: string } };
+    };
+    expect(envelope.type).toBe("device.command");
+    expect(envelope.deviceId).toBe("imac-1");
+    expect(envelope.payload.command).toBe("show_notification");
+    expect(envelope.payload.args).toEqual({ title: "JARVIS Reminder", body: "Call the dentist" });
+  });
+
+  test("sendNotification silently does nothing for a device with no active connection", () => {
+    const eventBus = new EventBus();
+    const manager = new DeviceConnectionManager(eventBus);
+    expect(() => manager.sendNotification("missing", "Title", "Body")).not.toThrow();
+  });
 });
