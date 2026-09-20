@@ -31,4 +31,15 @@ describe("LIST_DIRECTORY tool definition", () => {
       input_schema: listDirectoryTool.inputSchema,
     });
   });
+
+  describe("validateInput (Core-side defense in depth)", () => {
+    test("accepts a path inside an allowlisted folder", () => {
+      expect(listDirectoryTool.validateInput?.({ path: "Downloads" }).valid).toBe(true);
+    });
+
+    test("rejects a traversal or absolute path before it ever reaches the device", () => {
+      expect(listDirectoryTool.validateInput?.({ path: "Desktop/../../etc" }).valid).toBe(false);
+      expect(listDirectoryTool.validateInput?.({ path: "/etc" }).valid).toBe(false);
+    });
+  });
 });

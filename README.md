@@ -341,6 +341,25 @@ being unconditionally denied:
   chat goes stale until overwritten by the next confirmation for the same
   chat — a bounded, low-consequence edge case, not a leak that grows over
   time.
+- **The hologram chat gets a real confirmation prompt too, found and
+  fixed during a later security review.** Before this fix, the browser's
+  `/chat` connection silently shared the terminal's own `confirmViaChat`
+  — a CONFIRM tool call made from the browser (e.g. the newly-CONFIRM
+  `SEND_EMAIL`) sent its yes/no question to the SERVER's terminal stdin,
+  invisible to the browser, so it just timed out and denied itself 60
+  seconds later with nothing shown to the user. `confirmViaChat` now
+  checks `JarvisWebSocketServer.hasWebChatConnection` first: if a browser
+  is actually connected, it asks there instead
+  (`requestWebChatConfirmation()` sends `{type:"confirm", message}` and
+  resolves once the next message is recognized as yes/no/כן/לא, same
+  recognized-words list and re-prompt-on-unrecognized behavior as
+  Telegram's own `awaitConfirmation()`) — otherwise it falls back to the
+  terminal, unchanged from before. The terminal and browser deliberately
+  share one `Orchestrator`/`ConversationManager` (see `webChatOrchestrator`
+  in `src/index.ts`) so talking to JARVIS from either feels like the same
+  ongoing conversation — this fix keeps that same "one JARVIS, whichever
+  channel is live" model for confirmations too, rather than splitting
+  into a separate web-chat orchestrator.
 
 **A grant is required before any of this even applies** — `PermissionService.check()`
 only allows READ-level tools with no grant at all; every SAFE_ACTION/
@@ -605,10 +624,11 @@ other app's private files — and because the whole point of this
 project's security model (permission levels, the audit log, rate
 limiting, the confirmation flow) is that JARVIS only ever gets exactly
 the access it's been deliberately scoped to, nothing implicit. A
-photo-library integration is a separate, larger piece of work (it needs
-its own macOS permission prompt and a dedicated Photos-framework
-integration, not just a file read) and is intentionally not bundled into
-this change.
+photo-library integration needed its own macOS permission prompt and a
+dedicated Photos-framework integration, not just a file read — LIST_RECENT_PHOTOS
+is that integration, added later: metadata only (filename, date,
+dimensions, favorite flag) for the most recent items, never the actual
+image/video bytes, which remains separate, larger work.
 
 ## Phone gateway (call JARVIS)
 
@@ -731,14 +751,19 @@ doesn't exist at all (`404`), same as the voice routes.
 To make JARVIS reachable by Twilio without keeping a personal machine on
 and connected, this repo includes a `Dockerfile` and a `fly.toml` for
 [Fly.io](https://fly.io) — a straightforward host for a small always-on
-service with a free HTTPS URL. The full one-time setup is documented as
-comments at the top of `fly.toml`: `fly launch --no-deploy`, create a
-volume for the persistent memory database, set secrets
-(`ANTHROPIC_API_KEY`, `TWILIO_AUTH_TOKEN`, then `TWILIO_PUBLIC_BASE_URL`
-once the app's URL is known), `fly deploy`, then point the Twilio number
-at `<app>.fly.dev/voice/incoming`. Any other Docker-friendly host (Railway,
-Render, a VPS) works the same way using the same `Dockerfile` — `fly.toml`
-is just the one this repo ships a ready config for.
+service with an HTTPS URL. **Not actually free**: Fly.io ended its
+no-credit-card free allowance years ago — a small always-on machine plus a
+persistent volume is a real, if small, recurring cost. The full one-time
+setup is documented as comments at the top of `fly.toml`: `fly launch
+--no-deploy`, create a volume for the persistent memory database, set
+secrets (`ANTHROPIC_API_KEY`, `TWILIO_AUTH_TOKEN`, then
+`TWILIO_PUBLIC_BASE_URL` once the app's URL is known), `fly deploy`, then
+point the Twilio number at `<app>.fly.dev/voice/incoming`. Any other
+Docker-friendly host (Railway, Render, a VPS) works the same way using the
+same `Dockerfile` — `fly.toml` is just the one this repo ships a ready
+config for. **If genuinely $0 hosting matters more than not depending on a
+personal machine's uptime**, see "Free ($0) hosting: Cloudflare Tunnel
+instead of Fly.io" below instead.
 
 **Not yet verified**: the `Dockerfile` was written and reviewed but not
 built or run in this environment (no Docker daemon available here). Build
@@ -949,20 +974,49 @@ automated from here):
   `newer_than:2d`, ...) and returns matching messages' subject, sender,
   date, and a short snippet (`src/gmail/GmailClient.ts`, same raw-`fetch`
   style, sharing the same linked account and token store as Calendar — no
-  separate OAuth flow). The OAuth scope requested is `gmail.readonly` —
-  deliberately read/search only, never send, delete, or modify — and only
-  whatever a specific query matches, not a dump of the whole mailbox. This
-  is the scoped alternative to "give JARVIS access to all my messages":
-  real, working email search, without a blanket mailbox grant.
+  separate OAuth flow). Only whatever a specific query matches, not a dump
+  of the whole mailbox.
 - **`GET_EMAIL`** (`READ`) — fetches one message's full plain-text body by
   id (from a prior `search_email` result), for when the user asks what an
-  email actually says rather than just whether it exists. Same
-  `gmail.readonly` boundary as search; walks a multipart message's parts
-  preferring `text/plain` over `text/html`.
+  email actually says rather than just whether it exists. Walks a
+  multipart message's parts preferring `text/plain` over `text/html`.
 - **`GET_UNREAD_EMAIL_COUNT`** (`READ`) — just the unread count via
   Gmail's `resultSizeEstimate`, no per-message summary fetch — meaningfully
   cheaper than `search_email("is:unread")` for "do I have unread emails,"
   which only ever needs a number.
+- **`SEND_EMAIL`** (`CONFIRM`, standing-granted) — sends a real,
+  brand-new email from the linked account. Added later, on explicit
+  request, reversing this feature's original read-only-by-design
+  boundary — the OAuth scope now requests `gmail.send` alongside
+  `gmail.readonly` (see `GOOGLE_SCOPES` in `GoogleCalendarClient.ts`).
+  **An account linked before this scope was added needs to re-run
+  `GET /calendar/oauth/start` once** to pick it up; until then, `SEND_EMAIL`
+  fails with an insufficient-scope error while everything else keeps
+  working. Header values (`to`/`subject`) are sanitized against CR/LF
+  injection before the raw message is built. `CONFIRM`, not `SAFE_ACTION` —
+  a later security review found that `SEARCH_EMAIL`/`GET_EMAIL` feed real
+  inbox content (including anything an attacker chooses to put in an
+  email body) straight into the model's context, and `SEND_EMAIL` is the
+  one tool that could turn a successful prompt injection into real
+  third-party data exfiltration. The system prompt already tells the
+  model not to treat fetched content as instructions (see "Content that
+  comes back from a tool..." in `systemPrompt.ts`), but that's advisory,
+  not a technical control — `CONFIRM`'s fresh per-invocation human
+  approval is the real backstop, see `SendEmailTool.ts`'s own doc comment.
+- **`REPLY_EMAIL`** (`CONFIRM`, standing-granted) — replies within an
+  existing thread, given a `messageId` from a prior `search_email`/
+  `get_email` call. The recipient, subject (`Re:` prefix), and threading
+  headers (`In-Reply-To`/`References`) are all derived from the original
+  message server-side, never supplied by the caller — this can't be
+  redirected to send to someone OTHER than whoever the original message
+  actually came from. That's real, but not sufficient on its own: "the
+  original sender" can simply be an attacker who emailed the owner with
+  an injected instruction in the body, and the reply goes straight back
+  to that same attacker's inbox with no redirection needed at all — same
+  `CONFIRM` reasoning as `SEND_EMAIL` above.
+- Still no `DELETE`/mailbox-modify capability of any kind — `SEND_EMAIL`/
+  `REPLY_EMAIL` only ever add a new sent message, never touch an existing
+  one.
 - OAuth tokens (the refresh token and current access token) are persisted
   to their own SQLite database (`src/calendar/CalendarTokenStore.ts`,
   `JARVIS_CALENDAR_TOKEN_DB_PATH`) — access tokens are refreshed
@@ -1110,6 +1164,39 @@ done in this environment. What's covered by real tests
 reuse per chat, error-reply fallback) and HTTP routing (secret-token
 verification, malformed JSON, disabled-gateway 404) against the actual
 `Bun.serve` server.
+
+## Vision (attach an image to a chat message) and image generation
+
+- **Attaching a photo actually works as real vision**, not a filename
+  JARVIS is told about. The hologram UI's 💬 chat panel (`ui/hologram/index.html`)
+  has a 📎 attach button (file picker, `accept="image/*"` so it opens the
+  camera directly on a phone) and accepts a pasted image straight from the
+  clipboard. The image is read client-side as base64 and sent over the
+  same `ws(s)://.../chat` connection as `{ text, image: { mediaType, data } }`
+  (or `images: [...]` for more than one). `JarvisWebSocketServer.handleWebChatMessage`
+  validates the shape (`isValidWebChatImage`) before it ever reaches the
+  Orchestrator, which caps it at 4 images per message and ~5MB (base64)
+  per image (`MAX_IMAGES_PER_MESSAGE`/`MAX_IMAGE_BASE64_LENGTH` in
+  `Orchestrator.ts`) before it's added to the conversation
+  (`ConversationManager.addUserMessage`'s new `images` parameter) and
+  turned into a real Anthropic `image` content block
+  (`ClaudeBrain.toAnthropicMessages`) — Claude genuinely sees the pixels,
+  the same way it would in claude.ai. An image-only message (no caption
+  text) is a valid turn.
+- **`GENERATE_IMAGE`** (`SAFE_ACTION`, standing-granted, always
+  registered) — generates a real image from a text prompt via
+  [Pollinations.ai](https://pollinations.ai) (`image.pollinations.ai/prompt/...`),
+  which is free and requires no API key or signup — verified live during
+  development (fetched an actual generated JPEG with zero auth of any
+  kind). `src/images/PollinationsImageClient.ts` just builds the URL;
+  nothing is generated or fetched by Core itself. The tool result always
+  includes the URL, and when a Telegram owner chat is configured, also
+  pushes it there as a real inline photo via `TelegramGateway.sendPhoto` —
+  Telegram fetches the URL itself server-side, so the image bytes never
+  pass through Core's own process. The hologram chat panel also renders a
+  `generate_image` URL inline as an actual image in JARVIS's reply, not a
+  bare link, when it recognizes the Pollinations domain in the response
+  text.
 
 ## Weather
 
@@ -1488,19 +1575,23 @@ conversations too, not just the current one.
 - Every phone webhook request's Twilio signature is verified against the
   configured public URL before it reaches the Orchestrator; unsigned,
   tampered, or wrong-route requests are rejected with `403`.
-- Optional phone caller allowlist (`TWILIO_ALLOWED_CALLERS`): when set, a
-  call from any other number is turned away with a spoken message before
-  it reaches the Orchestrator — signature verification alone only proves
-  the request came from Twilio, not who's on the call.
+- Phone caller allowlist (`TWILIO_ALLOWED_CALLERS`): a call from any other
+  number is turned away with a spoken message before it reaches the
+  Orchestrator — signature verification alone only proves the request
+  came from Twilio, not who's on the call. Required, not just
+  recommended: the phone gateway refuses to start at all with the token
+  and public URL configured but no allowlist, unless
+  `TWILIO_ALLOW_OPEN_ACCESS=true` explicitly opts into taking calls from
+  anyone.
 - Every Telegram webhook request's secret token is verified against
   `TELEGRAM_WEBHOOK_SECRET` before it reaches the Orchestrator; a missing
   or wrong secret is rejected with `403`, and rate-limited per client IP
   (same `RateLimiter` as pairing/login/backup) so guessing the secret
   isn't free — past the limit, `429` without even checking the token.
-  Optional chat allowlist
-  (`TELEGRAM_ALLOWED_CHAT_IDS`), same reasoning as the phone caller
-  allowlist above: secret-token verification alone only proves the
-  request came from Telegram, not which chat it's from.
+  Chat allowlist (`TELEGRAM_ALLOWED_CHAT_IDS`), same reasoning and same
+  required-unless-opted-out (`TELEGRAM_ALLOW_OPEN_ACCESS=true`) behavior
+  as the phone caller allowlist above: secret-token verification alone
+  only proves the request came from Telegram, not which chat it's from.
 - Optional Face ID/Touch ID lock for the dashboard (see below): real
   WebAuthn, not a custom biometric integration; registering the first
   credential requires `JARVIS_ADMIN_TOKEN` so setup can't be hijacked.
@@ -1597,6 +1688,99 @@ past it (`src/audit/CostAlertMonitor.ts`). This is all-time, not a
 monthly reset — `TokenUsageStore` only tracks a running total, so a real
 recurring budget period would need time-windowed queries this doesn't
 have yet.
+
+## Free ($0) brain: Groq
+
+`JARVIS_BRAIN_PROVIDER=groq` (with `GROQ_API_KEY` set) switches `src/index.ts`
+to construct a `GroqBrain` (`src/core/brain/GroqBrain.ts`) instead of
+`ClaudeBrain` — a genuine $0 option, added on explicit request, not a
+trial that quietly turns into billing. `Brain` is deliberately
+provider-agnostic (see its own doc comment in `src/types/brain.ts`) —
+that's the whole reason this was possible without touching
+`Orchestrator`/`ConversationManager` at all.
+
+- **Get a free key**: [console.groq.com/keys](https://console.groq.com/keys) —
+  no credit card. Groq's free tier (verified live during development,
+  not just from docs) gives real tool-calling support and enough
+  requests/day for a personal assistant's actual usage.
+- **`ANTHROPIC_API_KEY` becomes fully optional** when
+  `JARVIS_BRAIN_PROVIDER=groq` — a Groq-only setup never touches
+  Anthropic's API at all, so nothing about running JARVIS costs money
+  (self-hosting compute aside). `loadConfig()` requires whichever key
+  matches the selected provider, never both.
+- Talks to Groq's OpenAI-compatible `chat/completions` endpoint via raw
+  `fetch` (same style as `GmailClient`/`TwilioOutboundCaller` — no new
+  SDK dependency), translating `ConversationMessage[]` to/from OpenAI's
+  message and tool-call shapes (`toOpenAIMessages`/`fromOpenAIResponse`).
+  Retries once on 429 (free-tier rate limit) or 503; anything else (401,
+  400) fails immediately since retrying would just fail identically.
+  Vision works too — an attached image becomes an OpenAI `image_url`
+  content block, same feature as the Anthropic path, model permitting.
+- **The real tradeoff, stated honestly**: JARVIS's tool-calling
+  reliability, personality, and Hebrew/English handling are tuned against
+  actual Claude models. Groq's free-tier Llama models are genuinely
+  capable but will noticeably follow the system prompt and use tools
+  less reliably in practice — this is not presented as equivalent to
+  Claude, just as a real free alternative worth trying. `GET /status`'s
+  `estimatedCostUsd` also stops meaning anything on Groq (it's computed
+  against Anthropic's own pricing) — same caveat as the local-gateway
+  path below.
+- Default remains `anthropic` unless `JARVIS_BRAIN_PROVIDER` is
+  explicitly set — this never silently changes behavior for an existing
+  deployment.
+
+## Free ($0) hosting: Cloudflare Tunnel instead of Fly.io
+
+Fly.io (see "Cloud deployment" above) is a real, small, but **not actually
+free** recurring cost once a volume and an always-on machine are involved —
+Fly ended its no-credit-card free allowance years ago. If JARVIS's Mac
+(running `JarvisAgent`) is already on and connected for the device-control
+tools to work at all, running Core on that same Mac and exposing it with a
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+is a genuine $0 alternative: no new machine, no card on file, a real HTTPS
+URL Twilio/Telegram/the browser can all reach.
+
+**Trade-off, stated honestly**: Core only answers while that Mac is on,
+awake (no sleep — see "Hey JARVIS" voice section on `caffeinate`), and has
+network access — the same requirement `JarvisAgent` already has. This is
+not "more fragile than Fly.io", just a different failure mode (a Mac reboot
+vs. a cloud provider outage) — decide based on how reliably the Mac itself
+stays up.
+
+**Setup** (`cloudflared` runs as its own background service, independent of
+Core — start it once, it persists across Mac restarts):
+
+1. Install: `brew install cloudflared` (or download from Cloudflare's
+   releases page if Homebrew isn't set up).
+2. `cloudflared tunnel login` — opens a browser, pick the domain you want to
+   use (any domain in a free Cloudflare account; a domain you already own
+   works, or use Cloudflare's own free subdomain options).
+3. `cloudflared tunnel create jarvis-core` — creates the tunnel and a
+   credentials file under `~/.cloudflared/`.
+4. Route a hostname to it: `cloudflared tunnel route dns jarvis-core jarvis.yourdomain.com`
+   (replace with your actual domain/subdomain).
+5. Create `~/.cloudflared/config.yml`:
+   ```yaml
+   tunnel: jarvis-core
+   credentials-file: /Users/<you>/.cloudflared/<tunnel-id>.json
+   ingress:
+     - hostname: jarvis.yourdomain.com
+       service: http://localhost:4770
+     - service: http_status:404
+   ```
+   (port `4770` matches `JARVIS_PORT` in `.env` — adjust if you changed it.)
+6. Run it as an always-on background service so it survives reboots:
+   `sudo cloudflared service install` then `sudo launchctl start com.cloudflare.cloudflared`.
+7. Set `TWILIO_PUBLIC_BASE_URL=https://jarvis.yourdomain.com` and
+   `JARVIS_PUBLIC_BASE_URL=https://jarvis.yourdomain.com` in `.env` (same
+   variables the Fly.io path already documents), then run Core normally on
+   the Mac (`bun run src/index.ts`, or as its own `launchd`/background
+   service alongside `JarvisAgent`).
+
+**What doesn't change**: every existing security control (`JARVIS_ADMIN_TOKEN`,
+Twilio signature verification, Telegram webhook secret, the allowlists) works
+identically — the tunnel is just how traffic reaches `localhost:4770`; it
+carries no special trust of its own.
 
 ## Running the brain through a local model gateway instead of Anthropic's API
 
@@ -1824,9 +2008,17 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   `web_search`/`web_fetch` tools (opt-in via `JARVIS_WEB_SEARCH=true`/
   `JARVIS_WEB_FETCH=true`), not through this registry — see "Real
   internet search" / "Real URL reading" above.
-- No Photos library access, no iPhone file access, and no write/delete
-  file access on the Mac at all — file access is Mac-only, read-only,
-  and scoped to `~/Desktop`/`~/Documents`/`~/Downloads`/`~/Jarvis`.
+- `LIST_RECENT_PHOTOS` gives Photos-library *metadata* only (filename,
+  date, dimensions, favorite flag) for the most recent items — never the
+  actual image/video bytes, and still no iPhone file access at all. File
+  access on the Mac itself is otherwise scoped to
+  `~/Desktop`/`~/Documents`/`~/Downloads`/`~/Jarvis` (see `READ_FILE_BYTES`
+  for the raw-bytes counterpart to `READ_TEXT_FILE`, used by
+  `SHARE_FILE_TO_PHONE` to deliver a small file to Telegram) and, for
+  `WRITE_FILE` specifically, no longer read-only — it's the one WRITE
+  capability the Agent has, CONFIRM-level (a fresh human confirmation on
+  every single call, no standing grant bypasses it), capped at 150KB, and
+  can overwrite an existing file with no undo.
 - **No arbitrary automation, by design.** There is no generic "run this
   shell command"/AppleScript/settings-change tool, and never will be —
   every capability the Agent can execute is a named, compiled-in Swift

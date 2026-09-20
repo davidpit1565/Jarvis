@@ -3,6 +3,9 @@ import { loadConfig, ConfigError } from "@/config";
 
 const ENV_KEYS = [
   "ANTHROPIC_API_KEY",
+  "JARVIS_BRAIN_PROVIDER",
+  "GROQ_API_KEY",
+  "JARVIS_GROQ_MODEL",
   "JARVIS_PORT",
   "JARVIS_MEMORY_DB_PATH",
   "TWILIO_AUTH_TOKEN",
@@ -70,6 +73,53 @@ describe("loadConfig", () => {
   test("throws when ANTHROPIC_API_KEY is missing", () => {
     delete process.env.ANTHROPIC_API_KEY;
     expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults brainProvider to anthropic", () => {
+    const config = loadConfig();
+    expect(config.brainProvider).toBe("anthropic");
+  });
+
+  test("rejects an invalid JARVIS_BRAIN_PROVIDER", () => {
+    process.env.JARVIS_BRAIN_PROVIDER = "gpt5";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("is case-insensitive and trims JARVIS_BRAIN_PROVIDER", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.JARVIS_BRAIN_PROVIDER = "  GROQ  ";
+    process.env.GROQ_API_KEY = "gsk-test";
+    const config = loadConfig();
+    expect(config.brainProvider).toBe("groq");
+  });
+
+  test("does not require ANTHROPIC_API_KEY when brainProvider is groq — a genuine $0 setup", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.JARVIS_BRAIN_PROVIDER = "groq";
+    process.env.GROQ_API_KEY = "gsk-test";
+    const config = loadConfig();
+    expect(config.anthropicApiKey).toBeUndefined();
+    expect(config.groqApiKey).toBe("gsk-test");
+  });
+
+  test("throws when brainProvider is groq but GROQ_API_KEY is missing", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.JARVIS_BRAIN_PROVIDER = "groq";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("leaves groqModel undefined by default", () => {
+    const config = loadConfig();
+    expect(config.groqModel).toBeUndefined();
+  });
+
+  test("reads an explicit JARVIS_GROQ_MODEL override", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.JARVIS_BRAIN_PROVIDER = "groq";
+    process.env.GROQ_API_KEY = "gsk-test";
+    process.env.JARVIS_GROQ_MODEL = "llama-3.1-8b-instant";
+    const config = loadConfig();
+    expect(config.groqModel).toBe("llama-3.1-8b-instant");
   });
 
   test("loads with defaults when only the API key is set", () => {
@@ -274,6 +324,17 @@ describe("loadConfig", () => {
     expect(config.twilioAllowedCallers).toBeUndefined();
   });
 
+  test("defaults twilioAllowOpenAccess to false", () => {
+    const config = loadConfig();
+    expect(config.twilioAllowOpenAccess).toBe(false);
+  });
+
+  test("reads TWILIO_ALLOW_OPEN_ACCESS=true", () => {
+    process.env.TWILIO_ALLOW_OPEN_ACCESS = "true";
+    const config = loadConfig();
+    expect(config.twilioAllowOpenAccess).toBe(true);
+  });
+
   test("reads TWILIO_VOICE when set", () => {
     process.env.TWILIO_VOICE = "Google.en-US-Chirp3-HD-Charon";
     const config = loadConfig();
@@ -410,6 +471,17 @@ describe("loadConfig", () => {
     expect(config.telegramBotToken).toBeUndefined();
     expect(config.telegramWebhookSecret).toBeUndefined();
     expect(config.telegramAllowedChatIds).toBeUndefined();
+  });
+
+  test("defaults telegramAllowOpenAccess to false", () => {
+    const config = loadConfig();
+    expect(config.telegramAllowOpenAccess).toBe(false);
+  });
+
+  test("reads TELEGRAM_ALLOW_OPEN_ACCESS=true", () => {
+    process.env.TELEGRAM_ALLOW_OPEN_ACCESS = "true";
+    const config = loadConfig();
+    expect(config.telegramAllowOpenAccess).toBe(true);
   });
 
   test("throws when only the Telegram bot token is set, without the webhook secret", () => {

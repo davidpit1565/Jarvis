@@ -1,5 +1,12 @@
 export interface JarvisConfig {
-  anthropicApiKey: string;
+  /** "anthropic" (default) or "groq" — which Brain implementation src/index.ts constructs. */
+  brainProvider: "anthropic" | "groq";
+  /** Required when brainProvider is "anthropic"; undefined for a Groq-only setup. */
+  anthropicApiKey?: string;
+  /** Required when brainProvider is "groq"; may also be set alongside "anthropic" for no reason today, but unused unless brainProvider is "groq". */
+  groqApiKey?: string;
+  /** Groq model id; unset uses GroqBrain's own default (a real tool-calling-capable free-tier model). */
+  groqModel?: string;
   port: number;
   memoryDbPath: string;
   /** Path to the SQLite database storing registered Face ID/Touch ID (WebAuthn) credentials. */
@@ -39,8 +46,14 @@ export interface JarvisConfig {
    * the public one Twilio actually signed.
    */
   twilioPublicBaseUrl?: string;
-  /** E.164 numbers allowed to call JARVIS; empty/unset means any caller is let through. */
+  /** E.164 numbers allowed to call JARVIS; empty/unset disables the gateway unless twilioAllowOpenAccess is set. */
   twilioAllowedCallers?: string[];
+  /**
+   * Explicit opt-in to run the phone gateway with no caller allowlist at
+   * all — required now that an empty twilioAllowedCallers refuses to
+   * start the gateway rather than silently letting any caller through.
+   */
+  twilioAllowOpenAccess: boolean;
   /**
    * Twilio Account SID, the Twilio phone number to call FROM, and the
    * owner's own phone number to call — all three required together to
@@ -54,6 +67,8 @@ export interface JarvisConfig {
   ownerPhoneNumber?: string;
   /** Path to the SQLite database storing recurring wake-up/scheduled-call times. */
   wakeUpCallDbPath: string;
+  /** Path to the SQLite database storing recurring alarms (Telegram-notification, not a phone call). */
+  alarmDbPath: string;
   /** Twilio <Say> voice name (e.g. "Polly.Matthew"); unset uses the gateway's own default. */
   twilioVoice?: string;
   /**
@@ -89,8 +104,14 @@ export interface JarvisConfig {
   telegramBotToken?: string;
   /** Verifies incoming webhook requests actually came from Telegram (the `X-Telegram-Bot-Api-Secret-Token` header Telegram echoes back, set via setWebhook's own `secret_token` field). */
   telegramWebhookSecret?: string;
-  /** Numeric Telegram chat IDs allowed to talk to the bot; empty/unset means any chat that finds/adds the bot can. */
+  /** Numeric Telegram chat IDs allowed to talk to the bot; empty/unset disables the gateway unless telegramAllowOpenAccess is set. */
   telegramAllowedChatIds?: string[];
+  /**
+   * Explicit opt-in to run the Telegram gateway with no chat allowlist at
+   * all — required now that an empty telegramAllowedChatIds refuses to
+   * start the gateway rather than silently letting any chat through.
+   */
+  telegramAllowOpenAccess: boolean;
   /**
    * The owner's own Telegram chat ID — required for NOTIFY_USER to have
    * somewhere to push a proactive message to. Distinct from
@@ -228,7 +249,19 @@ function requireEnv(name: string): string {
  * Never logs the actual values of secrets.
  */
 export function loadConfig(): JarvisConfig {
-  const anthropicApiKey = requireEnv("ANTHROPIC_API_KEY");
+  // "anthropic" (default, unchanged) or "groq" — a genuine $0 option
+  // (Groq's free tier: no credit card, real tool-calling support) added
+  // on explicit request. Only ANTHROPIC_API_KEY OR GROQ_API_KEY is
+  // required, never both — a Groq-only setup never needs an Anthropic
+  // account at all, which is the whole point of it being genuinely free.
+  const brainProviderRaw = process.env.JARVIS_BRAIN_PROVIDER?.trim().toLowerCase() || "anthropic";
+  if (brainProviderRaw !== "anthropic" && brainProviderRaw !== "groq") {
+    throw new ConfigError(`Invalid JARVIS_BRAIN_PROVIDER: "${brainProviderRaw}" — must be "anthropic" or "groq"`);
+  }
+  const brainProvider = brainProviderRaw as "anthropic" | "groq";
+  const anthropicApiKey = brainProvider === "anthropic" ? requireEnv("ANTHROPIC_API_KEY") : undefined;
+  const groqApiKey = brainProvider === "groq" ? requireEnv("GROQ_API_KEY") : process.env.GROQ_API_KEY?.trim() || undefined;
+  const groqModel = process.env.JARVIS_GROQ_MODEL?.trim() || undefined;
   const port = Number(process.env.JARVIS_PORT ?? "4770");
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
   const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
@@ -265,6 +298,13 @@ export function loadConfig(): JarvisConfig {
   const twilioAllowedCallers = process.env.TWILIO_ALLOWED_CALLERS?.split(",")
     .map((n) => n.trim())
     .filter((n) => n.length > 0);
+  // Deliberately opt-in: an empty TWILIO_ALLOWED_CALLERS used to just log
+  // a warning and open the gateway to any caller anyway — anyone who
+  // called the number reached full JARVIS, including tools like
+  // SAVE_MEMORY, with nothing to stop them but a line in the server logs
+  // nobody was watching. Now that gap requires this explicit flag instead
+  // of silently falling through.
+  const twilioAllowOpenAccess = process.env.TWILIO_ALLOW_OPEN_ACCESS?.trim().toLowerCase() === "true";
   const twilioVoice = process.env.TWILIO_VOICE?.trim() || undefined;
   const twilioVoiceHebrew = process.env.TWILIO_VOICE_HEBREW?.trim() || undefined;
   const twilioGatherLanguage = process.env.TWILIO_GATHER_LANGUAGE?.trim() || undefined;
@@ -341,6 +381,7 @@ export function loadConfig(): JarvisConfig {
   const twilioFromNumber = process.env.TWILIO_FROM_NUMBER?.trim() || undefined;
   const ownerPhoneNumber = process.env.JARVIS_OWNER_PHONE_NUMBER?.trim() || undefined;
   const wakeUpCallDbPath = process.env.JARVIS_WAKEUP_CALL_DB_PATH ?? "./data/jarvis-wakeup-calls.sqlite";
+  const alarmDbPath = process.env.JARVIS_ALARM_DB_PATH ?? "./data/jarvis-alarms.sqlite";
 
   const outboundCallFieldsSet = [twilioAccountSid, twilioFromNumber, ownerPhoneNumber].filter(Boolean).length;
   if (outboundCallFieldsSet > 0 && outboundCallFieldsSet < 3) {
@@ -364,6 +405,10 @@ export function loadConfig(): JarvisConfig {
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
   const telegramOwnerChatId = process.env.TELEGRAM_OWNER_CHAT_ID?.trim() || undefined;
+  // Same reasoning as twilioAllowOpenAccess above — an empty
+  // TELEGRAM_ALLOWED_CHAT_IDS used to silently leave the bot open to
+  // anyone who found and messaged it.
+  const telegramAllowOpenAccess = process.env.TELEGRAM_ALLOW_OPEN_ACCESS?.trim().toLowerCase() === "true";
 
   const telegramFieldsSet = [telegramBotToken, telegramWebhookSecret].filter(Boolean).length;
   if (telegramFieldsSet > 0 && telegramFieldsSet < 2) {
@@ -438,7 +483,10 @@ export function loadConfig(): JarvisConfig {
   }
 
   return {
+    brainProvider,
     anthropicApiKey,
+    groqApiKey,
+    groqModel,
     port,
     memoryDbPath,
     webauthnDbPath,
@@ -454,6 +502,7 @@ export function loadConfig(): JarvisConfig {
     twilioAuthToken,
     twilioPublicBaseUrl,
     twilioAllowedCallers,
+    twilioAllowOpenAccess,
     twilioVoice,
     twilioVoiceHebrew,
     twilioGatherLanguage,
@@ -463,6 +512,7 @@ export function loadConfig(): JarvisConfig {
     twilioFromNumber,
     ownerPhoneNumber,
     wakeUpCallDbPath,
+    alarmDbPath,
     adminToken,
     webSearchEnabled,
     webSearchMaxUses,
@@ -483,6 +533,7 @@ export function loadConfig(): JarvisConfig {
     telegramBotToken,
     telegramWebhookSecret,
     telegramAllowedChatIds,
+    telegramAllowOpenAccess,
     telegramOwnerChatId,
     weatherLatitude,
     weatherLongitude,

@@ -114,6 +114,51 @@ describe("Orchestrator integration", () => {
     expect(response).toBe("ok");
   });
 
+  test("rejects more than 4 images before it ever reaches the brain or conversation history", async () => {
+    const brain = new ScriptedBrain([]); // would throw if ever called
+    const { orchestrator, conversation } = setup(brain);
+    const images = Array.from({ length: 5 }, () => ({ mediaType: "image/png" as const, data: "abc" }));
+
+    const response = await orchestrator.handleUserMessage("user-1", "compare these", images);
+
+    expect(response).toContain("Too many images");
+    expect(brain.callCount).toBe(0);
+    expect(conversation.getMessages()).toHaveLength(0);
+  });
+
+  test("accepts exactly 4 images", async () => {
+    const brain = new ScriptedBrain([{ text: "ok", toolCalls: [], stopReason: "end_turn" }]);
+    const { orchestrator } = setup(brain);
+    const images = Array.from({ length: 4 }, () => ({ mediaType: "image/png" as const, data: "abc" }));
+
+    const response = await orchestrator.handleUserMessage("user-1", "compare these", images);
+
+    expect(response).toBe("ok");
+  });
+
+  test("rejects an oversized image before it ever reaches the brain or conversation history", async () => {
+    const brain = new ScriptedBrain([]); // would throw if ever called
+    const { orchestrator, conversation } = setup(brain);
+    const images = [{ mediaType: "image/png" as const, data: "x".repeat(7_000_001) }];
+
+    const response = await orchestrator.handleUserMessage("user-1", "what's this?", images);
+
+    expect(response).toContain("too large");
+    expect(brain.callCount).toBe(0);
+    expect(conversation.getMessages()).toHaveLength(0);
+  });
+
+  test("attaches images to the conversation when the message succeeds", async () => {
+    const brain = new ScriptedBrain([{ text: "a robot", toolCalls: [], stopReason: "end_turn" }]);
+    const { orchestrator, conversation } = setup(brain);
+    const images = [{ mediaType: "image/png" as const, data: "abc" }];
+
+    await orchestrator.handleUserMessage("user-1", "what's this?", images);
+
+    const [userMessage] = conversation.getMessages();
+    expect((userMessage as { images?: unknown }).images).toEqual(images);
+  });
+
   test("completes a full mocked Claude -> tool -> result -> Claude loop", async () => {
     const tool = makeEchoTool("ECHO_TOOL");
     const brain = new ScriptedBrain([

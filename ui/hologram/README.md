@@ -701,17 +701,22 @@ integrated one, clears 60fps easily either way.
   verified against a real (synthetic-pattern) camera stream.
 - There is no "listening" state (see "Reactivity" above) — deliberately,
   since there's no real signal in Core yet to drive one honestly.
-- Core has no TTS/voice output yet — the mic button proves the voice
-  mechanism live today, not real Jarvis speech.
-- No arbitrary UI automation — Core now has three narrow, named
-  SAFE_ACTION device tools (`OPEN_URL`, `OPEN_APPLICATION`,
-  `COMPOSE_EMAIL_DRAFT`; see the root `README.md`'s "Phase 2 scope"), each
-  doing exactly one well-defined, validated thing, but nothing moves the
-  mouse, simulates keystrokes, or clicks a specific on-screen element.
-  That's a categorically different, much higher-risk system (real input
-  simulation, not a named action with its own validation) and deliberately
-  not something added as "the next tool" without its own explicit, scoped
-  safety decision. Whatever real tool Jarvis does call shows up live in
-  the CORE ACTIVITY feed above with its actual arguments and result, which
-  is the concrete "let me see it happen" this page can honestly deliver
+- Real TTS now exists in the browser (Web Speech API's `SpeechSynthesis`,
+  wired up in VOICE MODE) — it speaks JARVIS's actual reply text, not a
+  placeholder. It's browser-side, not Core-generated audio: Core has no
+  server-side text-to-speech of its own (the phone gateway's spoken
+  replies go through Twilio's own `<Say>` TTS instead, a separate path).
+- Real, scoped UI automation exists now too, beyond the original narrow
+  set (`OPEN_URL`/`OPEN_APPLICATION`/`COMPOSE_EMAIL_DRAFT`): `CLICK_ELEMENT`
+  (via the Accessibility API, by accessible label — never raw
+  coordinates) and `TYPE_TEXT` (via `CGEvent` keystroke simulation) are
+  both CONFIRM-level, requiring a fresh human confirmation on every
+  single call with no standing grant able to bypass it — see the root
+  `README.md`'s "Security controls" for the full reasoning. Still no
+  generic "run this shell command"/AppleScript tool, and never will be —
+  every capability, including these two, is a named, compiled-in Swift
+  function with its own validation, not an interpreter for arbitrary
+  instructions. Whatever real tool Jarvis does call shows up live in the
+  CORE ACTIVITY feed above with its actual arguments and result, which is
+  the concrete "let me see it happen" this page can honestly deliver
   today.

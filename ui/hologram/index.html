@@ -329,6 +329,10 @@
     min-height: 30vh;
   }
   #chat-log .msg { margin-bottom: 10px; white-space: pre-wrap; word-break: break-word; }
+  #chat-log .msg .chat-attached-image {
+    display: block; max-width: 220px; max-height: 220px; border-radius: 4px;
+    border: 1px solid rgba(111,216,232,0.3); margin: 4px 0 6px;
+  }
   #chat-log .msg .who { opacity: 0.6; font-size: 9px; letter-spacing: 1.5px; display: block; margin-bottom: 2px; }
   #chat-log .msg.you .who { color: #6fd8e8; }
   #chat-log .msg.jarvis .who { color: #ffb15c; }
@@ -353,6 +357,30 @@
   }
   #chat-form button[type="submit"]:hover { background: rgba(111,216,232,0.25); }
   #chat-form button[type="submit"]:focus-visible { outline: 2px solid #6fd8e8; outline-offset: 1px; }
+
+  #chat-attach {
+    background: rgba(111,216,232,0.1); border: 1px solid rgba(111,216,232,0.3);
+    color: #a8f2ff; font-size: 13px; padding: 0 10px; border-radius: 3px; cursor: pointer;
+  }
+  #chat-attach:hover { background: rgba(111,216,232,0.2); }
+  #chat-attach:focus-visible { outline: 2px solid #6fd8e8; outline-offset: 1px; }
+  #chat-attach.has-image { color: #8bffb0; border-color: rgba(139,255,176,0.5); }
+  #chat-image-input.hidden { display: none; }
+
+  #chat-image-preview {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    border-top: 1px solid rgba(111,216,232,0.18);
+  }
+  #chat-image-preview.hidden { display: none; }
+  #chat-image-preview img {
+    max-height: 48px; max-width: 72px; border-radius: 3px; border: 1px solid rgba(111,216,232,0.3);
+    object-fit: cover;
+  }
+  #chat-image-remove {
+    background: none; border: 1px solid rgba(255,138,138,0.4); color: #ff8a8a;
+    font-size: 10px; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; line-height: 1;
+  }
+  #chat-image-remove:hover { background: rgba(255,138,138,0.15); }
 
   #chat-voice-toggle {
     background: rgba(255,177,92,0.1); border: 1px solid rgba(255,177,92,0.35);
@@ -508,6 +536,15 @@
         <button id="chat-close" type="button" aria-label="Close chat">✕</button>
       </div>
       <div id="chat-log"></div>
+      <!-- Selected-image preview, shown between the log and the input row
+           once a photo is attached (e.g. "what should I improve about
+           this Instagram profile?") — never sent silently; the user sees
+           exactly what's about to go to JARVIS and can remove it before
+           sending. Hidden whenever nothing is attached. -->
+      <div id="chat-image-preview" class="hidden">
+        <img id="chat-image-preview-img" alt="Attached image preview" />
+        <button id="chat-image-remove" type="button" aria-label="Remove attached image">✕</button>
+      </div>
       <form id="chat-form">
         <!-- Real hands-free voice conversation (Web Speech API), not just
              text — per direct request, "like ChatGPT's voice mode." Only
@@ -516,6 +553,14 @@
              never a dead button promising something that can't work —
              see setupChat() below, which hides this entirely otherwise. -->
         <button id="chat-voice-toggle" type="button" class="hidden" aria-pressed="false">🎙️ VOICE MODE</button>
+        <!-- Real vision — an attached photo is sent to Claude as an actual
+             image content block (see ClaudeBrain.toAnthropicMessages),
+             not just a filename. accept="image/*" both restricts the file
+             picker and lets the browser's camera app open directly on a
+             phone, so "send a photo" works the same whether it's an
+             existing picture or one taken right now. -->
+        <button id="chat-attach" type="button" aria-label="Attach an image">📎</button>
+        <input id="chat-image-input" type="file" accept="image/*" class="hidden" />
         <input id="chat-input" type="text" autocomplete="off" placeholder="Type a message…" />
         <button type="submit">SEND</button>
       </form>
@@ -1338,10 +1383,13 @@
     return new THREE.Mesh(geo, mat);
   }
   const ringsGroup = new THREE.Group();
-  const orbitRing1 = buildEnergyRing(2.05, 2.09, 0x6fd8e8, 1.7, 3.0);
+  // Traveling-pulse speed toned down (was 1.7/-1.3) — same "too fast,
+  // not professional" feedback as the ring group's own rotation above;
+  // the lobe counts (spatial pulse count around the ring) are unchanged.
+  const orbitRing1 = buildEnergyRing(2.05, 2.09, 0x6fd8e8, 0.9, 3.0);
   orbitRing1.rotation.x = Math.PI / 2 + 0.35;
   ringsGroup.add(orbitRing1);
-  const orbitRing2 = buildEnergyRing(2.05, 2.09, 0xffb15c, -1.3, 2.0);
+  const orbitRing2 = buildEnergyRing(2.05, 2.09, 0xffb15c, -0.7, 2.0);
   orbitRing2.rotation.x = Math.PI / 2 - 0.35;
   orbitRing2.rotation.y = 0.6;
   ringsGroup.add(orbitRing2);
@@ -1604,7 +1652,12 @@
       energyMat.uniforms.uAudio.value = audioGlow;
       energyMat.uniforms.uThink.value = brainPulse;
       if (!REDUCED_MOTION) {
-        ringsGroup.rotation.z = t * (0.12 + audioGlow * 0.35);
+        // Base rotation speed toned down (was 0.12/0.35) — direct
+        // feedback that the rings read as "too fast" / "not like a
+        // professional Jarvis" rather than a calm, deliberate presence.
+        // Still speeds up with real voice activity, just from a slower
+        // resting pace.
+        ringsGroup.rotation.z = t * (0.07 + audioGlow * 0.22);
         ringsGroup.rotation.x = Math.sin(t * 0.2) * 0.15;
         // A third wobble axis, out of phase with X/Z — without it the
         // rings' only "extra" motion beyond the Core's own tumble was a
@@ -2570,7 +2623,74 @@
     const form = document.getElementById("chat-form");
     const input = document.getElementById("chat-input");
     const statusEl = document.getElementById("chat-status");
+    const attachBtn = document.getElementById("chat-attach");
+    const imageInput = document.getElementById("chat-image-input");
+    const imagePreview = document.getElementById("chat-image-preview");
+    const imagePreviewImg = document.getElementById("chat-image-preview-img");
+    const imageRemoveBtn = document.getElementById("chat-image-remove");
     if (!toggleBtn || !panel) return;
+
+    // Real vision, not a filename — an attached image travels to Claude
+    // as an actual image content block (see ClaudeBrain.toAnthropicMessages
+    // and Orchestrator's MAX_IMAGE_BASE64_LENGTH = 7,000,000 base64
+    // chars). Base64 inflates raw bytes by ~4/3, so the raw-byte cap here
+    // has to be the base64 cap divided by that factor, not a bigger
+    // number picked independently — an earlier version of this comment
+    // had the math backwards (claimed 8MB raw was "under" the cap, when
+    // 8MB raw actually base64-encodes to ~11.2M chars, well over it),
+    // which meant some images silently passed this check only to be
+    // rejected server-side anyway — exactly the wasted round trip this
+    // client-side check exists to prevent.
+    const MAX_IMAGE_BYTES = Math.floor((7_000_000 * 3) / 4);
+    let pendingImage = null; // { mediaType, data (base64, no data: prefix), previewUrl }
+
+    function clearPendingImage() {
+      if (pendingImage) URL.revokeObjectURL(pendingImage.previewUrl);
+      pendingImage = null;
+      imagePreview.classList.add("hidden");
+      attachBtn.classList.remove("has-image");
+      imageInput.value = "";
+    }
+
+    function setPendingImage(file) {
+      if (!file.type.startsWith("image/")) {
+        appendMessage("SYSTEM", "That file isn't an image.", "error");
+        return;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        appendMessage("SYSTEM", "That image is too large (max 8MB) — try a smaller one.", "error");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        // dataUrl looks like "data:image/png;base64,AAAA..." — Anthropic's
+        // API wants the base64 payload alone, no data: URI wrapper.
+        const dataUrl = reader.result;
+        const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+        if (pendingImage) URL.revokeObjectURL(pendingImage.previewUrl);
+        pendingImage = { mediaType: file.type, data: base64, previewUrl: URL.createObjectURL(file) };
+        imagePreviewImg.src = pendingImage.previewUrl;
+        imagePreview.classList.remove("hidden");
+        attachBtn.classList.add("has-image");
+      };
+      reader.onerror = () => appendMessage("SYSTEM", "Couldn't read that image file.", "error");
+      reader.readAsDataURL(file);
+    }
+
+    attachBtn.addEventListener("click", () => imageInput.click());
+    imageInput.addEventListener("change", () => {
+      const file = imageInput.files && imageInput.files[0];
+      if (file) setPendingImage(file);
+    });
+    imageRemoveBtn.addEventListener("click", clearPendingImage);
+    // Paste an image straight from the clipboard (a screenshot, a copied
+    // photo) — the same "no extra steps" convenience every modern chat
+    // app offers, and the natural way to hand over something like an
+    // Instagram profile screenshot without saving it to disk first.
+    input.addEventListener("paste", (e) => {
+      const item = Array.from(e.clipboardData?.items || []).find((i) => i.type.startsWith("image/"));
+      if (item) setPendingImage(item.getAsFile());
+    });
 
     const TOKEN_KEY = "jarvis_admin_token";
     let socket = null;
@@ -2586,13 +2706,39 @@
     // outer scope needing to know whether that block ran at all.
     let stopVoiceModeImpl = () => {};
 
-    function appendMessage(who, text, cls) {
+    // Recognizes a generate_image tool result URL (see GenerateImageTool.ts)
+    // inside JARVIS's own reply text so a generated image actually shows
+    // up as an image in the chat log, not a bare link — deliberately
+    // scoped to this one known, trusted domain rather than treating any
+    // URL in a reply as renderable (which would let arbitrary text control
+    // what image tag gets embedded in the page).
+    const POLLINATIONS_URL_PATTERN = /https:\/\/image\.pollinations\.ai\/prompt\/[^\s)]+/;
+
+    function appendMessage(who, text, cls, imagePreviewUrl) {
       const div = document.createElement("div");
       div.className = "msg " + cls;
       const label = document.createElement("span");
       label.className = "who";
       label.textContent = who;
       div.appendChild(label);
+
+      if (imagePreviewUrl) {
+        const img = document.createElement("img");
+        img.src = imagePreviewUrl;
+        img.className = "chat-attached-image";
+        img.alt = "Attached image";
+        div.appendChild(img);
+      }
+
+      const generatedMatch = !imagePreviewUrl && cls === "jarvis" ? text.match(POLLINATIONS_URL_PATTERN) : null;
+      if (generatedMatch) {
+        const img = document.createElement("img");
+        img.src = generatedMatch[0];
+        img.className = "chat-attached-image";
+        img.alt = "Generated image";
+        div.appendChild(img);
+      }
+
       div.appendChild(document.createTextNode(text));
       log.appendChild(div);
       log.scrollTop = log.scrollHeight;
@@ -2626,6 +2772,14 @@
           } else if (data.type === "error") {
             appendMessage("SYSTEM", data.message || "Error", "error");
             if (onAssistantMessage) onAssistantMessage(null);
+          } else if (data.type === "confirm") {
+            // A CONFIRM/DANGEROUS tool call (send_email, write_file, ...)
+            // is waiting on a real yes/no answer — see
+            // JarvisWebSocketServer.requestWebChatConfirmation(). Just
+            // type "yes"/"no" in the normal input; the server treats the
+            // next message as the answer, not a new topic, same as
+            // Telegram's own confirmation flow.
+            appendMessage("JARVIS", data.message, "jarvis");
           }
         } catch (e) { /* ignore a malformed frame rather than crash the socket */ }
       });
@@ -2674,21 +2828,31 @@
       }
     });
 
-    function sendText(text) {
+    function sendText(text, image) {
       if (!socket || socket.readyState !== WebSocket.OPEN) {
         appendMessage("SYSTEM", "Not connected yet — wait a moment and try again.", "error");
         return;
       }
-      appendMessage("YOU", text, "you");
-      socket.send(JSON.stringify({ text }));
+      // A data: URL here, not image.previewUrl's blob: URL — clearPendingImage()
+      // (called right after this in the submit handler) revokes that blob
+      // URL, which would otherwise turn this log entry's thumbnail into a
+      // broken image the moment the next message is composed.
+      appendMessage("YOU", text, "you", image ? `data:${image.mediaType};base64,${image.data}` : undefined);
+      const payload = { text };
+      if (image) payload.image = { mediaType: image.mediaType, data: image.data };
+      socket.send(JSON.stringify(payload));
     }
 
     form.addEventListener("submit", (e) => {
       e.preventDefault();
       const text = input.value.trim();
-      if (!text) return;
-      sendText(text);
+      // An image with no caption is a valid turn (server accepts
+      // text="" when an image is present) — only block on BOTH being
+      // empty, not on text alone once an image is attached.
+      if (!text && !pendingImage) return;
+      sendText(text, pendingImage);
       input.value = "";
+      clearPendingImage();
     });
 
     /* -------------------------------------------------------------
