@@ -6,6 +6,8 @@ export interface JarvisConfig {
   webauthnDbPath: string;
   /** Path to the SQLite database storing reminders/tasks. */
   remindersDbPath: string;
+  /** Path to the SQLite database storing proactive automation rules (JARVIS acting on its own by a schedule). */
+  automationRulesDbPath: string;
   /**
    * Path to the SQLite database backing the dashboard's activity log, so
    * recent activity survives a restart/redeploy instead of resetting to
@@ -231,6 +233,7 @@ export function loadConfig(): JarvisConfig {
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
   const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
   const remindersDbPath = process.env.JARVIS_REMINDERS_DB_PATH ?? "./data/jarvis-reminders.sqlite";
+  const automationRulesDbPath = process.env.JARVIS_AUTOMATION_RULES_DB_PATH ?? "./data/jarvis-automation-rules.sqlite";
   const activityLogDbPath = process.env.JARVIS_ACTIVITY_LOG_DB_PATH ?? "./data/jarvis-activity.sqlite";
   const conversationHistoryDbPath =
     process.env.JARVIS_CONVERSATION_HISTORY_DB_PATH ?? "./data/jarvis-conversation-history.sqlite";
@@ -440,6 +443,7 @@ export function loadConfig(): JarvisConfig {
     memoryDbPath,
     webauthnDbPath,
     remindersDbPath,
+    automationRulesDbPath,
     activityLogDbPath,
     conversationHistoryDbPath,
     pairingDbPath,

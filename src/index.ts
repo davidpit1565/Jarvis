@@ -46,6 +46,12 @@ import { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import { createSearchConversationHistoryTool } from "@/tools/history/SearchConversationHistoryTool";
 import { createClearConversationHistoryTool } from "@/tools/history/ClearConversationHistoryTool";
 import { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
+import { AutomationRuleStore } from "@/automation/AutomationRuleStore";
+import { getDueAutomationRules } from "@/automation/getDueAutomationRules";
+import { createCreateAutomationRuleTool } from "@/tools/automation/CreateAutomationRuleTool";
+import { createListAutomationRulesTool } from "@/tools/automation/ListAutomationRulesTool";
+import { createUpdateAutomationRuleTool } from "@/tools/automation/UpdateAutomationRuleTool";
+import { createDeleteAutomationRuleTool } from "@/tools/automation/DeleteAutomationRuleTool";
 import { getDueWakeUpCalls, formatTimeOfDay, formatDateKey } from "@/wakeup/getDueWakeUpCalls";
 import { createCreateWakeUpCallTool } from "@/tools/wakeup/CreateWakeUpCallTool";
 import { createListWakeUpCallsTool } from "@/tools/wakeup/ListWakeUpCallsTool";
@@ -151,6 +157,7 @@ function main() {
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
   const reminderStore = new ReminderStore(config.remindersDbPath);
+  const automationRuleStore = new AutomationRuleStore(config.automationRulesDbPath);
   const conversationHistoryStore = new ConversationHistoryStore(config.conversationHistoryDbPath);
   const activityLog = new ActivityLog(config.activityLogDbPath);
   const toolAuditLog = new ToolAuditLog(config.toolAuditLogDbPath);
@@ -268,6 +275,10 @@ function main() {
   toolRegistry.registerTool(createCompleteReminderTool(reminderStore));
   toolRegistry.registerTool(createDeleteReminderTool(reminderStore, undoStore));
   toolRegistry.registerTool(createUpdateReminderTool(reminderStore));
+  toolRegistry.registerTool(createCreateAutomationRuleTool(automationRuleStore));
+  toolRegistry.registerTool(createListAutomationRulesTool(automationRuleStore));
+  toolRegistry.registerTool(createUpdateAutomationRuleTool(automationRuleStore));
+  toolRegistry.registerTool(createDeleteAutomationRuleTool(automationRuleStore));
   toolRegistry.registerTool(createSearchConversationHistoryTool(conversationHistoryStore));
   toolRegistry.registerTool(createClearConversationHistoryTool(conversationHistoryStore));
 
@@ -282,6 +293,9 @@ function main() {
   permissionService.grant(DEFAULT_USER_ID, "COMPLETE_REMINDER");
   permissionService.grant(DEFAULT_USER_ID, "DELETE_REMINDER");
   permissionService.grant(DEFAULT_USER_ID, "UPDATE_REMINDER");
+  permissionService.grant(DEFAULT_USER_ID, "CREATE_AUTOMATION_RULE");
+  permissionService.grant(DEFAULT_USER_ID, "UPDATE_AUTOMATION_RULE");
+  permissionService.grant(DEFAULT_USER_ID, "DELETE_AUTOMATION_RULE");
   // DANGEROUS: granted so the tool is askable at all, but PermissionService
   // still forces a fresh per-invocation confirmation regardless of this
   // grant — this never lets JARVIS erase the transcript silently.
@@ -729,6 +743,45 @@ function main() {
     }, 30_000);
   }
 
+  // Proactive automation: JARVIS acting on its own by a schedule the user
+  // defined, rather than only in response to a message. Each rule's
+  // instruction is run through the same shared `orchestrator` the
+  // CLI/hologram chat uses — every normal tool-permission check still
+  // applies, this only automates *starting* the turn. Same in-flight-set
+  // pattern as the wake-up call scheduler above, for the same reason: a
+  // slow turn still running when the next tick fires shouldn't trigger
+  // the same rule twice.
+  const inFlightAutomationRuleIds = new Set<string>();
+  const automationRuleInterval = setInterval(() => {
+    const now = new Date();
+    const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
+    const todayDateKey = formatDateKey(now, config.timezone);
+    const due = getDueAutomationRules(automationRuleStore.list(), nowTimeOfDay, todayDateKey, inFlightAutomationRuleIds);
+
+    for (const rule of due) {
+      inFlightAutomationRuleIds.add(rule.id);
+      orchestrator
+        .handleUserMessage(DEFAULT_USER_ID, rule.instruction)
+        .then((reply) => {
+          automationRuleStore.markTriggered(rule.id, todayDateKey);
+          activityLog.record(`Automation ran: ${rule.instruction.slice(0, 100)}`);
+          if (telegramGateway && config.telegramOwnerChatId) {
+            telegramGateway!.sendMessage(config.telegramOwnerChatId!, reply).catch(() => {
+              // Best-effort push — the rule still ran and is logged above either way.
+            });
+          }
+        })
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[jarvis] automation rule ${rule.id} failed:`, message);
+          activityLog.record(`Automation failed: ${rule.instruction.slice(0, 100)} — ${message}`);
+        })
+        .finally(() => {
+          inFlightAutomationRuleIds.delete(rule.id);
+        });
+    }
+  }, 30_000);
+
   const wsServer = new JarvisWebSocketServer({
     deviceRegistry,
     deviceConnectionManager,
@@ -910,6 +963,7 @@ function main() {
     httpHandle.stop();
     memoryStore.close();
     reminderStore.close();
+    automationRuleStore.close();
     conversationHistoryStore.close();
     activityLog.close();
     toolAuditLog.close();
@@ -922,6 +976,7 @@ function main() {
     if (weeklyDigestInterval) clearInterval(weeklyDigestInterval);
     if (checkinInterval) clearInterval(checkinInterval);
     if (morningBriefingInterval) clearInterval(morningBriefingInterval);
+    clearInterval(automationRuleInterval);
     calendarTokenStore.close();
     spotifyTokenStore.close();
     rl.close();
