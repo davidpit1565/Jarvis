@@ -3,7 +3,11 @@ import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { ConversationMessage, ToolCallRequest } from "@/types/conversation";
 import type { ToolDefinition } from "@/types/tools";
 
-type ContentBlockParam = Anthropic.TextBlockParam | Anthropic.ToolUseBlockParam | Anthropic.ToolResultBlockParam;
+type ContentBlockParam =
+  | Anthropic.TextBlockParam
+  | Anthropic.ToolUseBlockParam
+  | Anthropic.ToolResultBlockParam
+  | Anthropic.ImageBlockParam;
 
 export const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_MAX_TOKENS = 1024;
@@ -182,12 +186,26 @@ function toAnthropicTools(tools: ToolDefinition[]): Anthropic.Tool[] {
   }));
 }
 
-function toAnthropicMessages(messages: ConversationMessage[]): Anthropic.MessageParam[] {
+export function toAnthropicMessages(messages: ConversationMessage[]): Anthropic.MessageParam[] {
   const result: Anthropic.MessageParam[] = [];
 
   for (const message of messages) {
     if (message.role === "user") {
-      result.push({ role: "user", content: message.content });
+      // Plain string content for the common (text-only) case, matching
+      // every other channel's existing behavior exactly. Only a turn
+      // with real attached images pays for the array-of-blocks form —
+      // images first, text last, matching Anthropic's own documented
+      // ordering recommendation for image + question turns.
+      if (message.images?.length) {
+        const content: ContentBlockParam[] = message.images.map((image) => ({
+          type: "image",
+          source: { type: "base64", media_type: image.mediaType, data: image.data },
+        }));
+        if (message.content) content.push({ type: "text", text: message.content });
+        result.push({ role: "user", content });
+      } else {
+        result.push({ role: "user", content: message.content });
+      }
       continue;
     }
 
