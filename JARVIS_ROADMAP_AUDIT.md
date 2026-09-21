@@ -97,8 +97,8 @@ All Swift source under `agents/imac/JarvisAgent/Sources/JarvisAgent/` (except `m
 | 64 | CLICK_ELEMENT test | REQUIRES_REAL_MAC_VALIDATION | `src/tools/system/ClickElementTool.ts` + `agents/.../Tools/ClickElement.swift`, `PermissionLevel.CONFIRM` | Real-Mac test of Accessibility-API clicking. | No Swift-side automated test exists; Core-side tool wrapper is tested (`tests/tools/SystemActionTools.test.ts`). |
 | 65 | TYPE_TEXT test | REQUIRES_REAL_MAC_VALIDATION | `src/tools/system/TypeTextTool.ts` + `agents/.../Tools/TypeText.swift` (CGEvent keyboard synthesis), `PermissionLevel.CONFIRM` | Real-Mac test. | Same pattern as #64 — Core-side tested, Swift-side untested/unrun. |
 | 66 | NSWorkspace test | REQUIRES_REAL_MAC_VALIDATION | `agents/.../Tools/GetActiveApplication.swift`, `ListRunningApplicationsTool.swift`, `OpenApplicationTool.swift`, `QuitApplicationTool.swift` (all use `NSWorkspace`) | Real-Mac test. | Confirmed via grep — 4 Swift files use `NSWorkspace` for active/running-app tooling. |
-| 67 | launchd test | MISSING | none found | Add a `launchd` plist for auto-starting the Agent at login, then test it. | No `.plist` file or launchd-related code found anywhere in `agents/` — the Agent currently must be started manually. |
-| 68 | Agent crash recovery | PARTIALLY_EXISTS | Core-side: `uncaughtException`/`unhandledRejection` handlers keep the process alive (`src/index.ts` lines ~136-145) | Add equivalent crash-recovery/auto-restart on the Swift Agent side (e.g. a launchd `KeepAlive` plist, once #67 exists). | Core's own resilience is real and documented; nothing analogous exists for the Swift binary itself (no supervisor, no launchd). |
+| 67 | launchd test | REQUIRES_REAL_MAC_VALIDATION (see 2026-09-21 update) | `agents/imac/JarvisAgent/Resources/com.jarvis.agent.plist` (`RunAtLoad`, `KeepAlive`) | Real-Mac test of `launchctl load` + actual restart-on-crash behavior. | Corrected from this audit's original "MISSING" — the plist already existed in the working tree when re-checked; never loaded/tested on a real Mac. |
+| 68 | Agent crash recovery | code-ready, pending real-Mac validation (see 2026-09-21 update) | Core-side: `uncaughtException`/`unhandledRejection` handlers (`src/index.ts`); Swift-side: `main.swift`'s `handleToolRequest` `do`/`catch` + `NSSetUncaughtExceptionHandler`, plus launchd `KeepAlive` (#67) | Real-Mac test that a tool-call error and an uncaught exception both actually leave the Agent running/restarted. | Swift-side `do`/`catch` and exception logging added this pass; a genuine Swift runtime trap (force-unwrap, out-of-bounds) remains unrecoverable by any of this, by language design — see the update section. |
 | 69 | mic permission test | REQUIRES_REAL_MAC_VALIDATION | `agents/.../Voice/WakeWordListener.swift` (`AVCaptureDevice.requestAccess`) | Real-Mac test. | This is one of the 5 candidate root causes `JARVIS_AUDIT.md` Phase 11 lists for "Hey JARVIS producing zero log output." |
 | 70 | wake word reliability | REQUIRES_REAL_MAC_VALIDATION | `WakeWordListener.swift` (`wakePhrasePatterns`, substring match) | Real-Mac tuning; add fuzzy matching/confidence threshold. | Substring-only matching, no confidence score — real accuracy is entirely unverified without a real Mac. |
 | 71 | wake diagnostics | REQUIRES_REAL_MAC_VALIDATION | `Logging/Logger.swift` (wraps `os_log`) — code exists and is reasonably structured | Add `print()`-visible diagnostics or a status-bar indicator for wake-word-listener state, since `os_log` output is invisible in a plain terminal, then verify on a real Mac. | `JARVIS_AUDIT.md` Phase 11 identifies this as the single most likely cause of "silent" wake-word failures — all diagnostic logging goes through `os_log`, not stdout. |
@@ -107,10 +107,10 @@ All Swift source under `agents/imac/JarvisAgent/Sources/JarvisAgent/` (except `m
 | 74 | real barge-in test | REQUIRES_REAL_MAC_VALIDATION | (browser path is testable in a real browser, not Mac-specific) | Manually validate barge-in in both the browser hologram and, once built, the Mac Agent voice path. | See #73. |
 | 75 | audio device detection | MISSING | none found | Add output-device detection/selection (currently relies on system default). | `JARVIS_AUDIT.md` Phase 11 explicitly flags "no verification the Mac's actual output device... is one a human can hear" as an unaddressed risk. |
 | 76 | audio recovery | PARTIALLY_EXISTS | `WakeWordListener.swift` speech-recognition task restarts itself on error/`.isFinal` | Add recovery for a *persistently* failing recognizer (today it silently restart-loops with no user-visible signal) and for audio-engine-level failures. | Self-healing exists for one specific failure mode; not for permission-revoked-mid-session or device-disconnect cases. |
-| 77 | Mac Agent heartbeat | ALREADY_EXISTS_NEEDS_UPGRADE | `src/communication/websocket/DeviceConnectionManager.ts`, tested via `tests/integration/deviceHeartbeat.test.ts` | Verify real Swift-side heartbeat cadence/reconnect behavior on a real Mac. | Core-side heartbeat handling is real and tested; Swift-side sending is unverified. |
-| 78 | reconnect | PARTIALLY_EXISTS | `main.swift`'s `coreConnectionDidClose` updates status to `.reconnecting`, but no explicit backoff/retry call is visible in that handler itself | Verify/implement actual reconnect-with-backoff logic (may live inside `CoreConnection.swift`, not independently confirmed). | `CoreConnection.swift` itself is unread in depth this pass; `JARVIS_AUDIT.md` Phase 5 notes the retry logic's existence is unconfirmed. |
-| 79 | capability discovery | MISSING | none found | Add a capability-negotiation handshake (device reports which tools/permissions it actually supports at connect time). | Today the tool list is a static, hardcoded parity check (`tests/security/agentToolParity.test.ts`) between Core and Swift source, not runtime discovery. |
-| 80 | permission status | PARTIALLY_EXISTS | `main.swift` requests mic/speech/notification permissions and logs on denial | Surface live permission status to Core/UI (today a denial only produces a local `os_log` line, invisible remotely). | No permission-status field is sent to Core over the WebSocket protocol. |
+| 77 | Mac Agent heartbeat | code-ready, pending real-Mac validation (see 2026-09-21 update) | `src/communication/websocket/DeviceConnectionManager.ts` (tested); `main.swift`'s `sendPong()` replies to every `ping` | Real-Mac test of heartbeat cadence over an actual connection. | Re-read `main.swift` in full this pass and confirmed the Swift-side pong reply already exists and is correct by inspection — was previously described as unverified whether it existed at all. |
+| 78 | reconnect | code-ready, pending real-Mac validation (see 2026-09-21 update) | `CoreConnection.swift`'s `scheduleReconnect()` — real exponential backoff (up to 30s), triggered from both `didCompleteWithError`/`didCloseWith` and receive-loop failures | Real-Mac test that reconnection actually re-establishes and re-registers. | Corrected from this audit's original "retry logic's existence is unconfirmed" — `CoreConnection.swift` was read in full this pass and the backoff loop is real, not missing. |
+| 79 | capability discovery | code-ready, pending real-Mac validation (see 2026-09-21 update) | `src/communication/websocket/protocol.ts` (`device.capabilities`/`DeviceCapabilitiesPayload`), `DeviceRegistry.updateCapabilities()`, `JarvisWebSocketServer.handleMessage`'s new case, `Identity/CapabilityReporter.swift`, `main.swift`'s `reportCapabilities()` | Real-Mac test that reported permission values actually match System Settings' TCC state. | Built from scratch this pass — was genuinely MISSING before. Core-side tested (`tests/integration/deviceCapabilities.test.ts`, `tests/devices/DeviceRegistry.test.ts`, `tests/integration/websocketProtocol.test.ts`); Swift-side by-inspection only. |
+| 80 | permission status | code-ready, pending real-Mac validation (see 2026-09-21 update) | Same as #79 — `device.capabilities` carries live per-capability status (accessibility/microphone/speech/reminders/notifications), stored on `Device.permissions` | Real-Mac test; eventually surface `Device.permissions` in a UI/status endpoint (not done this pass — storage only). | Same implementation as #79; the two roadmap items share one mechanism (permission status *is* the payload capability discovery reports). |
 | 81 | notification test | REQUIRES_REAL_MAC_VALIDATION | `main.swift` (`UNUserNotificationCenter`, `show_notification` device command), `DeviceConnectionManager.sendNotification()` | Real-Mac test — `UNUserNotificationCenter` has documented failure modes for non-bundled executables. | `JARVIS_AUDIT.md` Phase 10 flags this as a real, specific risk: no bundle/signing changes accompany this PR's diff, so silent no-op delivery on a real Mac is plausible. |
 | 82 | native reminder test | REQUIRES_REAL_MAC_VALIDATION | `agents/.../Tools/{List,Create,Complete}MacReminderTool.swift`, `RemindersAccess.swift` (EventKit) | Real-Mac test with Reminders permission granted. | Core-side tools tested (`tests/tools/*MacReminder*` not found individually but `src/tools/system/*MacReminder*.ts` exist and are wired); Swift-side untested. |
 | 83 | file access boundary test | REQUIRES_REAL_MAC_VALIDATION | `src/tools/filesystem/pathValidation.ts`, `src/tools/system/devicePathValidation.ts` — Core-side validation is real and tested (`tests/tools/devicePathValidation.test.ts`) | Real-Mac validation that the Swift side actually enforces the same boundary independently (per `src/types/tools.ts`'s "defense in depth" doc comment). | Core-side path validation is solid; whether Swift re-validates on the device is unverified without a real Mac. |
@@ -306,3 +306,98 @@ All Swift source under `agents/imac/JarvisAgent/Sources/JarvisAgent/` (except `m
 - **#140 (Calendar Event Preview):** classified ALREADY_EXISTS_NEEDS_UPGRADE because a create/update path and permission model exist, but whether "preview" specifically means a UI mockup before commit (not built) or the existing SAFE_ACTION/no-confirmation flow is intentional is a genuine product-judgment question, not a pure code-verification one — flagging rather than asserting.
 - **#154 (DST) and #61-85 generally:** DST doesn't cleanly fit "REQUIRES_REAL_MAC_VALIDATION" (it's not Mac-specific) but also isn't quite MISSING (native `Date`/`Intl` handle it correctly without custom code) — classified as REQUIRES_REAL_MAC_VALIDATION loosely for "needs real-world/manual validation," which stretches that status's literal meaning; worth a maintainer double-check on whether a new status like REQUIRES_MANUAL_VALIDATION should exist separately from the Mac-specific one.
 - **#171 (Error IDs) vs #40 (Error Classification) vs #178 (Error Metrics):** three closely related, all MISSING, but a single implementation effort (a proper error-taxonomy module) would likely address all three at once — flagged so a future implementer doesn't scope them as three separate projects.
+
+## 2026-09-21 update — items #61-85 (Mac Agent reliability/validation-prep)
+
+A follow-up pass implemented everything in this range achievable without a
+real Mac. **No item below was verified on real hardware** — every Swift
+change is by-inspection-correct against documented Apple APIs and this
+repo's own existing patterns, never compiled or run here. Status changes:
+
+- **#67 (launchd) and #68 (Agent crash recovery) were more done than this
+  audit originally stated.** `agents/imac/JarvisAgent/Resources/com.jarvis.agent.plist`
+  already exists with `RunAtLoad` + `KeepAlive` (`SuccessfulExit: false`) —
+  process-level crash recovery via launchd auto-restart was already in
+  place, contradicting #67's original "MISSING." This pass added the
+  remaining piece #68 asked for: `main.swift`'s `handleToolRequest` now
+  wraps tool dispatch in `do`/`catch` (a thrown Swift `Error` becomes a
+  failed `tool.result` instead of an uncaught crash) and the process
+  installs `NSSetUncaughtExceptionHandler` to log any uncaught
+  Objective-C/AppKit exception before termination. Explicitly **not**
+  fixed by either: a genuine Swift runtime trap (force-unwrap of `nil`,
+  array out-of-bounds, `fatalError`) is still fatal by language design —
+  none were found by inspection in this codebase, but that's not a
+  guarantee for code added later. New status: **PARTIALLY_EXISTS →
+  code-ready pending real-Mac validation** for both.
+- **#77 (Mac Agent heartbeat) and #78 (reconnect) were also more done than
+  stated.** `CoreConnection.swift` already implements real
+  reconnect-with-backoff (`scheduleReconnect`, exponential up to 30s) and
+  `main.swift` already replies to Core's `ping` with `pong`
+  (`sendPong()`). Re-read in full this pass and confirmed correct by
+  inspection against `DeviceConnectionManager.pingAll()`
+  (`src/communication/websocket/DeviceConnectionManager.ts`) and its test
+  (`tests/integration/deviceHeartbeat.test.ts`) — no code change was
+  needed, only re-verification. New status: **code-ready, pending
+  real-Mac validation** (was ALREADY_EXISTS_NEEDS_UPGRADE / PARTIALLY_EXISTS).
+- **#79 (capability discovery) and #80 (permission status) were built from
+  scratch — genuinely MISSING before this pass.** Added a new
+  `device.capabilities` message to the Core↔Agent protocol
+  (`src/communication/websocket/protocol.ts`: `DeviceCapabilitiesPayload`,
+  parse/validate case, `CapabilityStatus` union), a
+  `DeviceRegistry.updateCapabilities()` store (`Device.permissions`,
+  `src/devices/registry/DeviceRegistry.ts`/`src/types/devices.ts`,
+  deliberately not persisted — same reasoning as `status`/`lastSeen`), and
+  a handler in `JarvisWebSocketServer.handleMessage`. Swift side: a new
+  `Identity/CapabilityReporter.swift` queries `AXIsProcessTrusted()`
+  (Accessibility), `AVCaptureDevice.authorizationStatus(for: .audio)`
+  (microphone), `SFSpeechRecognizer.authorizationStatus()`,
+  `EKEventStore.authorizationStatus(for: .reminder)`, and
+  `UNUserNotificationCenter.getNotificationSettings` (notifications), sent
+  once pairing is confirmed via `main.swift`'s new `reportCapabilities()`.
+  New status: **code-ready, pending real-Mac validation** (was MISSING).
+- **#71 (wake diagnostics) — the exact, already-diagnosed gap this
+  audit's own Phase 11 reference flagged.** Added `print()` diagnostics
+  alongside (not replacing) every existing `os_log`/`Logger.shared.log`
+  call in `WakeWordListener.swift`: authorization request start,
+  authorization denial, recognizer unavailable, audio-engine start
+  failure, listening started, wake-phrase heard (once per
+  recognition-task cycle, not once per partial-transcript update — see
+  the new `hasAnnouncedWakePhraseThisCycle` flag), clap detected, command
+  captured and sent, and every spoken reply. New status: still
+  REQUIRES_REAL_MAC_VALIDATION for whether wake-word detection itself
+  works, but the specific "invisible in a plain terminal" gap is now
+  closed in code.
+- **#83/#84/#85 (file-access / WRITE_FILE / destructive-action boundary
+  tests) — real, verifiable-today hardening, not Mac-dependent.** Added
+  edge-case tests to `tests/tools/devicePathValidation.test.ts` (top-level
+  folder names that merely start with an allowlisted one, case-mismatched
+  folder names, deeply buried `..` traversal, a lone `..` segment, a
+  path of only `..` segments, null bytes not just at a boundary, a
+  Windows-style backslash path, a very long path/segment, and a `~`
+  elsewhere in the string) and `tests/tools/WriteFileTool.test.ts` (null
+  byte, home-relative shorthand, non-allowlisted top-level folder,
+  superficially-similar folder name, and an explicit assertion that
+  `validateInput` accepting a path never substitutes for the CONFIRM
+  permission check). Also confirmed by inspection that
+  `FileAccessPolicy.swift`'s `resolve()` already re-validates via
+  `resolvingSymlinksInPath()` against the allowlisted roots on the Swift
+  side — real symlink defense already exists in code, unverified on a
+  real filesystem. These three items' *Core-side* boundary logic is now
+  as verified as it can be without a Mac; the Swift-side enforcement and
+  the full device round-trip remain REQUIRES_REAL_MAC_VALIDATION as
+  before.
+- **#61-66, #69-70, #72-76, #81-82 — unchanged, still
+  REQUIRES_REAL_MAC_VALIDATION / PARTIALLY_EXISTS as this audit already
+  had them.** Not touched this pass beyond re-reading for context; no new
+  code claims real-hardware verification for any of them.
+
+Files touched this pass — TypeScript: `src/communication/websocket/protocol.ts`,
+`src/communication/websocket/JarvisWebSocketServer.ts`,
+`src/devices/registry/DeviceRegistry.ts`, `src/types/devices.ts`, plus new/
+updated tests (`tests/integration/websocketProtocol.test.ts`,
+`tests/integration/deviceCapabilities.test.ts` [new],
+`tests/devices/DeviceRegistry.test.ts`, `tests/brain/EventBus.test.ts`,
+`tests/tools/devicePathValidation.test.ts`, `tests/tools/WriteFileTool.test.ts`).
+Swift: `agents/imac/JarvisAgent/Sources/JarvisAgent/main.swift`,
+`Connection/MessageProtocol.swift`, `Voice/WakeWordListener.swift`, plus a
+new `Identity/CapabilityReporter.swift` — none compiled or run.

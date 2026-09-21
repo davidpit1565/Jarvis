@@ -120,6 +120,36 @@ describe("DeviceRegistry", () => {
     const registry = new DeviceRegistry();
     expect(() => registry.setRole("missing", "primary")).toThrow();
   });
+
+  test("a new device starts with no reported permissions", () => {
+    const registry = new DeviceRegistry();
+    const device = registry.registerDevice({ id: "imac-1", name: "iMac", type: DeviceType.MAC, platform: "macos", ...baseInput });
+    expect(device.permissions).toBeNull();
+  });
+
+  test("updateCapabilities records a device's self-reported permission status", () => {
+    const registry = new DeviceRegistry();
+    registry.registerDevice({ id: "imac-1", name: "iMac", type: DeviceType.MAC, platform: "macos", ...baseInput });
+
+    const updated = registry.updateCapabilities("imac-1", { accessibility: "granted", microphone: "denied" });
+    expect(updated.permissions).toEqual({ accessibility: "granted", microphone: "denied" });
+    expect(registry.getDevice("imac-1")?.permissions).toEqual({ accessibility: "granted", microphone: "denied" });
+  });
+
+  test("updateCapabilities replaces rather than merges the previous permission map", () => {
+    const registry = new DeviceRegistry();
+    registry.registerDevice({ id: "imac-1", name: "iMac", type: DeviceType.MAC, platform: "macos", ...baseInput });
+
+    registry.updateCapabilities("imac-1", { accessibility: "granted", microphone: "granted" });
+    registry.updateCapabilities("imac-1", { accessibility: "granted" });
+
+    expect(registry.getDevice("imac-1")?.permissions).toEqual({ accessibility: "granted" });
+  });
+
+  test("throws when updating capabilities of an unknown device", () => {
+    const registry = new DeviceRegistry();
+    expect(() => registry.updateCapabilities("missing", { accessibility: "granted" })).toThrow();
+  });
 });
 
 describe("DeviceRegistry persistence", () => {

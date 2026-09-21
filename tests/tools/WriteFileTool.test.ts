@@ -42,5 +42,36 @@ describe("WRITE_FILE tool definition", () => {
       expect(writeFileTool.validateInput?.({ path: "Desktop/../../etc/passwd" }).valid).toBe(false);
       expect(writeFileTool.validateInput?.({ path: "/etc/passwd" }).valid).toBe(false);
     });
+
+    // Roadmap #84 (WRITE_FILE boundary test): the Core-side gate is what's
+    // verifiable today without a real Mac — the Swift-side re-check
+    // (FileAccessPolicy.resolve(), which additionally resolves symlinks
+    // before comparing against the allowlisted roots) can't be exercised
+    // here and remains REQUIRES_REAL_MAC_VALIDATION.
+    test("rejects a null byte in the path", () => {
+      expect(writeFileTool.validateInput?.({ path: "Desktop/notes.txt\0.jpg" }).valid).toBe(false);
+    });
+
+    test("rejects a home-relative shorthand", () => {
+      expect(writeFileTool.validateInput?.({ path: "~/Desktop/notes.txt" }).valid).toBe(false);
+    });
+
+    test("rejects writing into a top-level folder outside the allowlist", () => {
+      expect(writeFileTool.validateInput?.({ path: "Library/LaunchAgents/evil.plist" }).valid).toBe(false);
+      expect(writeFileTool.validateInput?.({ path: ".ssh/authorized_keys" }).valid).toBe(false);
+    });
+
+    test("rejects a top-level folder name that only superficially resembles an allowlisted one", () => {
+      expect(writeFileTool.validateInput?.({ path: "Desktop-shared/notes.txt" }).valid).toBe(false);
+    });
+
+    test("still requires CONFIRM even for a path validateInput accepts — validation is a filter, not a substitute for confirmation", () => {
+      const result = writeFileTool.validateInput?.({ path: "Desktop/notes.txt" });
+      expect(result?.valid).toBe(true);
+      // The permission level itself never changes based on the specific
+      // input — every write, valid path or not, still requires a fresh
+      // human confirmation (see the `requiredPermission` test above).
+      expect(writeFileTool.requiredPermission).toBe(PermissionLevel.CONFIRM);
+    });
   });
 });

@@ -118,6 +118,7 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
                 print("[JarvisAgent] Registration approved (reconnected with an existing credential).")
             }
             statusBar.update(status: .connected, deviceName: Host.current().localizedName)
+            reportCapabilities()
 
         case "show_notification":
             let title = (envelope.payload.args?["title"]?.value as? String) ?? "JARVIS"
@@ -154,7 +155,29 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             return
         }
 
-        let result = tools.execute(name: envelope.payload.tool, input: envelope.payload.input)
+        // Crash recovery (roadmap #68): a tool implementation throwing an
+        // unexpected Swift error must become a failed tool.result Core can
+        // see and report on, never an uncaught error that takes down the
+        // whole Agent process — the same posture Core's own
+        // uncaughtException/unhandledRejection handlers give the
+        // TypeScript side (see src/index.ts). AgentTool.execute itself is
+        // non-throwing by signature (see ToolRegistry.swift), so this
+        // catches only what Swift's type system can express catching —
+        // note in the README/audit that a genuine runtime trap (force
+        // unwrap of nil, array out-of-bounds, integer overflow) is NOT
+        // something `do`/`catch` can intercept in Swift; those remain a
+        // real, unaddressed crash risk that only careful auditing of each
+        // tool's own force-unwraps (none found by inspection today — see
+        // JARVIS_ROADMAP_AUDIT.md) and eventual launchd `KeepAlive`
+        // auto-restart (Resources/com.jarvis.agent.plist, already in
+        // place) can mitigate.
+        let result: ToolResultPayload
+        do {
+            result = try runToolCatchingErrors(name: envelope.payload.tool, input: envelope.payload.input)
+        } catch {
+            Logger.shared.error("Tool \(envelope.payload.tool) threw: \(error.localizedDescription)")
+            result = ToolResultPayload(success: false, data: nil, error: "Tool execution failed: \(error.localizedDescription)")
+        }
 
         let resultEnvelope = MessageFactory.makeEnvelope(
             type: "tool.result",
@@ -168,6 +191,17 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             return
         }
         connection.send(data: resultData)
+    }
+
+    /// Thin `throws`-bridging wrapper around `AgentToolRegistry.execute` —
+    /// `AgentTool.execute` closures are non-throwing today, but this keeps
+    /// the call site inside a real `do`/`catch` so a future tool that
+    /// legitimately needs to `throw` (rather than returning a failed
+    /// `ToolResultPayload` itself) is automatically covered by the same
+    /// crash-recovery path instead of requiring every future tool author
+    /// to remember to wrap their own call site.
+    private func runToolCatchingErrors(name: String, input: [String: AnyCodable]) throws -> ToolResultPayload {
+        tools.execute(name: name, input: input)
     }
 
     private func sendPong() {
@@ -204,6 +238,29 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
         wakeWordListener.speak(envelope.payload.text)
     }
 
+    /// Sends this Agent's live permission status to Core (capability
+    /// discovery / permission status — roadmap #79/#80). Called once
+    /// pairing is confirmed (there's no authenticated connection to send
+    /// on before that); `WakeWordListener` requests mic/speech access on
+    /// launch independently of this, so by the time pairing usually
+    /// completes those prompts may already be resolved one way or another.
+    private func reportCapabilities() {
+        CapabilityReporter.currentPermissions { [weak self] permissions in
+            guard let self else { return }
+            let envelope = MessageFactory.makeEnvelope(
+                type: "device.capabilities",
+                payload: DeviceCapabilitiesPayload(permissions: permissions),
+                deviceId: self.deviceId
+            )
+            guard let data = try? JSONEncoder().encode(envelope) else {
+                Logger.shared.log("Failed to encode device.capabilities")
+                return
+            }
+            print("[JarvisAgent] Reporting capabilities: \(permissions)")
+            self.connection.send(data: data)
+        }
+    }
+
     private func register() {
         let credential = KeychainStore.loadCredential()
 
@@ -236,6 +293,26 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
         print("[JarvisAgent] Sending device.register (deviceId=\(deviceId), hasCredential=\(credential != nil))")
         connection.send(data: data)
     }
+}
+
+// Crash recovery, part 2 (roadmap #68): logs an uncaught Objective-C/
+// AppKit exception (the kind many Cocoa APIs — including some EventKit/
+// UserNotifications paths this Agent calls into — raise instead of
+// throwing a Swift `Error`) before the process terminates, so a crash at
+// least leaves a diagnosable line in both OSLog and this log file rather
+// than nothing. This is NOT a general crash preventer: it cannot catch a
+// Swift-level runtime trap (force unwrap of nil, array out-of-bounds,
+// division by zero, `fatalError`) — those remain fatal by design in
+// Swift and were not found in this codebase by inspection (see
+// JARVIS_ROADMAP_AUDIT.md's update for #68). The actual process-level
+// recovery for any crash this can't prevent is `launchd`'s own
+// `KeepAlive` (Resources/com.jarvis.agent.plist), which restarts the
+// Agent automatically — this handler only makes *why* it crashed
+// possible to find afterward.
+NSSetUncaughtExceptionHandler { exception in
+    let message = "Uncaught exception: \(exception.name.rawValue) — \(exception.reason ?? "no reason") — \(exception.callStackSymbols.joined(separator: "\n"))"
+    Logger.shared.error(message)
+    print("[JarvisAgent] FATAL: \(message)")
 }
 
 let app = NSApplication.shared

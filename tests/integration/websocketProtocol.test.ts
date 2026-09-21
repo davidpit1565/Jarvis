@@ -171,6 +171,65 @@ describe("WebSocket protocol: device -> core", () => {
     const result = parseDeviceToCoreMessage(JSON.stringify(["not", "an", "object"]));
     expect(result.ok).toBe(false);
   });
+
+  test("parses a valid device.capabilities message", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(
+        baseEnvelope({
+          type: "device.capabilities",
+          payload: { permissions: { accessibility: "granted", microphone: "denied" } },
+        })
+      )
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok && result.message.type === "device.capabilities") {
+      expect(result.message.payload.permissions.accessibility).toBe("granted");
+      expect(result.message.payload.permissions.microphone).toBe("denied");
+    }
+  });
+
+  test("parses a device.capabilities message with an empty permissions map", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ type: "device.capabilities", payload: { permissions: {} } }))
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  test("rejects a device.capabilities message with deviceId null", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(
+        baseEnvelope({
+          deviceId: null,
+          type: "device.capabilities",
+          payload: { permissions: { accessibility: "granted" } },
+        })
+      )
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a device.capabilities message with a non-object permissions field", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ type: "device.capabilities", payload: { permissions: "granted" } }))
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a device.capabilities message with an invalid status value", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(
+        baseEnvelope({ type: "device.capabilities", payload: { permissions: { accessibility: "yes" } } })
+      )
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a device.capabilities message missing the permissions field", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ type: "device.capabilities", payload: {} }))
+    );
+    expect(result.ok).toBe(false);
+  });
 });
 
 describe("WebSocket protocol: core -> device", () => {

@@ -873,6 +873,15 @@ export class JarvisWebSocketServer {
       case "event":
         // Generic device events aren't acted on in Phase 2.
         return;
+      case "device.capabilities":
+        if (message.deviceId) {
+          try {
+            this.deps.deviceRegistry.updateCapabilities(message.deviceId, message.payload.permissions);
+          } catch (error) {
+            console.error(`[jarvis] device.capabilities update failed for ${message.deviceId}:`, error);
+          }
+        }
+        return;
       case "voice.transcript": {
         const { deviceVoiceGateway } = this.deps;
         if (deviceVoiceGateway && message.deviceId) {

@@ -40,6 +40,15 @@ export interface Device {
   status: DeviceStatus;
   capabilities: string[];
   lastSeen: string | null;
+  /**
+   * Live permission/capability status the device last reported for itself
+   * (e.g. { accessibility: "granted", microphone: "denied" }), via a
+   * `device.capabilities` message. Null until the device has reported at
+   * least once — deliberately not persisted across restarts, the same
+   * reasoning as `status`/`lastSeen`: a permission grant from a previous
+   * run is never assumed still true without the device saying so again.
+   */
+  permissions: Record<string, string> | null;
 }
 
 export interface RegisterDeviceInput {

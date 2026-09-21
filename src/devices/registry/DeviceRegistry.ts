@@ -73,6 +73,7 @@ export class DeviceRegistry {
         status: DeviceStatus.UNKNOWN,
         capabilities: JSON.parse(row.capabilities) as string[],
         lastSeen: null,
+        permissions: null,
       });
     }
   }
@@ -116,6 +117,7 @@ export class DeviceRegistry {
       status: DeviceStatus.UNKNOWN,
       capabilities: input.capabilities ?? [],
       lastSeen: null,
+      permissions: null,
     };
     this.devices.set(device.id, device);
     this.persist(device);
@@ -168,6 +170,23 @@ export class DeviceRegistry {
 
   getPrimaryDevice(): Device | undefined {
     return this.listDevices().find((device) => device.role === "primary");
+  }
+
+  /**
+   * Records a device's self-reported live permission/capability status
+   * (from a `device.capabilities` message — see `protocol.ts`). Replaces
+   * the whole map each time rather than merging, so a permission the
+   * device stops reporting (e.g. a capability removed in a newer Agent
+   * build) doesn't linger as stale state here. Not persisted — see the
+   * `permissions` field's own doc comment on `Device`.
+   */
+  updateCapabilities(id: string, permissions: Record<string, string>): Device {
+    const device = this.devices.get(id);
+    if (!device) {
+      throw new Error(`Unknown device: ${id}`);
+    }
+    device.permissions = permissions;
+    return device;
   }
 
   close(): void {
