@@ -56,6 +56,20 @@ export interface JarvisEventMap {
    * `fastPath.miss`.
    */
   "fastPath.miss": { userId: string };
+  /**
+   * Fast Path: the message deterministically matched one of a small set of
+   * known "what are you doing?" status-query phrases (English/Hebrew — see
+   * `isLikelyStatusQuery` in `src/core/state/liveStatusFormatter.ts`) and
+   * was answered directly from the current `JarvisLiveState` snapshot, with
+   * no brain call at all — not even Fast Path's own one-call finalize.
+   * `state` is the live state actually read to produce the reply, for
+   * observability. A separate event from `fastPath.hit`/`fastPath.miss`
+   * (which are about the tool-shape classifier) since this shortcut never
+   * runs a tool and never calls the brain, so neither of those two
+   * accurately describes it — a turn that takes this path emits this event
+   * instead of either of those.
+   */
+  "fastPath.statusQuery": { userId: string; sessionId: string; state: string };
   "permission.checked": { toolId: string; result: PermissionCheckResult };
   "device.registered": { device: Device };
   "device.connected": { deviceId: string };

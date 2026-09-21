@@ -60,7 +60,7 @@ describe("JarvisLiveState wired into Orchestrator.handleUserMessage", () => {
       eventBus,
       liveState,
     });
-    return { orchestrator, liveState, eventBus };
+    return { orchestrator, liveState, eventBus, conversation };
   }
 
   test("a plain text-only turn walks LISTENING -> THINKING -> SPEAKING -> IDLE", async () => {
@@ -148,6 +148,100 @@ describe("JarvisLiveState wired into Orchestrator.handleUserMessage", () => {
     const reply = await turnPromise;
     expect(reply).toBe("Stopped.");
     expect(liveState.getState("chat:user-1")).toBe("STOPPED");
+  });
+
+  describe("status-query fast path (\"what are you doing?\")", () => {
+    test("answers a literal status query directly from the current snapshot, with no brain call at all", async () => {
+      const brain = new ScriptedBrain([]); // would throw if ever called — proves the brain is never reached
+      const { orchestrator, liveState, eventBus } = setup(brain);
+      liveState.transition("chat:user-1", "user-1", "LISTENING");
+      liveState.transition("chat:user-1", "user-1", "THINKING", { reason: "awaiting brain response" });
+
+      const events: Array<{ userId: string; sessionId: string; state: string }> = [];
+      eventBus.on("fastPath.statusQuery", (payload) => events.push(payload));
+
+      const reply = await orchestrator.handleUserMessage("user-1", "what are you doing?");
+
+      expect(reply).toBe("I'm thinking about how to respond.");
+      expect(events).toEqual([{ userId: "user-1", sessionId: "chat:user-1", state: "THINKING" }]);
+      // The live state this query observed must be left exactly as it was
+      // found — a status read must never itself perturb the state machine.
+      expect(liveState.getState("chat:user-1")).toBe("THINKING");
+    });
+
+    test("a status query in Hebrew is answered in Hebrew", async () => {
+      const brain = new ScriptedBrain([]);
+      const { orchestrator, liveState } = setup(brain);
+      liveState.transition("chat:user-1", "user-1", "LISTENING", { language: "he" });
+
+      const reply = await orchestrator.handleUserMessage("user-1", "מה אתה עושה?");
+
+      expect(reply).toBe("אני מקשיב להודעה שלך.");
+    });
+
+    test("an idle session gets an honest \"not doing anything\" reply, never a fabricated status", async () => {
+      const brain = new ScriptedBrain([]);
+      const { orchestrator } = setup(brain);
+
+      const reply = await orchestrator.handleUserMessage("user-1", "what are you doing right now");
+
+      expect(reply).toBe("I'm not doing anything right now — just waiting for you.");
+    });
+
+    test("with no liveState tracker configured at all, still answers honestly as idle instead of erroring", async () => {
+      const eventBus = new EventBus();
+      const toolRegistry = new ToolRegistry();
+      const permissionService = new PermissionService();
+      const conversation = new ConversationManager(eventBus);
+      const brain = new ScriptedBrain([]);
+      const orchestrator = new Orchestrator({ brain, conversation, toolRegistry, permissionService, eventBus }); // no liveState
+
+      const reply = await orchestrator.handleUserMessage("user-1", "what are you doing?");
+
+      expect(reply).toBe("I'm not doing anything right now — just waiting for you.");
+    });
+
+    test("the exchange is still recorded into conversation history", async () => {
+      const brain = new ScriptedBrain([]);
+      const { orchestrator, conversation } = setup(brain);
+
+      await orchestrator.handleUserMessage("user-1", "what are you doing?");
+
+      const messages = conversation.getMessages();
+      expect(messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant"]);
+      expect((messages[0] as { content: string }).content).toBe("what are you doing?");
+    });
+
+    test("a status query reads whatever is CURRENTLY live for the session, not a stale value", async () => {
+      // A shared tracker with something genuinely in flight on this user's
+      // "agent:" live session (as a real AgentCore task would drive it —
+      // see the "wired into AgentCore.runTask" describe block below for
+      // that full wiring), queried by a second Orchestrator instance bound
+      // to that same channel, simulating a UI that already knows which
+      // session id to ask about.
+      const sharedEventBus = new EventBus();
+      const liveState = new JarvisLiveStateTracker(sharedEventBus);
+      liveState.transition("agent:user-1", "user-1", "PLANNING");
+      liveState.transition("agent:user-1", "user-1", "EXECUTING", { reason: "agent task t1: plan ready" });
+
+      const eventBus = new EventBus();
+      const toolRegistry = new ToolRegistry();
+      const permissionService = new PermissionService();
+      const conversation = new ConversationManager(eventBus);
+      const brain = new ScriptedBrain([]);
+      const orchestrator = new Orchestrator({
+        brain,
+        conversation,
+        toolRegistry,
+        permissionService,
+        eventBus,
+        liveState,
+        liveStateChannel: "agent",
+      });
+
+      const reply = await orchestrator.handleUserMessage("user-1", "what are you doing?");
+      expect(reply).toContain("actively working on it");
+    });
   });
 });
 

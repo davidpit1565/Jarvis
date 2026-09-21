@@ -95,6 +95,12 @@ const OBSERVABLE_EVENTS = [
   // so an observer client can render a real, truthful execution timeline
   // for an autonomous task, not just the collapsed live-state indicator.
   "agent.task.transition",
+  // Real provider-fallback events (AIRouter actually switched providers —
+  // see the doc comment on "ai.providerFallback" in src/types/events.ts)
+  // forwarded so an observer client (the Command Center's Live Agent
+  // Monitor) can show an honest "switched providers" notice only when a
+  // real fallback fired, never a fabricated one.
+  "ai.providerFallback",
 ] as const;
 
 export interface JarvisWebSocketServerDependencies {

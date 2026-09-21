@@ -1219,3 +1219,142 @@ in place; no second/parallel cost or cache system was created.
 
 Result: 1794 tests passing (baseline 1761 + 33 new), 0 failing, 0
 typecheck errors.
+## Premium Agent Intelligence/Security Upgrade — batch 3 (UI/UX: status query, live timeline, i18n, honest error surfacing)
+
+Batch 3 of the multi-batch Premium Agent Intelligence, Security, Cost &
+Live Execution Upgrade, run in parallel with a separate cache/cost-ledger
+backend pass. Scope: wire the already-built `liveStatusFormatter` into a
+real request path, extend the Command Center's existing Live Agent
+Monitor panel into a truthful phase-by-phase timeline, add a small
+EN/HE string table for that new UI, and surface real tool-failure/
+provider-fallback events that previously reached only raw JSON/console
+output.
+
+### 1. "What are you doing?" — wired for real
+
+`Orchestrator.handleUserMessage` now recognizes the literal status-query
+phrases `isLikelyStatusQuery` (in `src/core/state/liveStatusFormatter.ts`,
+already built in an earlier batch) matches, and answers them directly
+from the session's current `JarvisLiveStateTracker` snapshot via
+`formatLiveStatus` — zero brain calls, not even Fast Path's own
+one-call finalize. Checked deliberately *before* this turn's own
+`liveState.reset()`/`transition()` calls (which happen just below in the
+same method), so the read reflects whatever is genuinely in flight for
+this session right now — including a concurrent AgentCore task driving
+the same session — rather than a value this turn's own bookkeeping would
+otherwise have just overwritten. An IDLE session gets `formatLiveStatus`'s
+own honest "I'm not doing anything right now" line, never a fabricated
+status. New event `fastPath.statusQuery` (`userId`, `sessionId`, `state`)
+— a separate event from `fastPath.hit`/`fastPath.miss` (the tool-shape
+classifier's own events) since this shortcut never runs a tool and never
+calls the brain, so neither of those accurately describes it.
+
+Tests (`tests/integration/liveState.integration.test.ts`, new
+`describe("status-query fast path...")` block): a mid-turn THINKING
+snapshot is answered correctly and left completely unperturbed by the
+read; Hebrew phrasing gets a Hebrew reply; an IDLE session gets the honest
+"not doing anything" line; a session with no `liveState` tracker
+configured at all still answers honestly instead of erroring; the
+exchange is recorded into conversation history; and a session reading a
+*different*, concurrently-active live session (simulating an agent task
+mid-flight) reports that real in-flight state, not a stale/default one.
+
+### 2. Truthful live timeline UI — built in the Command Center
+
+`ui/command-center/index.html`'s existing Live Agent Monitor panel gained
+a "Timeline" button per session row (alongside the existing History
+button, which is untouched) opening a new "Live execution timeline"
+panel. Two real data sources feed it, never a simulated one:
+
+- **Seed**: the same persisted data the existing History button already
+  reads (`GET /agent-recent-activity`, i.e. `JarvisLiveStateTracker`'s
+  real transition history) — every entry but the last renders as done
+  (✓), the last as current (●). No new backend storage was added for
+  this: the seed is exactly what was already there.
+- **Live extension**: a lazily-opened `/observer` WebSocket connection
+  (same origin/token pattern the hologram UI's own `/observer` client
+  already uses) that appends real `agent.task.transition` (its own safe
+  `phase` field), `tool.executed` (its `resultSummary`, or a sanitized
+  first-line-only, length-capped `result.error` on failure — never a raw
+  stack trace), and `jarvis.liveState.changed` events for the open
+  session's `userId` as they actually happen. `ai.providerFallback` was
+  added to `JarvisWebSocketServer`'s `OBSERVABLE_EVENTS` list (it wasn't
+  forwarded to observers before this pass) so a real fallback shows up
+  live as "Switched providers: X → Y (previous one unavailable)" in a
+  small separate "Provider fallbacks (live)" list — only ever rendered
+  when a real `ai.providerFallback` event fires, never speculatively.
+
+No backend persistence exists for `agent.task.transition`/`tool.executed`
+history today (only live-state transitions and the raw tool-audit log are
+queryable via HTTP), so the live-extension half of the timeline is real
+but session-scoped to however long this browser tab has had the panel
+open — documented plainly in the panel's own description text rather than
+silently pretending it's a full persisted history. Extending that to a
+real persisted, replayable event store was judged out of scope for a
+UI-focused batch and is a natural follow-up for whichever batch owns the
+audit/cache backend work.
+
+### 3. Hebrew + English UI strings — minimal, scoped to the new timeline UI
+
+A small `STRINGS` table (`en`/`he`) was added to
+`ui/command-center/index.html`'s script, covering only the new Timeline
+button label, timeline panel title/empty state, live-connection status
+line, and the provider-fallback/tool-failure/tool-success templates —
+selected per session via the `language` field `GET /agent-status` rows
+and the observer events both already carry, defaulting to English when
+absent (the same default `liveStatusFormatter` itself uses). This is
+deliberately not a full-app i18n pass: every other existing Command
+Center panel (Overview, Provider Monitor, Cost Analytics, Memory
+Explorer, Automation Explorer, Audit Explorer, and the History table
+itself) is untouched and still English-only, per the task's own explicit
+scoping instruction.
+
+### 4. Error/recovery UX — real events, not fabricated ones
+
+Before this pass, a tool failure or an `ai.providerFallback` reached the
+Command Center only as an opaque row in the Audit Explorer or not at all
+(`ai.providerFallback` wasn't forwarded to `/observer` clients at all).
+Now, within the new live timeline: a real `tool.executed` failure renders
+as "⚠ <ToolName> failed" with a sanitized, single-line, length-capped
+detail from the real `result.error` (never a raw stack trace, per the
+hard constraint); a real `ai.providerFallback` event renders as "Switched
+providers: X → Y (previous one unavailable)" in its own small list —
+exactly the wording the task specified, shown only when a real event
+fired. No generic "trying alternate approach" placeholder was added
+anywhere. This is additive UI over existing events only — no new backend
+failure-detection system was built.
+
+### Hologram-visual constraint
+
+Nothing in this batch required touching `ui/hologram/index.html`. Every
+deliverable that needed a visual home (the timeline, the fallback list,
+the i18n strings) went into `ui/command-center/index.html`'s existing
+Live Agent Monitor panel per option (b) in this batch's own instructions
+— the hologram's separate `jarvis.liveState.changed`-driven extension
+point (`#jx-live-badge`, added in an earlier batch, distinct from
+`#jarvis-state`) was confirmed present but deliberately left untouched,
+since nothing here called for extending it. No scoping-down under option
+(c) was needed.
+
+### Files touched this pass
+
+Changed: `src/core/orchestrator/Orchestrator.ts` (status-query fast path),
+`src/core/state/liveStatusFormatter.ts` (doc comments updated to reflect
+real wiring — no behavior change), `src/types/events.ts`
+(`fastPath.statusQuery`), `src/communication/websocket/
+JarvisWebSocketServer.ts` (`ai.providerFallback` added to
+`OBSERVABLE_EVENTS`), `ui/command-center/index.html` (Timeline
+button/panel, live `/observer` client, EN/HE string table, provider-
+fallback list). Tests: `tests/integration/liveState.integration.test.ts`
+(new `describe` block, 6 tests). `ui/command-center/index.html`'s own
+changes have no automated tests (a static HTML/JS page with no build/test
+harness in this repo) — its JS was verified to at least parse correctly
+(`new Function()` over the extracted `<script>` body) and was manually
+traced against the real event/endpoint shapes it consumes, but this is
+explicitly not the same as an automated test and is called out as such
+rather than silently skipped.
+
+Baseline was 1761 passing / 0 failing / 0 typecheck errors; this batch
+added 6 tests, bringing the suite to 1767 passing / 0 failing / 0
+typecheck errors (`bun run typecheck` and `bun test` both re-run clean
+after this pass, including every test from batches 1 and 2).
