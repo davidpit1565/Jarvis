@@ -23,8 +23,18 @@ export interface JarvisEventMap {
   "device.disconnected": { deviceId: string; reason: string };
   "device.roleGranted": { deviceId: string; role: DeviceRole };
   "device.revoked": { deviceId: string };
-  /** AIRouter switched away from its primary provider for this call — either because it failed, or a budget cap blocked a paid provider. */
-  "ai.providerFallback": { from: string; to: string; reason: "call-failed" | "budget-exceeded" };
+  /**
+   * AIRouter switched away from its primary provider for this call:
+   * "call-failed" (the primary's call threw), "budget-exceeded" (a
+   * daily/monthly cost cap blocked a paid provider), "zero-cost-mode"
+   * (ZERO_COST_MODE forbade a paid provider outright), or "circuit-open"
+   * (the primary's circuit breaker is open after repeated failures).
+   */
+  "ai.providerFallback": {
+    from: string;
+    to: string;
+    reason: "call-failed" | "budget-exceeded" | "zero-cost-mode" | "circuit-open";
+  };
 }
 
 export type JarvisEventName = keyof JarvisEventMap;

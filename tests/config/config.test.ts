@@ -54,6 +54,9 @@ const ENV_KEYS = [
   "AI_FALLBACK_PROVIDER",
   "MAX_DAILY_COST_USD",
   "MAX_MONTHLY_COST_USD",
+  "ZERO_COST_MODE",
+  "AI_CIRCUIT_BREAKER_THRESHOLD",
+  "AI_CIRCUIT_BREAKER_COOLDOWN_MS",
   "JARVIS_AI_COST_DB_PATH",
 ];
 let saved: Record<string, string | undefined> = {};
@@ -707,6 +710,47 @@ describe("loadConfig", () => {
 
   test("rejects a non-positive MAX_MONTHLY_COST_USD", () => {
     process.env.MAX_MONTHLY_COST_USD = "-1";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults zeroCostMode to false", () => {
+    const config = loadConfig();
+    expect(config.zeroCostMode).toBe(false);
+  });
+
+  test("reads ZERO_COST_MODE=true", () => {
+    process.env.ZERO_COST_MODE = "true";
+    const config = loadConfig();
+    expect(config.zeroCostMode).toBe(true);
+  });
+
+  test("anything other than the literal string true leaves ZERO_COST_MODE off", () => {
+    process.env.ZERO_COST_MODE = "1";
+    const config = loadConfig();
+    expect(config.zeroCostMode).toBe(false);
+  });
+
+  test("defaults aiCircuitBreakerThreshold and aiCircuitBreakerCooldownMs", () => {
+    const config = loadConfig();
+    expect(config.aiCircuitBreakerThreshold).toBe(3);
+    expect(config.aiCircuitBreakerCooldownMs).toBe(60_000);
+  });
+
+  test("reads AI_CIRCUIT_BREAKER_THRESHOLD and AI_CIRCUIT_BREAKER_COOLDOWN_MS when set", () => {
+    process.env.AI_CIRCUIT_BREAKER_THRESHOLD = "5";
+    process.env.AI_CIRCUIT_BREAKER_COOLDOWN_MS = "30000";
+    const config = loadConfig();
+    expect(config.aiCircuitBreakerThreshold).toBe(5);
+    expect(config.aiCircuitBreakerCooldownMs).toBe(30_000);
+  });
+
+  test("rejects a non-positive AI_CIRCUIT_BREAKER_THRESHOLD", () => {
+    process.env.AI_CIRCUIT_BREAKER_THRESHOLD = "0";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("rejects a non-integer AI_CIRCUIT_BREAKER_COOLDOWN_MS", () => {
+    process.env.AI_CIRCUIT_BREAKER_COOLDOWN_MS = "1.5";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 
