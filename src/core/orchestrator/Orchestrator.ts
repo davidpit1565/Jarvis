@@ -17,6 +17,8 @@ import type { ToolResultCache } from "@/core/cache/ToolResultCache";
 import { quarantineToolResult } from "@/core/orchestrator/toolResultQuarantine";
 import { summarizeToolResult } from "./toolResultSummary";
 import { classifyFastPath } from "@/core/intent/FastPathClassifier";
+import { isLikelyStatusQuery, formatLiveStatus } from "@/core/state/liveStatusFormatter";
+import type { LiveStateSnapshot } from "@/core/state/JarvisLiveState";
 import { scopeToolsForMessage } from "@/core/intent/ToolScoping";
 
 export interface OrchestratorDependencies {
@@ -218,6 +220,34 @@ export class Orchestrator {
     const oversizedImage = images?.find((image) => image.data.length > MAX_IMAGE_BASE64_LENGTH);
     if (oversizedImage) {
       return "One of those images is too large — please send a smaller one.";
+    }
+
+    // "What are you doing?" status-query fast path: a deterministic read of
+    // the CURRENT live-state snapshot, formatted with no brain call at all
+    // — not even Fast Path's own one-call finalize below. Deliberately
+    // checked here, before this turn touches `liveState` in any way (no
+    // reset/transition yet): reading the snapshot first means this answers
+    // with whatever is genuinely in flight for this session right now
+    // (e.g. a concurrent AgentCore task still driving the same session),
+    // not a value this turn's own LISTENING/THINKING bookkeeping would
+    // otherwise have just overwritten. Never attempted for an image
+    // message, same reasoning as the tool-shape Fast Path below. If
+    // nothing is live (IDLE), `formatLiveStatus` itself returns an honest
+    // "not doing anything" line rather than this code fabricating one.
+    if ((!images || images.length === 0) && isLikelyStatusQuery(content)) {
+      const snapshot: LiveStateSnapshot =
+        liveState?.getSnapshot(sessionId, userId) ?? {
+          sessionId,
+          userId,
+          state: "IDLE",
+          stopRequested: false,
+          updatedAt: Date.now(),
+        };
+      const reply = formatLiveStatus(snapshot);
+      conversation.addUserMessage(content, images);
+      conversation.addAssistantMessage(reply);
+      eventBus.emit("fastPath.statusQuery", { userId, sessionId, state: snapshot.state });
+      return reply;
     }
 
     // A fresh turn always starts by clearing any stop request left over

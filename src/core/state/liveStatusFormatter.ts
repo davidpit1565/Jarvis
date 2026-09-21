@@ -25,14 +25,12 @@ export interface LiveStatusContext {
  * system prompt's own reply-language default is English until a turn's
  * language is actually detected).
  *
- * Deliberately scoped to just the formatter, not full request routing —
- * `Orchestrator.handleUserMessage` has no existing fast-path hook for
- * literal status-query phrases today (every message goes straight to the
- * Brain), and bolting one on here would be exactly the kind of hacky,
- * un-owned wiring this upgrade's scope explicitly warns against. Wiring
- * this in as a real fast-path is a deliberate, scoped-out follow-up — see
- * `isLikelyStatusQuery` below for the literal-phrase matcher a future
- * integration would use.
+ * Wired into `Orchestrator.handleUserMessage` as its own status-query fast
+ * path (batch 3 of the Premium Agent Intelligence upgrade): a message that
+ * matches `isLikelyStatusQuery` below is answered directly from the
+ * session's current `LiveStateSnapshot`, via this function, with no brain
+ * call at all — see the call site's own doc comment for why it reads the
+ * snapshot before touching `liveState` in any other way.
  */
 export function formatLiveStatus(snapshot: LiveStateSnapshot, context: LiveStatusContext = {}): string {
   const language: LiveLanguage = snapshot.language ?? "en";
@@ -108,11 +106,11 @@ function describeUnknownState(state: LiveState): string {
 
 /**
  * A small, literal set of "what are you doing?" phrases (English and
- * Hebrew) this formatter is meant to answer, for a future fast-path
- * integration into `Orchestrator.handleUserMessage` — not wired in here
- * (see `formatLiveStatus`'s doc comment for why). Deliberately narrow: this
- * is a fast-path match, not NLU, so it only recognizes near-exact phrasing
- * rather than guessing at intent from arbitrary text.
+ * Hebrew) `Orchestrator.handleUserMessage` routes straight to
+ * `formatLiveStatus` (see its doc comment). Deliberately narrow: this is a
+ * fast-path match, not NLU, so it only recognizes near-exact phrasing
+ * rather than guessing at intent from arbitrary text — the same
+ * conservatism `FastPathClassifier`'s own rules use.
  */
 const STATUS_QUERY_PHRASES = [
   "what are you doing",
