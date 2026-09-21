@@ -58,6 +58,10 @@ const ENV_KEYS = [
   "AI_CIRCUIT_BREAKER_THRESHOLD",
   "AI_CIRCUIT_BREAKER_COOLDOWN_MS",
   "JARVIS_AI_COST_DB_PATH",
+  "JARVIS_COMMITMENTS_DB_PATH",
+  "JARVIS_STALE_COMMITMENT_DAYS",
+  "JARVIS_QUIET_HOURS_START",
+  "JARVIS_QUIET_HOURS_END",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -768,5 +772,58 @@ describe("loadConfig", () => {
   test("leaves telegramOwnerChatId undefined when unset", () => {
     const config = loadConfig();
     expect(config.telegramOwnerChatId).toBeUndefined();
+  });
+
+  test("defaults commitmentsDbPath and staleCommitmentDays", () => {
+    const config = loadConfig();
+    expect(config.commitmentsDbPath).toBe("./data/jarvis-commitments.sqlite");
+    expect(config.staleCommitmentDays).toBe(3);
+  });
+
+  test("reads JARVIS_STALE_COMMITMENT_DAYS when set", () => {
+    process.env.JARVIS_STALE_COMMITMENT_DAYS = "7";
+    const config = loadConfig();
+    expect(config.staleCommitmentDays).toBe(7);
+  });
+
+  test("rejects a non-positive JARVIS_STALE_COMMITMENT_DAYS", () => {
+    process.env.JARVIS_STALE_COMMITMENT_DAYS = "0";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("quiet hours is disabled (undefined) when neither var is set", () => {
+    const config = loadConfig();
+    expect(config.quietHoursStart).toBeUndefined();
+    expect(config.quietHoursEnd).toBeUndefined();
+  });
+
+  test("reads JARVIS_QUIET_HOURS_START/_END when both set", () => {
+    process.env.JARVIS_QUIET_HOURS_START = "22:00";
+    process.env.JARVIS_QUIET_HOURS_END = "07:00";
+    const config = loadConfig();
+    expect(config.quietHoursStart).toBe("22:00");
+    expect(config.quietHoursEnd).toBe("07:00");
+  });
+
+  test("rejects JARVIS_QUIET_HOURS_START set without JARVIS_QUIET_HOURS_END", () => {
+    process.env.JARVIS_QUIET_HOURS_START = "22:00";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("rejects JARVIS_QUIET_HOURS_END set without JARVIS_QUIET_HOURS_START", () => {
+    process.env.JARVIS_QUIET_HOURS_END = "07:00";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("rejects an invalid JARVIS_QUIET_HOURS_START format", () => {
+    process.env.JARVIS_QUIET_HOURS_START = "10pm";
+    process.env.JARVIS_QUIET_HOURS_END = "07:00";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("rejects an invalid JARVIS_QUIET_HOURS_END format", () => {
+    process.env.JARVIS_QUIET_HOURS_START = "22:00";
+    process.env.JARVIS_QUIET_HOURS_END = "25:00";
+    expect(() => loadConfig()).toThrow(ConfigError);
   });
 });

@@ -3,6 +3,7 @@ import { ReminderStore } from "@/reminders/ReminderStore";
 import { buildContextNote } from "@/core/buildContextNote";
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
+import { CommitmentStore } from "@/commitments/CommitmentStore";
 
 const originalFetch = global.fetch;
 
@@ -53,6 +54,37 @@ describe("buildContextNote", () => {
 
     global.fetch = originalFetch;
     store.close();
+  });
+
+  test("omits stale-commitment context when no commitmentStore is given", async () => {
+    const store = new ReminderStore(":memory:");
+    const note = await buildContextNote({ timezone: "UTC" }, store);
+    expect(note).not.toContain("commitment(s)");
+    store.close();
+  });
+
+  test("omits stale-commitment context when there are none stale", async () => {
+    const store = new ReminderStore(":memory:");
+    const commitmentStore = new CommitmentStore(":memory:");
+    commitmentStore.create({ text: "Still open, not stale yet" });
+
+    const note = await buildContextNote({ timezone: "UTC" }, store, undefined, commitmentStore);
+    expect(note).not.toContain("commitment(s)");
+    store.close();
+    commitmentStore.close();
+  });
+
+  test("includes stale commitments when present", async () => {
+    const store = new ReminderStore(":memory:");
+    const commitmentStore = new CommitmentStore(":memory:");
+    const record = commitmentStore.create({ text: "Follow up about the invoice", dueContext: "tomorrow" });
+    commitmentStore.markStale(record.id);
+
+    const note = await buildContextNote({ timezone: "UTC" }, store, undefined, commitmentStore);
+    expect(note).toContain("Follow up about the invoice");
+    expect(note).toContain("stale");
+    store.close();
+    commitmentStore.close();
   });
 
   afterEach(() => {
