@@ -158,4 +158,38 @@ describe("PairingService persistence", () => {
     service.approvePairing("imac-1", pending.code);
     service.close(); // must not throw with no backing db
   });
+
+  test("listPending() returns every currently pending request", () => {
+    const service = new PairingService();
+    service.requestPairing("imac-1");
+    service.requestPairing("imac-2");
+
+    const pending = service.listPending();
+
+    expect(pending.map((p) => p.deviceId).sort()).toEqual(["imac-1", "imac-2"]);
+    for (const p of pending) {
+      expect(p.code).toMatch(/^\d{6}$/);
+    }
+  });
+
+  test("listPending() excludes an approved request", () => {
+    const service = new PairingService();
+    const { code } = service.requestPairing("imac-1");
+    service.approvePairing("imac-1", code);
+
+    expect(service.listPending()).toEqual([]);
+  });
+
+  test("listPending() excludes an expired request", () => {
+    let now = 1_000_000;
+    const service = new PairingService(1000, () => now);
+    service.requestPairing("imac-1");
+    now += 5000; // past the 1000ms TTL
+
+    expect(service.listPending()).toEqual([]);
+  });
+
+  test("listPending() is empty with nothing pending", () => {
+    expect(new PairingService().listPending()).toEqual([]);
+  });
 });

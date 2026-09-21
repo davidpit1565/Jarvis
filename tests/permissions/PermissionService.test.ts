@@ -161,4 +161,29 @@ describe("PermissionService", () => {
 
     expect(result.allowed).toBe(true);
   });
+
+  test("list() returns every standing grant decoded back into userId/toolId/deviceId", () => {
+    const service = new PermissionService();
+    service.grant("user-1", "OPEN_URL", "imac-1");
+    service.grant("user-1", "SAVE_MEMORY"); // no device — local scope
+
+    const grants = service.list();
+
+    expect(grants).toContainEqual({ userId: "user-1", toolId: "OPEN_URL", deviceId: "imac-1" });
+    const localGrant = grants.find((g) => g.toolId === "SAVE_MEMORY");
+    expect(localGrant).toBeDefined();
+    expect(localGrant?.deviceId).toBeUndefined();
+  });
+
+  test("list() no longer includes a grant after it's revoked", () => {
+    const service = new PermissionService();
+    service.grant("user-1", "OPEN_URL", "imac-1");
+    service.revoke("user-1", "OPEN_URL", "imac-1");
+
+    expect(service.list()).toEqual([]);
+  });
+
+  test("list() is empty with no grants at all", () => {
+    expect(new PermissionService().list()).toEqual([]);
+  });
 });

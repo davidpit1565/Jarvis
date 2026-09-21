@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS Admin</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #12151c;
+    --border: #262b36;
+    --text: #e6e9ef;
+    --dim: #8b93a3;
+    --accent: #4da3ff;
+    --danger: #ff5c5c;
+    --ok: #4ee08a;
+    --warn: #ffb84d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
+  .token-bar {
+    display: flex; gap: 8px; align-items: center;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .token-bar input {
+    flex: 1; min-width: 200px; background: #0d0f14; border: 1px solid var(--border);
+    color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 13px;
+  }
+  button {
+    background: #1b2028; color: var(--text); border: 1px solid var(--border);
+    padding: 7px 12px; border-radius: 6px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #05121f; border-color: var(--accent); font-weight: 600; }
+  button.danger { background: #2a1414; color: var(--danger); border-color: #4a2020; }
+  button.danger:hover { border-color: var(--danger); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  section {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  section h2 { font-size: 15px; margin: 0 0 4px; }
+  section .desc { color: var(--dim); font-size: 12px; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; }
+  .empty { color: var(--dim); font-size: 12.5px; padding: 8px 0; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; }
+  .pill.online { background: #103a20; color: var(--ok); }
+  .pill.offline { background: #2a1414; color: var(--dim); }
+  .pill.set { background: #103a20; color: var(--ok); }
+  .pill.unset { background: #22262f; color: var(--dim); }
+  .pill.active { background: #3a1414; color: var(--danger); }
+  code { font-size: 12px; color: var(--accent); }
+  .row-actions { display: flex; gap: 6px; }
+  .lockdown-status { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .error-banner { color: var(--danger); font-size: 12.5px; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <h1>JARVIS Admin</h1>
+  <div class="sub">
+    Additive admin panel — separate from the hologram UI. Every action below calls the same
+    admin-token-gated HTTP endpoints the <code>approve-device</code> CLI and existing admin routes already use.
+  </div>
+
+  <div class="token-bar">
+    <label for="token" style="font-size:13px;color:var(--dim);">Admin token</label>
+    <input id="token" type="password" placeholder="X-Jarvis-Admin-Token" />
+    <button id="saveToken" class="primary">Use token</button>
+    <button id="refreshAll">Refresh all</button>
+    <span id="tokenStatus" style="font-size:12px;color:var(--dim);"></span>
+  </div>
+
+  <section id="lockdown-section">
+    <h2>Emergency Lockdown</h2>
+    <div class="desc">Break-glass kill switch. While active, everything above READ (writes, sends, device actions) is refused.</div>
+    <div class="lockdown-status">
+      <span id="lockdownPill" class="pill offline">unknown</span>
+      <span id="lockdownReason" style="font-size:12.5px;color:var(--dim);"></span>
+    </div>
+    <div class="row-actions">
+      <button id="lockdownActivate" class="danger">Activate lockdown</button>
+      <button id="lockdownLift">Lift lockdown</button>
+    </div>
+    <div id="lockdownError" class="error-banner"></div>
+  </section>
+
+  <section id="pairing-section">
+    <h2>Device Approval</h2>
+    <div class="desc">
+      Pending pairing requests. This is an additive second way to approve a device — the
+      <code>bun run approve-device</code> CLI keeps working exactly as before.
+    </div>
+    <table>
+      <thead><tr><th>Device ID</th><th>Code</th><th>Expires</th><th></th></tr></thead>
+      <tbody id="pendingBody"></tbody>
+    </table>
+    <div id="pendingEmpty" class="empty">No pending pairing requests.</div>
+    <div id="pairingError" class="error-banner"></div>
+  </section>
+
+  <section id="devices-section">
+    <h2>Devices &amp; Sessions</h2>
+    <div class="desc">
+      Paired devices and their live connection status. This system has no separate "dashboard
+      session" abstraction distinct from a device credential — revoking a device's pairing
+      credential here (via the existing <code>POST /pairing/revoke</code>) is the real, explicit
+      "session revocation" action for this single-user assistant, rather than a second parallel
+      concept layered on top.
+    </div>
+    <table>
+      <thead><tr><th>Name</th><th>ID</th><th>Type</th><th>Role</th><th>Status</th><th>Last seen</th><th></th></tr></thead>
+      <tbody id="devicesBody"></tbody>
+    </table>
+    <div id="devicesEmpty" class="empty">No devices paired.</div>
+    <div id="devicesError" class="error-banner"></div>
+  </section>
+
+  <section id="permissions-section">
+    <h2>Permissions</h2>
+    <div class="desc">
+      Read-only view of every standing tool grant. To revoke a device's grants, revoke its
+      pairing above — a revoked device's tool access is cleared alongside its credential.
+    </div>
+    <table>
+      <thead><tr><th>User</th><th>Tool</th><th>Device</th></tr></thead>
+      <tbody id="permissionsBody"></tbody>
+    </table>
+    <div id="permissionsEmpty" class="empty">No standing grants.</div>
+    <div id="permissionsError" class="error-banner"></div>
+  </section>
+
+  <section id="security-section">
+    <h2>Security Events</h2>
+    <div class="desc">Recent tool-audit entries and automation-rule failures.</div>
+    <h3 style="font-size:13px;margin:8px 0 4px;color:var(--dim);">Tool audit log (most recent 50)</h3>
+    <table>
+      <thead><tr><th>Time</th><th>Tool</th><th>Outcome</th><th>Detail</th></tr></thead>
+      <tbody id="auditBody"></tbody>
+    </table>
+    <div id="auditEmpty" class="empty">No audit entries.</div>
+    <h3 style="font-size:13px;margin:14px 0 4px;color:var(--dim);">Automation failures (most recent 50)</h3>
+    <table>
+      <thead><tr><th>Time</th><th>Rule</th><th>Error</th></tr></thead>
+      <tbody id="failuresBody"></tbody>
+    </table>
+    <div id="failuresEmpty" class="empty">No automation failures.</div>
+    <div id="securityError" class="error-banner"></div>
+  </section>
+
+  <section id="config-section">
+    <h2>Config Center</h2>
+    <div class="desc">
+      Read-only view of the effective configuration. Every API key, token, and the admin token
+      itself is shown only as <span class="pill set">set</span> / <span class="pill unset">not set</span> —
+      never the real value.
+    </div>
+    <table>
+      <thead><tr><th>Key</th><th>Value</th></tr></thead>
+      <tbody id="configBody"></tbody>
+    </table>
+    <div id="configError" class="error-banner"></div>
+  </section>
+
+  <section>
+    <h2>Not built: Safe Mode / Recovery Mode</h2>
+    <div class="desc">
+      Deliberately left unbuilt this pass. A real "safe mode" (auto-disabling proactive
+      schedulers) touches the automation/notification schedulers, and a real "recovery mode"
+      touches the backup/restore path — both are outside this change's allowed file scope, and
+      both need real product judgment (what exactly triggers safe mode; what a guided restore
+      flow should look like) beyond what's reasonable to guess here rather than build something
+      arbitrary.
+    </div>
+  </section>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const tokenInput = $("token");
+  const tokenStatus = $("tokenStatus");
+
+  function getToken() {
+    return sessionStorage.getItem("jarvisAdminToken") || "";
+  }
+  function setToken(t) {
+    if (t) sessionStorage.setItem("jarvisAdminToken", t);
+    else sessionStorage.removeItem("jarvisAdminToken");
+  }
+  tokenInput.value = getToken();
+
+  async function api(path, opts) {
+    opts = opts || {};
+    const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+    const token = getToken();
+    if (token) headers["X-Jarvis-Admin-Token"] = token;
+    const res = await fetch(path, Object.assign({}, opts, { headers }));
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* non-JSON, ignore */ }
+    if (!res.ok) {
+      const msg = (body && (body.error || body.message)) || (res.status + " " + res.statusText);
+      throw new Error(msg);
+    }
+    return body;
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  // ---- Lockdown ----
+  async function loadLockdown() {
+    const errEl = $("lockdownError");
+    errEl.textContent = "";
+    try {
+      const status = await api("/status");
+      const lockdown = status.lockdown || { active: false };
+      const pill = $("lockdownPill");
+      pill.textContent = lockdown.active ? "ACTIVE" : "inactive";
+      pill.className = "pill " + (lockdown.active ? "active" : "offline");
+      $("lockdownReason").textContent = lockdown.active
+        ? (lockdown.reason ? ("Reason: " + lockdown.reason) : "") + (lockdown.activatedAt ? (" — since " + lockdown.activatedAt) : "")
+        : "";
+    } catch (e) {
+      errEl.textContent = "Could not load lockdown status: " + e.message;
+    }
+  }
+  $("lockdownActivate").addEventListener("click", async () => {
+    const reason = window.prompt("Optional reason for lockdown:") || undefined;
+    try {
+      await api("/emergency/lockdown", { method: "POST", body: JSON.stringify({ reason }) });
+      await loadLockdown();
+    } catch (e) {
+      $("lockdownError").textContent = "Activate failed: " + e.message;
+    }
+  });
+  $("lockdownLift").addEventListener("click", async () => {
+    try {
+      await api("/emergency/lockdown/lift", { method: "POST" });
+      await loadLockdown();
+    } catch (e) {
+      $("lockdownError").textContent = "Lift failed: " + e.message;
+    }
+  });
+
+  // ---- Pairing / Device Approval ----
+  async function loadPending() {
+    const errEl = $("pairingError");
+    errEl.textContent = "";
+    try {
+      const data = await api("/pairing/pending");
+      const pending = data.pending || [];
+      const body = $("pendingBody");
+      body.innerHTML = "";
+      $("pendingEmpty").style.display = pending.length ? "none" : "block";
+      for (const p of pending) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td><code>" + esc(p.deviceId) + "</code></td>" +
+          "<td><code>" + esc(p.code) + "</code></td>" +
+          "<td>" + esc(new Date(p.expiresAt).toLocaleString()) + "</td>" +
+          "<td class='row-actions'>" +
+          "<button data-approve='" + esc(p.deviceId) + "' data-code='" + esc(p.code) + "' class='primary'>Approve</button>" +
+          "<button data-deny='" + esc(p.deviceId) + "' class='danger'>Deny</button>" +
+          "</td>";
+        body.appendChild(tr);
+      }
+      body.querySelectorAll("[data-approve]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            await api("/pairing/approve", {
+              method: "POST",
+              body: JSON.stringify({ deviceId: btn.getAttribute("data-approve"), code: btn.getAttribute("data-code") }),
+            });
+            await Promise.all([loadPending(), loadDevices(), loadPermissions()]);
+          } catch (e) {
+            errEl.textContent = "Approve failed: " + e.message;
+          }
+        });
+      });
+      body.querySelectorAll("[data-deny]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          if (!window.confirm("Deny/clear this pending pairing request?")) return;
+          try {
+            await api("/pairing/revoke", { method: "POST", body: JSON.stringify({ deviceId: btn.getAttribute("data-deny") }) });
+            await loadPending();
+          } catch (e) {
+            errEl.textContent = "Deny failed: " + e.message;
+          }
+        });
+      });
+    } catch (e) {
+      errEl.textContent = "Could not load pending pairing requests: " + e.message;
+    }
+  }
+
+  // ---- Devices & Sessions ----
+  async function loadDevices() {
+    const errEl = $("devicesError");
+    errEl.textContent = "";
+    try {
+      const status = await api("/status");
+      const devices = status.devices || [];
+      const body = $("devicesBody");
+      body.innerHTML = "";
+      $("devicesEmpty").style.display = devices.length ? "none" : "block";
+      for (const d of devices) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + esc(d.name) + "</td>" +
+          "<td><code>" + esc(d.id) + "</code></td>" +
+          "<td>" + esc(d.type) + "</td>" +
+          "<td>" + esc(d.role || "—") + "</td>" +
+          "<td><span class='pill " + (d.status === "online" ? "online" : "offline") + "'>" + esc(d.status) + "</span></td>" +
+          "<td>" + esc(d.lastSeen || "—") + "</td>" +
+          "<td><button data-revoke='" + esc(d.id) + "' class='danger'>Revoke</button></td>";
+        body.appendChild(tr);
+      }
+      body.querySelectorAll("[data-revoke]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          if (!window.confirm("Revoke this device's credential? It will need to re-pair from scratch.")) return;
+          try {
+            await api("/pairing/revoke", { method: "POST", body: JSON.stringify({ deviceId: btn.getAttribute("data-revoke") }) });
+            await loadDevices();
+          } catch (e) {
+            errEl.textContent = "Revoke failed: " + e.message;
+          }
+        });
+      });
+    } catch (e) {
+      errEl.textContent = "Could not load devices: " + e.message;
+    }
+  }
+
+  // ---- Permissions ----
+  async function loadPermissions() {
+    const errEl = $("permissionsError");
+    errEl.textContent = "";
+    try {
+      const data = await api("/permissions");
+      const grants = data.grants || [];
+      const body = $("permissionsBody");
+      body.innerHTML = "";
+      $("permissionsEmpty").style.display = grants.length ? "none" : "block";
+      for (const g of grants) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + esc(g.userId) + "</td>" +
+          "<td><code>" + esc(g.toolId) + "</code></td>" +
+          "<td>" + esc(g.deviceId || "— (local)") + "</td>";
+        body.appendChild(tr);
+      }
+    } catch (e) {
+      errEl.textContent = "Could not load permissions: " + e.message;
+    }
+  }
+
+  // ---- Security Events ----
+  async function loadSecurity() {
+    const errEl = $("securityError");
+    errEl.textContent = "";
+    try {
+      const [audit, failures] = await Promise.all([
+        api("/audit-log?limit=50").catch((e) => ({ entries: [], _error: e.message })),
+        api("/automation-failures?limit=50").catch((e) => ({ failures: [], _error: e.message })),
+      ]);
+      const auditEntries = audit.entries || [];
+      const auditBody = $("auditBody");
+      auditBody.innerHTML = "";
+      $("auditEmpty").style.display = auditEntries.length ? "none" : "block";
+      for (const e of auditEntries) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + esc(e.timestamp || e.createdAt || "") + "</td>" +
+          "<td><code>" + esc(e.toolName || e.tool || "") + "</code></td>" +
+          "<td>" + esc(e.outcome || e.status || "") + "</td>" +
+          "<td>" + esc(e.error || e.detail || "") + "</td>";
+        auditBody.appendChild(tr);
+      }
+      const failureEntries = failures.failures || [];
+      const failuresBody = $("failuresBody");
+      failuresBody.innerHTML = "";
+      $("failuresEmpty").style.display = failureEntries.length ? "none" : "block";
+      for (const f of failureEntries) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + esc(f.timestamp || f.createdAt || "") + "</td>" +
+          "<td>" + esc(f.ruleName || f.ruleId || "") + "</td>" +
+          "<td>" + esc(f.error || f.message || "") + "</td>";
+        failuresBody.appendChild(tr);
+      }
+      if (audit._error && failures._error) {
+        errEl.textContent = "Could not load security events: " + audit._error;
+      }
+    } catch (e) {
+      errEl.textContent = "Could not load security events: " + e.message;
+    }
+  }
+
+  // ---- Config Center ----
+  async function loadConfig() {
+    const errEl = $("configError");
+    errEl.textContent = "";
+    try {
+      const data = await api("/config");
+      const cfg = data.config || {};
+      const body = $("configBody");
+      body.innerHTML = "";
+      for (const key of Object.keys(cfg).sort()) {
+        const value = cfg[key];
+        let display;
+        if (value && typeof value === "object" && "configured" in value) {
+          display = "<span class='pill " + (value.configured ? "set" : "unset") + "'>" + (value.configured ? "set" : "not set") + "</span>";
+        } else if (Array.isArray(value)) {
+          display = esc(JSON.stringify(value));
+        } else {
+          display = esc(String(value));
+        }
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td><code>" + esc(key) + "</code></td><td>" + display + "</td>";
+        body.appendChild(tr);
+      }
+    } catch (e) {
+      errEl.textContent = "Could not load config: " + e.message;
+    }
+  }
+
+  async function loadAll() {
+    tokenStatus.textContent = getToken() ? "token set" : "no token (local dev only)";
+    await Promise.all([loadLockdown(), loadPending(), loadDevices(), loadPermissions(), loadSecurity(), loadConfig()]);
+  }
+
+  $("saveToken").addEventListener("click", () => {
+    setToken(tokenInput.value.trim());
+    loadAll();
+  });
+  $("refreshAll").addEventListener("click", loadAll);
+
+  loadAll();
+})();
+</script>
+</body>
+</html>
