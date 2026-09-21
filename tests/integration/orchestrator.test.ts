@@ -13,6 +13,7 @@ import type { DeviceTool, LocalTool } from "@/types/tools";
 import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ToolResultCache } from "@/core/cache/ToolResultCache";
 import { parseQuarantinedToolResult } from "@/core/orchestrator/toolResultQuarantine";
+import { ConfirmationService } from "@/core/confirmation/ConfirmationService";
 
 /** Scripted mock brain: returns queued responses in order, one per call. */
 class ScriptedBrain implements Brain {
@@ -64,6 +65,7 @@ function setup(
     deviceConnectionManager?: DeviceConnectionManager;
     lockdownService?: LockdownService;
     toolResultCache?: ToolResultCache;
+    confirmationService?: ConfirmationService;
   } = {}
 ) {
   const eventBus = new EventBus();
@@ -82,6 +84,7 @@ function setup(
     deviceConnectionManager: options.deviceConnectionManager,
     lockdownService: options.lockdownService,
     toolResultCache: options.toolResultCache,
+    confirmationService: options.confirmationService,
   });
   return { orchestrator, conversation, eventBus, toolRegistry, permissionService };
 }
@@ -909,5 +912,281 @@ describe("Orchestrator READ-tool result caching", () => {
     await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv again?");
 
     expect(calls()).toBe(2);
+  });
+
+  describe("Fast Path", () => {
+    test("a deterministic weather question skips the tool-selection round-trip but still runs the real tool", async () => {
+      const weatherTool = makeEchoTool("GET_WEATHER"); // name "get_weather", READ
+      // Only ONE scripted brain response: no tool-selection call needed —
+      // fast path already knows which tool to run, so the only brain call
+      // left is formatting the final reply.
+      const brain = new ScriptedBrain([{ text: "It's sunny and 22°C.", toolCalls: [], stopReason: "end_turn" }]);
+      const { orchestrator, eventBus } = setup(brain, [weatherTool]);
+      const hits: Array<{ userId: string; toolName: string; shape: string }> = [];
+      const misses: Array<{ userId: string }> = [];
+      eventBus.on("fastPath.hit", (payload) => hits.push(payload));
+      eventBus.on("fastPath.miss", (payload) => misses.push(payload));
+      const executed: string[] = [];
+      eventBus.on("tool.executed", (payload) => executed.push(payload.toolName));
+
+      const reply = await orchestrator.handleUserMessage("user-1", "what's the weather?");
+
+      expect(reply).toBe("It's sunny and 22°C.");
+      expect(hits).toEqual([{ userId: "user-1", toolName: "get_weather", shape: "weather.current" }]);
+      expect(misses).toHaveLength(0);
+      expect(executed).toEqual(["get_weather"]);
+      expect(brain.callCount).toBe(1);
+    });
+
+    test("a message that doesn't match any known shape falls through unchanged and emits fastPath.miss", async () => {
+      const brain = new ScriptedBrain([{ text: "Just chatting.", toolCalls: [], stopReason: "end_turn" }]);
+      const { orchestrator, eventBus } = setup(brain);
+      const hits: unknown[] = [];
+      const misses: Array<{ userId: string }> = [];
+      eventBus.on("fastPath.hit", (payload) => hits.push(payload));
+      eventBus.on("fastPath.miss", (payload) => misses.push(payload));
+
+      const reply = await orchestrator.handleUserMessage("user-1", "tell me something interesting");
+
+      expect(reply).toBe("Just chatting.");
+      expect(hits).toHaveLength(0);
+      expect(misses).toEqual([{ userId: "user-1" }]);
+    });
+
+    test("a recognized shape whose tool isn't registered falls through to the full path instead of erroring", async () => {
+      // No spotify tools registered on this Orchestrator at all.
+      const brain = new ScriptedBrain([
+        { text: "", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator, eventBus } = setup(brain, []);
+      const misses: unknown[] = [];
+      eventBus.on("fastPath.miss", (payload) => misses.push(payload));
+
+      await orchestrator.handleUserMessage("user-1", "pause the music");
+
+      expect(misses).toHaveLength(1);
+    });
+
+    test("fast path still goes through the full permission pipeline — an ungranted SAFE_ACTION tool is denied, not silently executed", async () => {
+      const pauseTool = makeEchoTool("PAUSE_MUSIC", PermissionLevel.SAFE_ACTION); // name "pause_music", no grant given
+      const brain = new ScriptedBrain([{ text: "I don't have permission to do that yet.", toolCalls: [], stopReason: "end_turn" }]);
+      const { orchestrator, eventBus } = setup(brain, [pauseTool]);
+      const hits: unknown[] = [];
+      const executed: string[] = [];
+      eventBus.on("fastPath.hit", (payload) => hits.push(payload));
+      eventBus.on("tool.executed", (payload) => executed.push(payload.toolName));
+
+      const reply = await orchestrator.handleUserMessage("user-1", "pause the music");
+
+      // The shape matched (fast path was taken)...
+      expect(hits).toHaveLength(1);
+      // ...but the tool itself never actually ran, because there was no grant.
+      expect(executed).toHaveLength(0);
+      expect(reply).toBe("I don't have permission to do that yet.");
+    });
+
+    test("a message with extra content beyond a known shape (a city, a song name) never fast-paths", async () => {
+      const weatherTool = makeEchoTool("GET_WEATHER");
+      const brain = new ScriptedBrain([
+        { text: "", toolCalls: [{ id: "call-1", toolName: "get_weather", input: {} }], stopReason: "tool_use" },
+        { text: "Sunny in Tel Aviv.", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator, eventBus } = setup(brain, [weatherTool]);
+      const hits: unknown[] = [];
+      eventBus.on("fastPath.hit", (payload) => hits.push(payload));
+
+      const reply = await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv?");
+
+      expect(hits).toHaveLength(0);
+      expect(reply).toBe("Sunny in Tel Aviv.");
+      expect(brain.callCount).toBe(2); // full tool-selection round-trip, as before
+    });
+  });
+
+  describe("Parallel Tool Execution", () => {
+    function makeTimedReadTool(id: string, delayMs: number, order: string[]): LocalTool {
+      return {
+        id,
+        name: id.toLowerCase(),
+        description: "A READ tool that takes a while",
+        inputSchema: { type: "object", properties: {} },
+        requiredPermission: PermissionLevel.READ,
+        target: "local",
+        execute: async () => {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          order.push(id);
+          return { success: true, data: {} };
+        },
+      };
+    }
+
+    test("two independent READ tool calls in one brain turn run concurrently, not sequentially", async () => {
+      const order: string[] = [];
+      const toolA = makeTimedReadTool("TOOL_A", 50, order);
+      const toolB = makeTimedReadTool("TOOL_B", 50, order);
+      const brain = new ScriptedBrain([
+        {
+          text: "",
+          toolCalls: [
+            { id: "call-1", toolName: "tool_a", input: {} },
+            { id: "call-2", toolName: "tool_b", input: {} },
+          ],
+          stopReason: "tool_use",
+        },
+        { text: "done", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator } = setup(brain, [toolA, toolB]);
+
+      const start = Date.now();
+      const reply = await orchestrator.handleUserMessage("user-1", "check tool a and tool b");
+      const elapsedMs = Date.now() - start;
+
+      expect(reply).toBe("done");
+      expect(order.sort()).toEqual(["TOOL_A", "TOOL_B"]);
+      // Sequential would be >=100ms; concurrent should land close to the
+      // 50ms of the slower call alone. Generous margin against CI jitter,
+      // while still well under the sequential floor.
+      expect(elapsedMs).toBeLessThan(90);
+    });
+
+    test("a failure in one parallel READ call doesn't swallow or corrupt its sibling's result", async () => {
+      const okTool: LocalTool = {
+        id: "OK_TOOL",
+        name: "ok_tool",
+        description: "",
+        inputSchema: { type: "object", properties: {} },
+        requiredPermission: PermissionLevel.READ,
+        target: "local",
+        execute: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          return { success: true, data: { ok: true } };
+        },
+      };
+      const failingTool: LocalTool = {
+        id: "FAILING_TOOL",
+        name: "failing_tool",
+        description: "",
+        inputSchema: { type: "object", properties: {} },
+        requiredPermission: PermissionLevel.READ,
+        target: "local",
+        execute: async () => ({ success: false, error: "boom" }),
+      };
+      const brain = new ScriptedBrain([
+        {
+          text: "",
+          toolCalls: [
+            { id: "call-1", toolName: "ok_tool", input: {} },
+            { id: "call-2", toolName: "failing_tool", input: {} },
+          ],
+          stopReason: "tool_use",
+        },
+        { text: "handled", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator, eventBus } = setup(brain, [okTool, failingTool]);
+      const executed: Array<{ toolName: string; result: { success: boolean } }> = [];
+      eventBus.on("tool.executed", (payload) => executed.push({ toolName: payload.toolName, result: payload.result }));
+
+      const reply = await orchestrator.handleUserMessage("user-1", "run both");
+
+      expect(reply).toBe("handled");
+      expect(executed.find((e) => e.toolName === "ok_tool")?.result.success).toBe(true);
+      expect(executed.find((e) => e.toolName === "failing_tool")?.result.success).toBe(false);
+    });
+
+    test("SAFE_ACTION/CONFIRM/DANGEROUS tool calls in the same turn are never parallelized, even with each other", async () => {
+      let concurrent = 0;
+      let maxConcurrent = 0;
+      function makeTrackedDangerousTool(id: string): LocalTool {
+        return {
+          id,
+          name: id.toLowerCase(),
+          description: "",
+          inputSchema: { type: "object", properties: {} },
+          requiredPermission: PermissionLevel.DANGEROUS,
+          target: "local",
+          execute: async () => {
+            concurrent++;
+            maxConcurrent = Math.max(maxConcurrent, concurrent);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            concurrent--;
+            return { success: true, data: {} };
+          },
+        };
+      }
+      const dangerousA = makeTrackedDangerousTool("DANGEROUS_A");
+      const dangerousB = makeTrackedDangerousTool("DANGEROUS_B");
+      const brain = new ScriptedBrain([
+        {
+          text: "",
+          toolCalls: [
+            { id: "call-1", toolName: "dangerous_a", input: {} },
+            { id: "call-2", toolName: "dangerous_b", input: {} },
+          ],
+          stopReason: "tool_use",
+        },
+        { text: "done", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const confirmationService = new ConfirmationService(async () => true);
+      const { orchestrator, permissionService } = setup(brain, [dangerousA, dangerousB], { confirmationService });
+      permissionService.grant("user-1", "DANGEROUS_A");
+      permissionService.grant("user-1", "DANGEROUS_B");
+
+      const reply = await orchestrator.handleUserMessage("user-1", "do both dangerous things");
+
+      expect(reply).toBe("done");
+      expect(maxConcurrent).toBe(1); // never more than one DANGEROUS call in flight at a time
+    });
+
+    test("a READ call is never batched together with a following SAFE_ACTION call", async () => {
+      let concurrent = 0;
+      let maxConcurrent = 0;
+      const readTool: LocalTool = {
+        id: "READ_TOOL",
+        name: "read_tool",
+        description: "",
+        inputSchema: { type: "object", properties: {} },
+        requiredPermission: PermissionLevel.READ,
+        target: "local",
+        execute: async () => {
+          concurrent++;
+          maxConcurrent = Math.max(maxConcurrent, concurrent);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          concurrent--;
+          return { success: true, data: {} };
+        },
+      };
+      const safeActionTool: LocalTool = {
+        id: "SAFE_TOOL",
+        name: "safe_tool",
+        description: "",
+        inputSchema: { type: "object", properties: {} },
+        requiredPermission: PermissionLevel.SAFE_ACTION,
+        target: "local",
+        execute: async () => {
+          concurrent++;
+          maxConcurrent = Math.max(maxConcurrent, concurrent);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          concurrent--;
+          return { success: true, data: {} };
+        },
+      };
+      const brain = new ScriptedBrain([
+        {
+          text: "",
+          toolCalls: [
+            { id: "call-1", toolName: "read_tool", input: {} },
+            { id: "call-2", toolName: "safe_tool", input: {} },
+          ],
+          stopReason: "tool_use",
+        },
+        { text: "done", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator, permissionService } = setup(brain, [readTool, safeActionTool]);
+      permissionService.grant("user-1", "SAFE_TOOL");
+
+      await orchestrator.handleUserMessage("user-1", "do both");
+
+      expect(maxConcurrent).toBe(1);
+    });
   });
 });
