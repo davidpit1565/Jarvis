@@ -153,8 +153,10 @@
       <div class="desc" id="timelineDesc">
         Real phase-by-phase progress for <code id="timelineSession"></code>, seeded from its persisted state history
         (<code>GET /agent-recent-activity</code>) and extended live as real <code>agent.task.transition</code> /
-        <code>tool.executed</code> / <code>ai.providerFallback</code> events arrive over <code>/observer</code>. Every
-        step shown here really happened — nothing on this list is simulated or guessed.
+        <code>tool.executed</code> / <code>ai.providerFallback</code> / <code>ai.escalation</code> events arrive over
+        <code>/observer</code>. Provider switches show their real decision reason inline (e.g. "budget-exceeded",
+        "escalation-retry") — a closed set of enum values, never free text. Every step shown here really happened —
+        nothing on this list is simulated or guessed.
       </div>
       <ul class="timeline" id="timelineList"></ul>
       <div id="timelineEmpty" class="timeline-empty">No activity recorded for this session yet.</div>
@@ -179,7 +181,7 @@
 
   <section id="cost-section">
     <h2>Cost Analytics</h2>
-    <div class="desc">Spend from <code>GET /cost-analytics</code> (backed by <code>CostTracker</code>) — the unified AI Cost Ledger.</div>
+    <div class="desc">Spend from <code>GET /cost-analytics</code> (backed by <code>CostTracker</code>) — the unified AI Cost Ledger, including the real "why this model" decision reason per call (also available per-run via <code>GET /cost-analytics?runId=</code>).</div>
     <div class="grid" id="costGrid" style="margin-bottom:12px;"></div>
     <h3 style="font-size:13px;margin:8px 0 4px;color:var(--dim);">By provider</h3>
     <table>
@@ -198,7 +200,7 @@
     </table>
     <h3 style="font-size:13px;margin:14px 0 4px;color:var(--dim);">Recent calls</h3>
     <table>
-      <thead><tr><th>Time</th><th>Provider</th><th>Model</th><th>Cost (USD)</th><th>Tokens (in/cached/out)</th><th>Fallback</th></tr></thead>
+      <thead><tr><th>Time</th><th>Provider</th><th>Model</th><th>Cost (USD)</th><th>Tokens (in/cached/out)</th><th>Fallback</th><th>Why this model</th></tr></thead>
       <tbody id="costRecentBody"></tbody>
     </table>
     <div id="costEmpty" class="empty">No cost data recorded yet.</div>
@@ -324,7 +326,7 @@
       liveUnavailable: "Live updates unavailable in this browser session.",
       fallbackTitle: "Provider fallbacks (live)",
       fallbackNone: "No provider fallbacks observed since this page loaded.",
-      fallbackMsg: (from, to) => "Switched providers: " + from + " → " + to + " (previous one unavailable)",
+      fallbackMsg: (from, to, reason) => "Switched providers: " + from + " → " + to + (reason ? " (" + reason + ")" : ""),
       toolFailed: (name) => "⚠ " + name + " failed",
       toolOk: (name, summary) => "✓ " + name + (summary ? " (" + summary + ")" : ""),
       current: "current",
@@ -339,7 +341,7 @@
       liveUnavailable: "עדכונים חיים אינם זמינים בדפדפן הזה.",
       fallbackTitle: "מעברי ספק (חי)",
       fallbackNone: "לא נצפו מעברי ספק מאז טעינת העמוד.",
-      fallbackMsg: (from, to) => "הוחלף ספק: " + from + " ← " + to + " (הספק הקודם לא היה זמין)",
+      fallbackMsg: (from, to, reason) => "הוחלף ספק: " + from + " ← " + to + (reason ? " (" + reason + ")" : ""),
       toolFailed: (name) => "⚠ " + name + " נכשל",
       toolOk: (name, summary) => "✓ " + name + (summary ? " (" + summary + ")" : ""),
       current: "נוכחי",
@@ -551,7 +553,21 @@
     if (!msg || !msg.type) return;
     if (msg.type === "ai.providerFallback") {
       const payload = msg.payload || {};
-      fallbackEvents.unshift({ from: payload.from, to: payload.to, timestamp: msg.timestamp || new Date().toISOString() });
+      // `payload.reason` is one of a closed set of real AIRouter enum
+      // values ("call-failed" | "budget-exceeded" | "run-budget-exceeded" |
+      // "zero-cost-mode" | "circuit-open" | "soft-budget-cap") — shown
+      // verbatim, never turned into free text.
+      fallbackEvents.unshift({ from: payload.from, to: payload.to, reason: payload.reason, timestamp: msg.timestamp || new Date().toISOString() });
+      if (fallbackEvents.length > 5) fallbackEvents.length = 5;
+      renderFallbackPanel();
+      return;
+    }
+    if (msg.type === "ai.escalation") {
+      const payload = msg.payload || {};
+      // Same idea as ai.providerFallback above, but always the single
+      // closed "escalation-retry" reason — a stronger model was retried
+      // after a deterministic validity check rejected the first response.
+      fallbackEvents.unshift({ from: payload.from, to: payload.to, reason: "escalation-retry", timestamp: msg.timestamp || new Date().toISOString() });
       if (fallbackEvents.length > 5) fallbackEvents.length = 5;
       renderFallbackPanel();
       return;
@@ -596,7 +612,7 @@
     }
     panel.style.display = "block";
     list.innerHTML = fallbackEvents.map((f) =>
-      timelineStepHtml("fallback", "⇄", strings(lang).fallbackMsg(f.from, f.to), new Date(f.timestamp).toLocaleTimeString())
+      timelineStepHtml("fallback", "⇄", strings(lang).fallbackMsg(f.from, f.to, f.reason), new Date(f.timestamp).toLocaleTimeString())
     ).join("");
   }
 
@@ -682,7 +698,12 @@
           "<td>" + esc(r.model || "—") + "</td>" +
           "<td>" + fmtUsd(r.estimatedCostUsd) + "</td>" +
           "<td>" + tokens + "</td>" +
-          "<td>" + (r.fallback ? "yes" : "—") + "</td>";
+          "<td>" + (r.fallback ? "yes" : "—") + "</td>" +
+          // r.decisionReason is a closed set of real AIRouter enum values
+          // (e.g. "primary-free-first", "budget-exceeded",
+          // "escalation-retry") — the real "why did you use this model"
+          // answer for this call, shown verbatim, never free text.
+          "<td><code>" + esc(r.decisionReason || "—") + "</code></td>";
         recentBody.appendChild(tr);
       }
 

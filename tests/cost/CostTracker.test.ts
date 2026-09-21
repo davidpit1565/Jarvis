@@ -325,6 +325,35 @@ describe("CostTracker", () => {
         expect(ledger!.firstCallAt).toBe("2025-01-01T00:00:00.000Z");
         expect(ledger!.lastCallAt).toBe("2025-01-01T00:00:05.000Z");
       });
+
+      test("decisionReasons collects the distinct 'why this model' reasons across the run, in first-seen order", () => {
+        tracker = new CostTracker(":memory:");
+        tracker.record("groq", 0, "2025-01-01T00:00:00.000Z", { runId: "run-2", decisionReason: "primary-free-first" });
+        tracker.record("anthropic", 0.05, "2025-01-01T00:00:05.000Z", { runId: "run-2", decisionReason: "budget-exceeded" });
+        // A repeated reason isn't duplicated.
+        tracker.record("groq", 0, "2025-01-01T00:00:10.000Z", { runId: "run-2", decisionReason: "primary-free-first" });
+
+        const ledger = tracker.getRunLedger("run-2");
+        expect(ledger!.decisionReasons).toEqual(["primary-free-first", "budget-exceeded"]);
+      });
+    });
+
+    describe("decisionReason ('why did you use this model' per-call metadata)", () => {
+      test("record() persists decisionReason and listRecent() returns it back", () => {
+        tracker = new CostTracker(":memory:");
+        tracker.record("anthropic", 0.02, undefined, { decisionReason: "soft-budget-cap" });
+
+        const recent = tracker.listRecent(1);
+        expect(recent[0]!.decisionReason).toBe("soft-budget-cap");
+      });
+
+      test("a call recorded with no decisionReason stores undefined, not a guessed value", () => {
+        tracker = new CostTracker(":memory:");
+        tracker.record("groq", 0);
+
+        const recent = tracker.listRecent(1);
+        expect(recent[0]!.decisionReason).toBeUndefined();
+      });
     });
 
     test("an existing database created before the ledger columns existed is migrated in place", () => {

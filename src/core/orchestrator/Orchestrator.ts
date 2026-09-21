@@ -18,6 +18,7 @@ import { quarantineToolResult } from "@/core/orchestrator/toolResultQuarantine";
 import { summarizeToolResult } from "./toolResultSummary";
 import { classifyFastPath } from "@/core/intent/FastPathClassifier";
 import { isLikelyStatusQuery, formatLiveStatus } from "@/core/state/liveStatusFormatter";
+import { isLikelyWhyQuery, explainAction, findLastToolCall, noActionToExplain } from "@/core/state/actionExplainer";
 import type { LiveStateSnapshot } from "@/core/state/JarvisLiveState";
 import { scopeToolsForMessage } from "@/core/intent/ToolScoping";
 
@@ -247,6 +248,23 @@ export class Orchestrator {
       conversation.addUserMessage(content, images);
       conversation.addAssistantMessage(reply);
       eventBus.emit("fastPath.statusQuery", { userId, sessionId, state: snapshot.state });
+      return reply;
+    }
+
+    // "Why did you do that?" fast path: a deterministic read of this
+    // conversation's own history (never an LLM call, and never a
+    // fabricated causal story) — see `actionExplainer.ts`'s own doc
+    // comment. Checked here, before this turn's own message is recorded,
+    // so `findLastToolCall` only ever sees tool calls from *before* this
+    // question, never a tool call this very question might otherwise be
+    // mistaken for triggering.
+    if ((!images || images.length === 0) && isLikelyWhyQuery(content)) {
+      const language: "en" | "he" = liveState?.getSnapshot(sessionId, userId)?.language ?? "en";
+      const last = findLastToolCall(conversation.getMessages());
+      const reply = last ? explainAction(last.toolName, last.triggeringMessage, language) : noActionToExplain(language);
+      conversation.addUserMessage(content, images);
+      conversation.addAssistantMessage(reply);
+      eventBus.emit("fastPath.whyQuery", { userId, sessionId, toolName: last?.toolName });
       return reply;
     }
 

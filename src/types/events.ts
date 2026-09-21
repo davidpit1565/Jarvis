@@ -70,6 +70,16 @@ export interface JarvisEventMap {
    * instead of either of those.
    */
   "fastPath.statusQuery": { userId: string; sessionId: string; state: string };
+  /**
+   * Fast Path: the message deterministically matched one of a small set of
+   * known "why did you do that?" phrases (English/Hebrew — see
+   * `isLikelyWhyQuery` in `src/core/state/actionExplainer.ts`) and was
+   * answered directly from the most recent tool call in this
+   * conversation's history, with no brain call at all. `toolName` is the
+   * tool being explained, omitted when there was nothing to explain yet
+   * (an honest "I haven't done anything to explain yet" reply).
+   */
+  "fastPath.whyQuery": { userId: string; sessionId: string; toolName?: string };
   "permission.checked": { toolId: string; result: PermissionCheckResult };
   "device.registered": { device: Device };
   "device.connected": { deviceId: string };
