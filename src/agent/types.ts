@@ -72,9 +72,20 @@ export interface AgentPlanRequest {
   priorFailure?: string;
   /** Steps already completed and verified in a previous planning cycle, for context — never re-run automatically. */
   completedSteps: AgentPlanStep[];
+  /**
+   * This task's id — passed through to `Brain.chat()`/`AIRouter` as
+   * `BrainRequest.runId`, scoping Denial-of-wallet protection
+   * (`maxCostPerRunUsd`) to "one AgentCore task", same as
+   * `Orchestrator.handleUserMessage` scopes it to "one turn". Optional:
+   * a caller that omits it (e.g. a test stub) simply gets no per-run
+   * cost ceiling applied to its `chat()` calls, same as any other
+   * `BrainRequest` with no `runId`.
+   */
+  taskId?: string;
 }
 
 export interface AgentVerificationRequest {
+  taskId?: string;
   step: AgentPlanStep;
   result: ToolResult;
   /**

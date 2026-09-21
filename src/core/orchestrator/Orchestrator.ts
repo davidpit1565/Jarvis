@@ -216,6 +216,13 @@ export class Orchestrator {
 
     conversation.addUserMessage(content, images);
 
+    // Denial-of-wallet protection: one runId per turn (this one call to
+    // handleUserMessage), reused for every brain.chat() call this turn
+    // makes across MAX_TOOL_ITERATIONS — AIRouter's maxCostPerRunUsd
+    // ceiling (see its own doc comment) accumulates cost against this
+    // exact id via CostTracker's per-run accumulator.
+    const runId = randomUUID();
+
     // Tool Risk Model per-run call counter — scoped to this one turn (this
     // call to handleUserMessage), reset every time. See
     // OrchestratorDependencies.maxToolCallsPerRun's doc comment for why
@@ -237,6 +244,7 @@ export class Orchestrator {
           messages: conversation.getMessagesForBrain(),
           tools: toolRegistry.toToolDefinitions(),
           context: systemPrompt,
+          runId,
         });
 
         eventBus.emit("brain.response", {

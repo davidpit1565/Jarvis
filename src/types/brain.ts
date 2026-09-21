@@ -6,6 +6,15 @@ export interface BrainRequest {
   tools: ToolDefinition[];
   /** Extra context injected ahead of the conversation, e.g. relevant memory. */
   context?: string;
+  /**
+   * Scopes this call to one "run" — one `Orchestrator.handleUserMessage`
+   * turn, or one `AgentCore` task — for AIRouter's per-run cost ceiling
+   * (`maxCostPerRunUsd`, see `AIRouter`'s own doc comment) and for
+   * `AIRouter.chatWithEscalation`'s "which provider actually served this
+   * call" bookkeeping. Omitted means the call isn't scoped to any run: no
+   * per-run ceiling applies to it, same as today's behavior.
+   */
+  runId?: string;
 }
 
 export interface BrainResponse {

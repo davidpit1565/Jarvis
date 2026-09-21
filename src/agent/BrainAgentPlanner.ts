@@ -1,4 +1,4 @@
-import type { Brain } from "@/types/brain";
+import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { ToolDefinition, ToolResult } from "@/types/tools";
 import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import type {
@@ -8,6 +8,22 @@ import type {
   AgentVerificationRequest,
   AgentVerificationResult,
 } from "./types";
+
+/**
+ * Model Escalation's narrow optional extension of `Brain` — see
+ * `AIRouter.chatWithEscalation`'s own doc comment for the full contract
+ * (deterministic validation only, capped at one retry, respects
+ * ZERO_COST_MODE). Checked with `supportsEscalation` below rather than
+ * added to the base `Brain` interface, so every other `Brain`
+ * implementation (ClaudeBrain, GroqBrain, a test stub) needs no changes.
+ */
+interface EscalatingBrain extends Brain {
+  chatWithEscalation(request: BrainRequest, isValid: (response: BrainResponse) => boolean): Promise<BrainResponse>;
+}
+
+function supportsEscalation(brain: Brain): brain is EscalatingBrain {
+  return typeof (brain as Partial<EscalatingBrain>).chatWithEscalation === "function";
+}
 
 const PLAN_SYSTEM_PROMPT = `You are the planning component of JARVIS's autonomous agent core. Given a goal and a
 list of available tools, produce an ordered plan of tool calls that accomplishes the goal.
@@ -59,12 +75,24 @@ export class BrainAgentPlanner implements AgentPlanner {
       : "";
 
     const prompt = `Goal: ${request.goal}\n\nAvailable tools:\n${toolList}${priorFailureNote}${completedNote}`;
-
-    const response = await this.brain.chat({
+    const chatRequest: BrainRequest = {
       messages: [{ role: "user", content: prompt }],
       tools: [],
       context: PLAN_SYSTEM_PROMPT,
-    });
+      runId: request.taskId,
+    };
+
+    // Model Escalation: a plan response that doesn't parse into a JSON
+    // array at all (malformed/empty, not a legitimately-empty `[]` plan —
+    // see `isParsablePlanResponse`) is exactly the deterministic,
+    // schema-validation-failure signal the roadmap's escalation feature
+    // targets. One retry against a stronger allowed model (never an
+    // unbounded loop, never a paid model under ZERO_COST_MODE — see
+    // `AIRouter.chatWithEscalation`), then whatever comes back (better or
+    // not) is used as-is.
+    const response = supportsEscalation(this.brain)
+      ? await this.brain.chatWithEscalation(chatRequest, isParsablePlanResponse)
+      : await this.brain.chat(chatRequest);
 
     const parsed = extractJson(response.text);
     if (!Array.isArray(parsed)) return [];
@@ -84,6 +112,7 @@ export class BrainAgentPlanner implements AgentPlanner {
       messages: [{ role: "user", content: resultSummary }],
       tools: readOnlyTools,
       context: VERIFY_SYSTEM_PROMPT,
+      runId: request.taskId,
     });
 
     if (first.toolCalls.length === 0) {
@@ -111,6 +140,7 @@ export class BrainAgentPlanner implements AgentPlanner {
       ],
       tools: [],
       context: VERIFY_SYSTEM_PROMPT,
+      runId: request.taskId,
     });
 
     return parseVerdict(second.text);
@@ -140,6 +170,18 @@ function extractJson(text: string): unknown {
       return undefined;
     }
   }
+}
+
+/**
+ * Deterministic validity check for Model Escalation — true only if
+ * `response.text` parses into a JSON array (an intentionally-empty `[]`
+ * "goal can't be accomplished" plan still counts as valid; only a
+ * response that fails to parse into an array at all — prose, a fenced
+ * non-JSON block, truncated/malformed JSON, an empty string — counts as
+ * invalid and triggers one escalation retry).
+ */
+function isParsablePlanResponse(response: BrainResponse): boolean {
+  return Array.isArray(extractJson(response.text));
 }
 
 function isStepProposalShaped(value: unknown): value is AgentStepProposal {

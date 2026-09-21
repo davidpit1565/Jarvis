@@ -508,6 +508,7 @@ function main() {
     fallbackProvider: config.aiFallbackProvider,
     maxDailyCostUsd: config.maxDailyCostUsd,
     maxMonthlyCostUsd: config.maxMonthlyCostUsd,
+    maxCostPerRunUsd: config.maxCostPerRunUsd,
     zeroCostMode: config.zeroCostMode,
     circuitBreakerThreshold: config.aiCircuitBreakerThreshold,
     circuitBreakerCooldownMs: config.aiCircuitBreakerCooldownMs,

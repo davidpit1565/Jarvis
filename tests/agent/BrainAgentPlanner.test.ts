@@ -107,6 +107,92 @@ describe("BrainAgentPlanner.plan", () => {
   });
 });
 
+/**
+ * A Brain that also implements `chatWithEscalation` (AIRouter's Model
+ * Escalation contract), so `BrainAgentPlanner`'s duck-typed
+ * `supportsEscalation` check picks it up. Its own `chatWithEscalation`
+ * mimics AIRouter's real semantics closely enough for these unit tests:
+ * runs `chat()` once, and — only if the caller's `isValid` rejects the
+ * result — returns the next queued "escalated" response instead.
+ */
+class EscalatingScriptedBrain implements Brain {
+  requests: BrainRequest[] = [];
+  escalationCalls = 0;
+  constructor(
+    private readonly firstResponse: BrainResponse,
+    private readonly escalatedResponse: BrainResponse
+  ) {}
+
+  async chat(request: BrainRequest): Promise<BrainResponse> {
+    this.requests.push(request);
+    return this.firstResponse;
+  }
+
+  async chatWithEscalation(request: BrainRequest, isValid: (response: BrainResponse) => boolean): Promise<BrainResponse> {
+    const first = await this.chat(request);
+    if (isValid(first)) return first;
+    this.escalationCalls++;
+    return this.escalatedResponse;
+  }
+}
+
+describe("BrainAgentPlanner.plan — Model Escalation", () => {
+  test("escalates once when the first response doesn't parse into a JSON array, and uses the escalated plan", async () => {
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.registerTool(makeReadTool("list_things"));
+    const brain = new EscalatingScriptedBrain(
+      { text: "sorry, I can't help with that", toolCalls: [], stopReason: "end_turn" },
+      { text: '[{"toolName":"list_things","input":{},"description":"list them"}]', toolCalls: [], stopReason: "end_turn" }
+    );
+
+    const planner = new BrainAgentPlanner(brain, toolRegistry);
+    const plan = await planner.plan({ goal: "list the things", userId: "user-1", completedSteps: [], taskId: "task-1" });
+
+    expect(brain.escalationCalls).toBe(1);
+    expect(plan).toEqual([{ toolName: "list_things", input: {}, description: "list them" }]);
+  });
+
+  test("does not escalate when the first response is already a legitimately-empty plan", async () => {
+    const toolRegistry = new ToolRegistry();
+    const brain = new EscalatingScriptedBrain(
+      { text: "[]", toolCalls: [], stopReason: "end_turn" },
+      { text: '[{"toolName":"should_not_be_used","input":{},"description":"x"}]', toolCalls: [], stopReason: "end_turn" }
+    );
+
+    const planner = new BrainAgentPlanner(brain, toolRegistry);
+    const plan = await planner.plan({ goal: "impossible goal", userId: "user-1", completedSteps: [], taskId: "task-2" });
+
+    expect(brain.escalationCalls).toBe(0);
+    expect(plan).toEqual([]);
+  });
+
+  test("passes the task id through as runId, scoping Denial-of-wallet protection to this task", async () => {
+    const toolRegistry = new ToolRegistry();
+    const brain = new EscalatingScriptedBrain(
+      { text: "[]", toolCalls: [], stopReason: "end_turn" },
+      { text: "[]", toolCalls: [], stopReason: "end_turn" }
+    );
+
+    const planner = new BrainAgentPlanner(brain, toolRegistry);
+    await planner.plan({ goal: "goal", userId: "user-1", completedSteps: [], taskId: "task-42" });
+
+    expect(brain.requests[0]?.runId).toBe("task-42");
+  });
+
+  test("a plain Brain without chatWithEscalation still works exactly as before (no escalation attempted)", async () => {
+    const toolRegistry = new ToolRegistry();
+    const brain = new ScriptedBrain([{ text: "not valid json at all", toolCalls: [], stopReason: "end_turn" }]);
+
+    const planner = new BrainAgentPlanner(brain, toolRegistry);
+    const plan = await planner.plan({ goal: "goal", userId: "user-1", completedSteps: [], taskId: "task-3" });
+
+    // No escalation capability on this Brain -> falls straight through to
+    // extractJson, which fails to parse -> empty plan, same as before
+    // Model Escalation existed.
+    expect(plan).toEqual([]);
+  });
+});
+
 describe("BrainAgentPlanner.verify", () => {
   test("parses a direct JSON verdict with no tool call", async () => {
     const toolRegistry = new ToolRegistry();

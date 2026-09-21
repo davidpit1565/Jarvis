@@ -1,11 +1,22 @@
 import { describe, test, expect } from "bun:test";
-import { AIRouter, BudgetExceededError, ZeroCostModeError, CircuitOpenError } from "@/core/brain/AIRouter";
+import {
+  AIRouter,
+  BudgetExceededError,
+  ZeroCostModeError,
+  CircuitOpenError,
+  RunBudgetExceededError,
+  NoCapableProviderError,
+} from "@/core/brain/AIRouter";
 import { AIProviderRegistry } from "@/core/brain/AIProviderRegistry";
 import { CostTracker } from "@/core/cost/CostTracker";
 import { EventBus } from "@/core/events/EventBus";
 import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 
 const REQUEST: BrainRequest = { messages: [], tools: [] };
+const IMAGE_REQUEST: BrainRequest = {
+  messages: [{ role: "user", content: "what's in this photo?", images: [{ mediaType: "image/png", data: "abc123" }] }],
+  tools: [],
+};
 
 function okBrain(text: string, usage?: BrainResponse["usage"]): Brain {
   return {
@@ -474,6 +485,307 @@ describe("AIRouter", () => {
       const status = router.getProviderStatus();
       expect(status.groq!.costTier).toBe("free");
       expect(status.anthropic!.costTier).toBe("paid");
+    });
+  });
+
+  describe("ZERO_COST_MODE adversarial — combined with Model Escalation", () => {
+    test("chatWithEscalation never reaches the paid provider when every free provider fails, even on a validation-failure retry", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      // The only free provider always "succeeds" but with a response the
+      // caller's validator rejects — simulating a malformed/empty
+      // structured response, exactly the case chatWithEscalation exists
+      // for. If ZERO_COST_MODE had any gap, this is where it would show:
+      // escalation would try to reach for the paid provider next.
+      registry.register(
+        "groq",
+        {
+          async chat(): Promise<BrainResponse> {
+            calls.push("groq");
+            return { text: "not json", toolCalls: [], stopReason: "stop" };
+          },
+        },
+        "free"
+      );
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { zeroCostMode: true, freeFirst: true });
+
+      const response = await router.chatWithEscalation(REQUEST, (r) => r.text === "valid");
+
+      // The invalid-but-only-affordable response is returned as-is —
+      // never an exception, never a silent reach for the paid provider.
+      expect(response.text).toBe("not json");
+      expect(calls).toEqual(["groq"]);
+      expect(costTracker.getTodaySpend()).toBe(0);
+    });
+
+    test("chatWithEscalation throws ZeroCostModeError (not silently degrading) when the primary call itself fails and no free fallback exists", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", failingBrain("groq down"), "free");
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { zeroCostMode: true, freeFirst: true });
+
+      // The primary call itself throws (not a validation failure) — this
+      // goes through the ordinary fallback path inside chatInternal, which
+      // ZERO_COST_MODE must still gate identically whether reached via
+      // chat() or chatWithEscalation().
+      await expect(router.chatWithEscalation(REQUEST, () => true)).rejects.toThrow(ZeroCostModeError);
+      expect(calls).toEqual([]);
+    });
+  });
+
+  describe("Denial-of-wallet protection — per-run cost ceiling", () => {
+    test("falls back to the free provider once a run's own spend reaches maxCostPerRunUsd, even though the daily cap is nowhere near exceeded", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      registry.register("groq", countingBrain("free reply", calls, "groq"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, {
+        explicitProvider: "anthropic",
+        maxCostPerRunUsd: 0.01,
+        maxDailyCostUsd: 1000,
+      });
+      const request: BrainRequest = { messages: [], tools: [], runId: "run-1" };
+
+      // Pre-seed run-1's accumulator past the ceiling directly via the
+      // same CostTracker the router reads from.
+      costTracker.recordRunCost("run-1", 0.02);
+
+      const response = await router.chat(request);
+      expect(response.text).toBe("free reply");
+      expect(calls).toEqual(["groq"]);
+    });
+
+    test("throws RunBudgetExceededError when the run ceiling is hit and no free provider is configured", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("anthropic", okBrain("paid reply"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      costTracker.recordRunCost("run-2", 5);
+      const router = new AIRouter(registry, costTracker, { maxCostPerRunUsd: 5 });
+
+      await expect(router.chat({ messages: [], tools: [], runId: "run-2" })).rejects.toThrow(RunBudgetExceededError);
+    });
+
+    test("a different run's spend never counts against this run's ceiling", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("anthropic", okBrain("paid reply"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      costTracker.recordRunCost("other-run", 100); // way over any reasonable ceiling
+      const router = new AIRouter(registry, costTracker, { maxCostPerRunUsd: 1 });
+
+      const response = await router.chat({ messages: [], tools: [], runId: "this-run" });
+      expect(response.text).toBe("paid reply");
+    });
+
+    test("accumulates real spend across multiple calls sharing a runId and eventually trips the ceiling", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register(
+        "anthropic",
+        {
+          async chat(): Promise<BrainResponse> {
+            calls.push("anthropic");
+            return {
+              text: "paid reply",
+              toolCalls: [],
+              stopReason: "stop",
+              usage: { inputTokens: 1_000_000, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+            };
+          },
+        },
+        "paid"
+      );
+      registry.register("groq", countingBrain("free reply", calls, "groq"), "free");
+      const costTracker = new CostTracker(":memory:");
+      // $3/M input tokens (see CostTracker) -> each call costs $3. The
+      // ceiling is checked against spend *so far* (before this call), so
+      // the 1st call (spend=0) still goes through paid; only once that
+      // $3 is actually recorded does the 2nd call's check see spend >= 3.
+      const router = new AIRouter(registry, costTracker, { explicitProvider: "anthropic", maxCostPerRunUsd: 3 });
+      const request: BrainRequest = { messages: [], tools: [], runId: "run-3" };
+
+      const first = await router.chat(request); // spend was $0 before this call -> allowed; now $3 spent this run
+      expect(first.text).toBe("paid reply");
+
+      const second = await router.chat(request); // spend is $3 >= $3 ceiling -> falls back to free
+      expect(second.text).toBe("free reply");
+      expect(calls).toEqual(["anthropic", "groq"]);
+    });
+
+    test("ZERO_COST_MODE still wins over maxCostPerRunUsd — never reaches the paid provider even before the run ceiling is hit", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      registry.register("groq", countingBrain("free reply", calls, "groq"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, {
+        explicitProvider: "anthropic",
+        zeroCostMode: true,
+        maxCostPerRunUsd: 1000, // nowhere near exceeded
+      });
+
+      const response = await router.chat({ messages: [], tools: [], runId: "run-4" });
+      expect(response.text).toBe("free reply");
+      expect(calls).toEqual(["groq"]);
+    });
+
+    test("a request with no runId is never subject to the per-run ceiling", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("anthropic", okBrain("paid reply"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { maxCostPerRunUsd: 0.0000001 });
+
+      const response = await router.chat(REQUEST); // no runId
+      expect(response.text).toBe("paid reply");
+    });
+  });
+
+  describe("Model Escalation", () => {
+    test("retries once against the stronger provider when the caller's deterministic validator rejects the first response", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", countingBrain("not json", calls, "groq"), "free");
+      registry.register("anthropic", countingBrain('["valid"]', calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { freeFirst: true });
+
+      const response = await router.chatWithEscalation(REQUEST, (r) => r.text.startsWith("["));
+      expect(response.text).toBe('["valid"]');
+      expect(calls).toEqual(["groq", "anthropic"]);
+    });
+
+    test("does not escalate when the first response already passes validation", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", countingBrain('["valid"]', calls, "groq"), "free");
+      registry.register("anthropic", countingBrain('["should not be called"]', calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { freeFirst: true });
+
+      const response = await router.chatWithEscalation(REQUEST, (r) => r.text.startsWith("["));
+      expect(response.text).toBe('["valid"]');
+      expect(calls).toEqual(["groq"]);
+    });
+
+    test("caps escalation at exactly one retry — a still-invalid escalated response is returned as-is, no further retry", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", countingBrain("bad", calls, "groq"), "free");
+      registry.register("anthropic", countingBrain("still bad", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { freeFirst: true });
+
+      const response = await router.chatWithEscalation(REQUEST, (r) => r.text === "never valid");
+      expect(response.text).toBe("still bad");
+      expect(calls).toEqual(["groq", "anthropic"]); // exactly one escalation call, not more
+    });
+
+    test("never escalates to a weaker or equal-quality provider", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      // Both free providers rank "good" in ModelCatalog — neither is
+      // "stronger" than the other, so an invalid groq response must not
+      // trigger an openrouter call.
+      registry.register("groq", countingBrain("bad", calls, "groq"), "free");
+      registry.register("openrouter", countingBrain("also would be bad", calls, "openrouter"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { explicitProvider: "groq" });
+
+      const response = await router.chatWithEscalation(REQUEST, () => false);
+      expect(response.text).toBe("bad");
+      expect(calls).toEqual(["groq"]);
+    });
+
+    test("falls back to the original response, without throwing, when escalating would violate ZERO_COST_MODE", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", countingBrain("bad", calls, "groq"), "free");
+      registry.register("anthropic", countingBrain("would be better", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { explicitProvider: "groq", zeroCostMode: true });
+
+      const response = await router.chatWithEscalation(REQUEST, () => false);
+      expect(response.text).toBe("bad");
+      expect(calls).toEqual(["groq"]); // anthropic never touched
+    });
+
+    test("emits ai.escalation when it actually escalates", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", okBrain("bad"), "free");
+      registry.register("anthropic", okBrain("good"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const eventBus = new EventBus();
+      const events: unknown[] = [];
+      eventBus.on("ai.escalation", (payload) => events.push(payload));
+      const router = new AIRouter(registry, costTracker, { freeFirst: true, eventBus });
+
+      await router.chatWithEscalation(REQUEST, (r) => r.text === "good");
+      expect(events).toEqual([{ from: "groq", to: "anthropic", reason: "validation-failed" }]);
+    });
+  });
+
+  describe("Fallback Correctness — capability-aware routing", () => {
+    test("picks the vision-capable paid provider as primary for an image request even with freeFirst on and a non-vision free provider configured", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", countingBrain("free reply (no vision)", calls, "groq"), "free");
+      registry.register("anthropic", countingBrain("paid reply (vision)", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { freeFirst: true });
+
+      const response = await router.chat(IMAGE_REQUEST);
+      expect(response.text).toBe("paid reply (vision)");
+      expect(calls).toEqual(["anthropic"]);
+    });
+
+    test("a text-only request is unaffected — still free-first as before", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", countingBrain("free reply", calls, "groq"), "free");
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { freeFirst: true });
+
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("free reply");
+      expect(calls).toEqual(["groq"]);
+    });
+
+    test("throws NoCapableProviderError for an image request when no configured provider supports vision", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", okBrain("free reply"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, {});
+
+      await expect(router.chat(IMAGE_REQUEST)).rejects.toThrow(NoCapableProviderError);
+    });
+
+    test("fallback-on-failure skips a non-vision-capable provider for an image request, and throws the original error instead of degrading", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("anthropic", failingBrain("anthropic down"), "paid");
+      registry.register("groq", countingBrain("should never be reached", calls, "groq"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { explicitProvider: "anthropic" });
+
+      await expect(router.chat(IMAGE_REQUEST)).rejects.toThrow("anthropic down");
+      expect(calls).toEqual([]); // groq (no vision) never called for an image request
+    });
+
+    test("an explicit provider still wins even for an image request it can't actually serve well (operator override respected)", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", countingBrain("groq reply", calls, "groq"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { explicitProvider: "groq" });
+
+      const response = await router.chat(IMAGE_REQUEST);
+      expect(response.text).toBe("groq reply");
+      expect(calls).toEqual(["groq"]);
     });
   });
 });

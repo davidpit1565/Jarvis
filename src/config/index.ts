@@ -60,6 +60,17 @@ export interface JarvisConfig {
   /** Optional monthly USD cap on paid-provider spend (estimated); unset means unlimited. See CostTracker. */
   maxMonthlyCostUsd?: number;
   /**
+   * Denial-of-wallet protection: optional hard USD ceiling on estimated
+   * paid-provider spend within a single run (one `handleUserMessage` turn
+   * or one `AgentCore` task). Once reached, further paid-provider calls
+   * *for that same run* fall back to a free provider (or fail clearly if
+   * none is configured) — independent of and stricter-scoped than
+   * `maxDailyCostUsd`/`maxMonthlyCostUsd`, which only bound spend in
+   * aggregate. Unset means unlimited (today's behavior). See
+   * `AIRouter.maxCostPerRunUsd`/`RunBudgetExceededError`.
+   */
+  maxCostPerRunUsd?: number;
+  /**
    * Hard zero-cost boundary: when true, AIRouter never calls a paid
    * provider under any circumstance (not even as a fallback when the
    * free provider fails) — it throws `ZeroCostModeError` instead. This
@@ -441,6 +452,12 @@ export function loadConfig(): JarvisConfig {
   const zeroCostModeRaw = process.env.ZERO_COST_MODE?.trim().toLowerCase();
   const zeroCostMode = zeroCostModeRaw === "true";
 
+  const maxCostPerRunUsdRaw = process.env.JARVIS_MAX_COST_PER_RUN_USD?.trim();
+  const maxCostPerRunUsd = maxCostPerRunUsdRaw ? Number(maxCostPerRunUsdRaw) : undefined;
+  if (maxCostPerRunUsdRaw && (Number.isNaN(maxCostPerRunUsd) || maxCostPerRunUsd! <= 0)) {
+    throw new ConfigError("Invalid JARVIS_MAX_COST_PER_RUN_USD: must be a positive number");
+  }
+
   const aiCircuitBreakerThresholdRaw = process.env.AI_CIRCUIT_BREAKER_THRESHOLD?.trim();
   const aiCircuitBreakerThreshold = aiCircuitBreakerThresholdRaw ? Number(aiCircuitBreakerThresholdRaw) : 3;
   if (
@@ -747,6 +764,7 @@ export function loadConfig(): JarvisConfig {
     aiFallbackProvider,
     maxDailyCostUsd,
     maxMonthlyCostUsd,
+    maxCostPerRunUsd,
     zeroCostMode,
     aiCircuitBreakerThreshold,
     aiCircuitBreakerCooldownMs,
