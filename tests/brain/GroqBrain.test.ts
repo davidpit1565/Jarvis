@@ -65,6 +65,14 @@ describe("fromOpenAIResponse", () => {
     expect(result.stopReason).toBe("unknown");
   });
 
+  test("carries the response's model, for CostTracker's per-model ledger", () => {
+    const result = fromOpenAIResponse({
+      choices: [{ message: { content: "hi" }, finish_reason: "stop" }],
+      model: "llama-3.3-70b-versatile",
+    });
+    expect(result.model).toBe("llama-3.3-70b-versatile");
+  });
+
   test("leaves usage undefined when the provider omits it", () => {
     const result = fromOpenAIResponse({ choices: [{ message: { content: "hi" }, finish_reason: "stop" }] });
     expect(result.usage).toBeUndefined();

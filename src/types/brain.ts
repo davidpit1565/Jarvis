@@ -15,6 +15,16 @@ export interface BrainRequest {
    * per-run ceiling applies to it, same as today's behavior.
    */
   runId?: string;
+  /**
+   * Coarse label for what kind of work this call serves — e.g. "chat"
+   * (Orchestrator.handleUserMessage), "agent-plan"/"agent-verify"
+   * (BrainAgentPlanner). Purely descriptive: it drives no routing
+   * decision, it only tags the resulting `CostTracker` record so the
+   * cost ledger can be broken down by task type. Omitted means
+   * "unlabeled" — the record is still written, just without this
+   * dimension.
+   */
+  taskType?: string;
 }
 
 export interface BrainResponse {
@@ -32,6 +42,8 @@ export interface BrainResponse {
   serverToolUses?: string[];
   /** Token accounting for this call, when the provider reports it — the basis for real cost tracking. */
   usage?: TokenUsage;
+  /** The exact model name that actually served this call, when the provider's response reports it (e.g. Anthropic's `response.model`). Undefined for a provider/mock that doesn't echo it back. */
+  model?: string;
 }
 
 export interface TokenUsage {

@@ -297,6 +297,7 @@ export class Orchestrator {
           tools: toolRegistry.toToolDefinitions(scopedTools),
           context: systemPrompt,
           runId,
+          taskType: "chat",
         });
 
         eventBus.emit("brain.response", {
@@ -479,6 +480,7 @@ export class Orchestrator {
       tools: [],
       context: systemPrompt,
       runId,
+      taskType: "chat",
     });
     eventBus.emit("brain.response", {
       text: response.text,

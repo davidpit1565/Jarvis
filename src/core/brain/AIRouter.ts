@@ -106,6 +106,22 @@ export interface AIRouterOptions {
    * `ZeroCostModeError` instead. Defaults to false.
    */
   zeroCostMode?: boolean;
+  /**
+   * Budget-constrained degradation (JARVIS_ROADMAP_AUDIT.md batch 3): once
+   * today's or this month's spend reaches this *fraction* of
+   * `maxDailyCostUsd`/`maxMonthlyCostUsd` (e.g. 0.8 = 80%), a paid
+   * candidate is proactively swapped for a free provider — same as
+   * reaching the cap outright, just earlier — instead of only reacting
+   * once the hard cap is already hit. This is a soft, graceful nudge
+   * toward the free tier while budget is still technically available, not
+   * a new hard boundary: unlike the hard cap, there's no
+   * `BudgetExceededError` if no free provider exists to swap to — the
+   * paid candidate is used as normal, exactly like today's behavior below
+   * the threshold. Ignored when neither `maxDailyCostUsd` nor
+   * `maxMonthlyCostUsd` is configured (there's no cap to be "close to").
+   * Defaults to 0.8; set to a value >= 1 (or Infinity) to disable.
+   */
+  softBudgetCapRatio?: number;
   /** Consecutive failures before a provider's circuit breaker opens. Defaults to 3. */
   circuitBreakerThreshold?: number;
   /** How long (ms) a provider's circuit stays open before a single half-open trial call is allowed through. Defaults to 60_000. */
@@ -117,6 +133,8 @@ export interface AIRouterOptions {
 const PROVIDER_STATS_WINDOW = 20;
 const DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+/** Default fraction of a configured daily/monthly cap at which budget-constrained degradation starts biasing toward free providers. See `AIRouterOptions.softBudgetCapRatio`. */
+const DEFAULT_SOFT_BUDGET_CAP_RATIO = 0.8;
 
 /** Coarse, ordered ranking of `ModelCatalogEntry.capabilities.quality` — used only to pick a "stronger" model for escalation, never for routine routing. */
 const QUALITY_RANK: Record<ModelCapabilities["quality"], number> = { basic: 0, good: 1, excellent: 2 };
@@ -273,7 +291,7 @@ export class AIRouter implements Brain {
 
     this.options.eventBus?.emit("ai.escalation", { from: used.value, to: actual, reason: "validation-failed" });
     try {
-      return await this.timedCall(actual, request);
+      return await this.timedCall(actual, request, true);
     } catch {
       // The stronger provider's call itself failed — fall back to the
       // original response rather than throwing, and never retry again
@@ -353,18 +371,19 @@ export class AIRouter implements Brain {
     if (this.effectiveCircuitState(actualFallback) === "open") throw errorIfUnusable;
 
     this.options.eventBus?.emit("ai.providerFallback", { from: primary, to: actualFallback, reason });
-    const response = await this.timedCall(actualFallback, request);
+    const response = await this.timedCall(actualFallback, request, true);
     if (providerUsedOut) providerUsedOut.value = actualFallback;
     return response;
   }
 
-  private async timedCall(provider: ProviderName, request: BrainRequest): Promise<BrainResponse> {
+  private async timedCall(provider: ProviderName, request: BrainRequest, isFallback = false): Promise<BrainResponse> {
     const wasHalfOpenTrial = this.effectiveCircuitState(provider) === "half-open";
     const start = performance.now();
     try {
       const response = await this.registry.get(provider)!.chat(request);
-      this.recordOutcome(provider, true, performance.now() - start, wasHalfOpenTrial);
-      this.recordCost(provider, response, request.runId);
+      const latencyMs = performance.now() - start;
+      this.recordOutcome(provider, true, latencyMs, wasHalfOpenTrial);
+      this.recordCost(provider, response, request, latencyMs, isFallback);
       return response;
     } catch (err) {
       this.recordOutcome(provider, false, performance.now() - start, wasHalfOpenTrial);
@@ -520,7 +539,19 @@ export class AIRouter implements Brain {
       this.options.maxMonthlyCostUsd !== undefined &&
       this.costTracker.getMonthSpend() >= this.options.maxMonthlyCostUsd;
 
-    if (!dailyExceeded && !monthlyExceeded) return candidate;
+    if (!dailyExceeded && !monthlyExceeded) {
+      // Budget-constrained degradation: not over the hard cap, but close
+      // to it — bias toward a free provider now rather than waiting for
+      // the cap to actually be hit. A soft nudge, never a hard failure:
+      // if no free provider is available this just falls through to using
+      // `candidate` as normal, same as today.
+      const softCapFree = this.softCapFreeProvider(alreadyTried);
+      if (softCapFree) {
+        this.options.eventBus?.emit("ai.providerFallback", { from: candidate, to: softCapFree, reason: "soft-budget-cap" });
+        return softCapFree;
+      }
+      return candidate;
+    }
 
     const free = this.registry.findByCostTier("free")[0];
     if (free) {
@@ -534,15 +565,50 @@ export class AIRouter implements Brain {
     );
   }
 
-  private recordCost(provider: ProviderName, response: BrainResponse, runId?: string): void {
+  /**
+   * Budget-constrained degradation: returns an untried free provider if
+   * today's or this month's spend has crossed `softBudgetCapRatio` of its
+   * configured cap, or undefined if neither cap is configured, the ratio
+   * disables the feature (>= 1), spend is still comfortably under both,
+   * or no free provider is available to swap to.
+   */
+  private softCapFreeProvider(alreadyTried: ReadonlySet<ProviderName>): ProviderName | undefined {
+    const ratio = this.options.softBudgetCapRatio ?? DEFAULT_SOFT_BUDGET_CAP_RATIO;
+    if (ratio >= 1) return undefined;
+
+    const dailyClose =
+      this.options.maxDailyCostUsd !== undefined && this.costTracker.getTodaySpend() >= this.options.maxDailyCostUsd * ratio;
+    const monthlyClose =
+      this.options.maxMonthlyCostUsd !== undefined &&
+      this.costTracker.getMonthSpend() >= this.options.maxMonthlyCostUsd * ratio;
+    if (!dailyClose && !monthlyClose) return undefined;
+
+    return this.registry.findByCostTier("free").find((name) => !alreadyTried.has(name));
+  }
+
+  private recordCost(
+    provider: ProviderName,
+    response: BrainResponse,
+    request: BrainRequest,
+    latencyMs: number,
+    isFallback: boolean
+  ): void {
     // Failed calls aren't recorded: a call that errors (network failure,
     // 429/5xx) is the common case where no tokens were actually billed,
     // and without a response there's no usage data to estimate from
     // anyway — recording a guessed cost for it would be less honest than
     // recording nothing.
     const cost = estimateCostUsd(provider, response.usage);
-    this.costTracker.record(provider, cost);
-    if (runId) this.costTracker.recordRunCost(runId, cost);
+    this.costTracker.record(provider, cost, undefined, {
+      model: response.model,
+      usage: response.usage,
+      runId: request.runId,
+      latencyMs,
+      toolCallCount: response.toolCalls.length,
+      fallback: isFallback,
+      taskType: request.taskType,
+    });
+    if (request.runId) this.costTracker.recordRunCost(request.runId, cost);
   }
 
   private circuitOpenMessage(provider: ProviderName): string {

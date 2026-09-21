@@ -7,6 +7,7 @@ import { JarvisWebSocketServer, type JarvisWebSocketServerDependencies } from "@
 import { MemoryStore } from "@/memory/MemoryStore";
 import { AutomationRuleStore } from "@/automation/AutomationRuleStore";
 import { CostTracker } from "@/core/cost/CostTracker";
+import { ToolResultCache } from "@/core/cache/ToolResultCache";
 import { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 import { ToolAuditLog } from "@/audit/ToolAuditLog";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
@@ -162,6 +163,75 @@ describe("GET /cost-analytics", () => {
     activeHandle = handle;
     const response = await fetch(`http://localhost:${port}/cost-analytics?limit=0`);
     expect(response.status).toBe(400);
+  });
+
+  test("includes week/model/taskType breakdowns and measured promptCache stats", async () => {
+    const costTracker = new CostTracker();
+    costTracker.record("anthropic", 0.05, undefined, {
+      model: "claude-sonnet-4-5-20250929",
+      usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 50 },
+      taskType: "chat",
+    });
+    const { handle, port } = setupServer({ costTrackerForAdmin: costTracker });
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${port}/cost-analytics`);
+    const body = (await response.json()) as {
+      weekSpendUsd: number;
+      byModel: Array<{ model: string; calls: number }>;
+      byTaskType: Array<{ taskType: string; calls: number }>;
+      promptCache: { calls: number; cacheHitRate: number; estimatedSavingsUsd: number };
+      toolCache?: { hits: number; misses: number };
+    };
+    expect(response.status).toBe(200);
+    expect(body.weekSpendUsd).toBeCloseTo(0.05);
+    expect(body.byModel.find((m) => m.model === "claude-sonnet-4-5-20250929")?.calls).toBe(1);
+    expect(body.byTaskType.find((t) => t.taskType === "chat")?.calls).toBe(1);
+    expect(body.promptCache.calls).toBe(1);
+    expect(body.promptCache.cacheHitRate).toBe(1);
+    expect(body.promptCache.estimatedSavingsUsd).toBeGreaterThan(0);
+    expect(body.toolCache).toBeUndefined();
+  });
+
+  test("includes toolCache stats only when toolResultCacheForAdmin is configured", async () => {
+    const costTracker = new CostTracker();
+    const toolResultCache = new ToolResultCache(60_000);
+    toolResultCache.get("GET_WEATHER", { city: "Tel Aviv" }); // miss
+    toolResultCache.set("GET_WEATHER", { city: "Tel Aviv" }, { success: true, data: {} });
+    toolResultCache.get("GET_WEATHER", { city: "Tel Aviv" }); // hit
+    const { handle, port } = setupServer({ costTrackerForAdmin: costTracker, toolResultCacheForAdmin: toolResultCache });
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${port}/cost-analytics`);
+    const body = (await response.json()) as { toolCache: { hits: number; misses: number; hitRate: number } };
+    expect(body.toolCache).toEqual({ hits: 1, misses: 1, hitRate: 0.5 });
+  });
+
+  test("?runId= returns that run's full ledger rollup", async () => {
+    const costTracker = new CostTracker();
+    costTracker.record("anthropic", 0.05, undefined, {
+      model: "claude-sonnet-4-5-20250929",
+      usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      runId: "run-1",
+      toolCallCount: 1,
+    });
+    const { handle, port } = setupServer({ costTrackerForAdmin: costTracker });
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${port}/cost-analytics?runId=run-1`);
+    const body = (await response.json()) as { runLedger: { runId: string; calls: number; toolCalls: number } };
+    expect(response.status).toBe(200);
+    expect(body.runLedger.runId).toBe("run-1");
+    expect(body.runLedger.calls).toBe(1);
+    expect(body.runLedger.toolCalls).toBe(1);
+  });
+
+  test("?runId= for an unknown run 404s", async () => {
+    const costTracker = new CostTracker();
+    const { handle, port } = setupServer({ costTrackerForAdmin: costTracker });
+    activeHandle = handle;
+    const response = await fetch(`http://localhost:${port}/cost-analytics?runId=nonexistent`);
+    expect(response.status).toBe(404);
   });
 });
 

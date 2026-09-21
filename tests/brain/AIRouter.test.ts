@@ -242,6 +242,80 @@ describe("AIRouter", () => {
     });
   });
 
+  describe("budget-constrained degradation (soft cap)", () => {
+    test("biases toward a free provider once spend crosses the default 80% soft cap, below the hard cap", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      registry.register("groq", countingBrain("free reply", calls, "groq"), "free");
+      const costTracker = new CostTracker(":memory:");
+      costTracker.record("anthropic", 4.5); // 90% of a $5 daily cap — over the 80% soft threshold, under the hard cap
+      const router = new AIRouter(registry, costTracker, { explicitProvider: "anthropic", maxDailyCostUsd: 5 });
+
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("free reply");
+      expect(calls).toEqual(["groq"]);
+    });
+
+    test("emits ai.providerFallback with reason 'soft-budget-cap'", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("anthropic", okBrain("paid reply"), "paid");
+      registry.register("groq", okBrain("free reply"), "free");
+      const costTracker = new CostTracker(":memory:");
+      costTracker.record("anthropic", 4.5);
+      const eventBus = new EventBus();
+      const events: Array<{ from: string; to: string; reason: string }> = [];
+      eventBus.on("ai.providerFallback", (payload) => events.push(payload));
+      const router = new AIRouter(registry, costTracker, {
+        explicitProvider: "anthropic",
+        maxDailyCostUsd: 5,
+        eventBus,
+      });
+
+      await router.chat(REQUEST);
+      expect(events).toEqual([{ from: "anthropic", to: "groq", reason: "soft-budget-cap" }]);
+    });
+
+    test("does not bias below the soft cap threshold — paid provider is used as normal", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("anthropic", okBrain("paid reply"), "paid");
+      registry.register("groq", okBrain("free reply"), "free");
+      const costTracker = new CostTracker(":memory:");
+      costTracker.record("anthropic", 1); // 20% of a $5 cap — well under the 80% threshold
+      const router = new AIRouter(registry, costTracker, { explicitProvider: "anthropic", maxDailyCostUsd: 5 });
+
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("paid reply");
+    });
+
+    test("a softBudgetCapRatio >= 1 disables the feature entirely", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("anthropic", okBrain("paid reply"), "paid");
+      registry.register("groq", okBrain("free reply"), "free");
+      const costTracker = new CostTracker(":memory:");
+      costTracker.record("anthropic", 4.9); // 98% of the cap — would trigger the default soft cap
+      const router = new AIRouter(registry, costTracker, {
+        explicitProvider: "anthropic",
+        maxDailyCostUsd: 5,
+        softBudgetCapRatio: 1,
+      });
+
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("paid reply");
+    });
+
+    test("falls through to the paid candidate as normal when no free provider is configured to swap to", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("anthropic", okBrain("paid reply"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      costTracker.record("anthropic", 4.5);
+      const router = new AIRouter(registry, costTracker, { maxDailyCostUsd: 5 });
+
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("paid reply");
+    });
+  });
+
   describe("cost recording", () => {
     test("records the response's estimated cost after a successful call", async () => {
       const registry = new AIProviderRegistry();
@@ -256,6 +330,57 @@ describe("AIRouter", () => {
 
       await router.chat(REQUEST);
       expect(costTracker.getTodaySpend()).toBeCloseTo(3, 5); // $3/M input tokens
+    });
+
+    test("passes the full ledger — model, usage, runId, latency, toolCallCount, taskType — through to CostTracker", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register(
+        "anthropic",
+        {
+          async chat(): Promise<BrainResponse> {
+            return {
+              text: "reply",
+              toolCalls: [{ id: "1", toolName: "SOME_TOOL", input: {} }],
+              stopReason: "stop",
+              usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 10 },
+              model: "claude-sonnet-4-5-20250929",
+            };
+          },
+        },
+        "paid"
+      );
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, {});
+
+      await router.chat({ messages: [], tools: [], runId: "run-abc", taskType: "chat" });
+
+      const [record] = costTracker.listRecent(1);
+      expect(record).toMatchObject({
+        provider: "anthropic",
+        model: "claude-sonnet-4-5-20250929",
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadInputTokens: 10,
+        runId: "run-abc",
+        toolCallCount: 1,
+        fallback: false,
+        taskType: "chat",
+      });
+      expect(record!.latencyMs).toBeGreaterThanOrEqual(0);
+    });
+
+    test("marks a fallback-provider call's ledger record with fallback: true", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("anthropic", failingBrain("primary down"), "paid");
+      registry.register("groq", okBrain("free reply"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { explicitProvider: "anthropic" });
+
+      await router.chat(REQUEST);
+
+      const [record] = costTracker.listRecent(1);
+      expect(record!.provider).toBe("groq");
+      expect(record!.fallback).toBe(true);
     });
   });
 

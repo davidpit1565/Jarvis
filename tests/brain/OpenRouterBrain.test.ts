@@ -74,6 +74,14 @@ describe("fromOpenAIResponse", () => {
     expect(result.toolCalls).toEqual([]);
     expect(result.stopReason).toBe("unknown");
   });
+
+  test("carries the response's model, for CostTracker's per-model ledger", () => {
+    const result = fromOpenAIResponse({
+      choices: [{ message: { content: "hi" }, finish_reason: "stop" }],
+      model: "meta-llama/llama-3.1-8b-instruct:free",
+    });
+    expect(result.model).toBe("meta-llama/llama-3.1-8b-instruct:free");
+  });
 });
 
 describe("OpenRouterBrain.chat", () => {

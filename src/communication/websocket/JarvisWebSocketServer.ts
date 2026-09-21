@@ -30,6 +30,7 @@ import type { DeviceVoiceGateway } from "@/communication/voice/DeviceVoiceGatewa
 import type { LockdownService } from "@/core/lockdown/LockdownService";
 import type { AutomationRuleStore } from "@/automation/AutomationRuleStore";
 import type { CostTracker } from "@/core/cost/CostTracker";
+import type { ToolResultCache } from "@/core/cache/ToolResultCache";
 import type { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
 import { DASHBOARD_HTML, LOCK_HTML } from "./dashboard";
@@ -304,11 +305,21 @@ export interface JarvisWebSocketServerDependencies {
   automationRuleStoreForAdmin?: AutomationRuleStore;
   /**
    * Optional: enables the admin-gated `GET /cost-analytics` read-only
-   * endpoint — today/month spend, a per-provider breakdown, and recent
-   * call records from `CostTracker` — the Cost Analytics panel
-   * (JARVIS_ROADMAP_AUDIT.md #192). Without it, the route 404s.
+   * endpoint — today/week/month spend, breakdowns by provider/model/task
+   * type, recent call records, measured prompt-cache effectiveness, and
+   * (with `?runId=`) a single run's full unified-AI-Cost-Ledger rollup —
+   * from `CostTracker` — the Cost Analytics panel (JARVIS_ROADMAP_AUDIT.md
+   * #192, extended in batch 3). Without it, the route 404s.
    */
   costTrackerForAdmin?: CostTracker;
+  /**
+   * Optional: when set, `GET /cost-analytics` also includes
+   * `toolResultCache` hit/miss stats (JARVIS_ROADMAP_AUDIT.md batch 3) —
+   * the previously-ephemeral `tool.cacheHit` signal, now aggregated.
+   * Independent of `costTrackerForAdmin`: the route still works (just
+   * without this field) if only one of the two is configured.
+   */
+  toolResultCacheForAdmin?: ToolResultCache;
   /**
    * Optional: enables the admin-gated `GET /agent-status` read-only
    * endpoint (every live session's current JarvisLiveState snapshot —
@@ -1572,15 +1583,23 @@ export class JarvisWebSocketServer {
   }
 
   /**
-   * GET /cost-analytics — read-only admin view of `CostTracker` data: today
-   * and month-to-date spend, a per-provider breakdown, and the most recent
-   * recorded calls — the Cost Analytics panel (JARVIS_ROADMAP_AUDIT.md
-   * #192). 404s when no `costTrackerForAdmin` is configured. Optional
-   * `?limit=N` for the recent-calls list (default 50). Same admin-token
-   * gating rationale as GET /reminders above.
+   * GET /cost-analytics — read-only admin view of `CostTracker` data: the
+   * unified AI Cost Ledger (JARVIS_ROADMAP_AUDIT.md #192, extended in
+   * batch 3). Today/week/month-to-date spend, breakdowns by
+   * provider/model/task type, the most recent recorded calls, and
+   * measured (not assumed) prompt-cache effectiveness — real hit rate and
+   * an explicitly-labeled *estimated* dollar savings figure, never
+   * presented as a real invoice line. 404s when no `costTrackerForAdmin`
+   * is configured. Optional `?limit=N` for the recent-calls list (default
+   * 50), and `?runId=<id>` to instead return that one run's full ledger
+   * rollup (every dimension in one place) in place of the aggregate
+   * breakdowns — 404s with a body if that runId has no recorded calls.
+   * `toolCache` (hit/miss/hitRate for `ToolResultCache`) is included only
+   * when `toolResultCacheForAdmin` is configured. Same admin-token gating
+   * rationale as GET /reminders above.
    */
   private handleCostAnalyticsHttp(req: Request, url: URL, server: BunServer): Response {
-    const { adminToken, costTrackerForAdmin } = this.deps;
+    const { adminToken, costTrackerForAdmin, toolResultCacheForAdmin } = this.deps;
     if (!costTrackerForAdmin) {
       return new Response("Not found", { status: 404 });
     }
@@ -1590,6 +1609,16 @@ export class JarvisWebSocketServer {
     if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
     }
+
+    const runId = url.searchParams.get("runId");
+    if (runId) {
+      const ledger = costTrackerForAdmin.getRunLedger(runId);
+      if (!ledger) {
+        return Response.json({ error: `No recorded calls for runId "${runId}"` }, { status: 404 });
+      }
+      return Response.json({ runLedger: ledger });
+    }
+
     const limitParam = url.searchParams.get("limit");
     const limit = limitParam ? Number(limitParam) : undefined;
     if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
@@ -1597,9 +1626,17 @@ export class JarvisWebSocketServer {
     }
     return Response.json({
       todaySpendUsd: costTrackerForAdmin.getTodaySpend(),
+      weekSpendUsd: costTrackerForAdmin.getWeekSpend(),
       monthSpendUsd: costTrackerForAdmin.getMonthSpend(),
       byProvider: costTrackerForAdmin.getBreakdownByProvider(),
+      byModel: costTrackerForAdmin.getBreakdownByModel(),
+      byTaskType: costTrackerForAdmin.getBreakdownByTaskType(),
       recent: costTrackerForAdmin.listRecent(limit ?? 50),
+      // Real, measured prompt-cache effectiveness — see CostTracker.getCacheStats's
+      // own doc comment for why estimatedSavingsUsd specifically (and only
+      // that field) is an estimate, not a measured number.
+      promptCache: costTrackerForAdmin.getCacheStats(),
+      toolCache: toolResultCacheForAdmin?.getStats(),
     });
   }
 

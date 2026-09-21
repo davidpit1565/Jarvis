@@ -80,6 +80,7 @@ export class BrainAgentPlanner implements AgentPlanner {
       tools: [],
       context: PLAN_SYSTEM_PROMPT,
       runId: request.taskId,
+      taskType: "agent-plan",
     };
 
     // Model Escalation: a plan response that doesn't parse into a JSON
@@ -113,6 +114,7 @@ export class BrainAgentPlanner implements AgentPlanner {
       tools: readOnlyTools,
       context: VERIFY_SYSTEM_PROMPT,
       runId: request.taskId,
+      taskType: "agent-verify",
     });
 
     if (first.toolCalls.length === 0) {
@@ -141,6 +143,7 @@ export class BrainAgentPlanner implements AgentPlanner {
       tools: [],
       context: VERIFY_SYSTEM_PROMPT,
       runId: request.taskId,
+      taskType: "agent-verify",
     });
 
     return parseVerdict(second.text);

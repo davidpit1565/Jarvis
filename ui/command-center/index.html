@@ -141,20 +141,42 @@
 
   <section id="cost-section">
     <h2>Cost Analytics</h2>
-    <div class="desc">Spend from <code>GET /cost-analytics</code> (backed by <code>CostTracker</code>).</div>
+    <div class="desc">Spend from <code>GET /cost-analytics</code> (backed by <code>CostTracker</code>) — the unified AI Cost Ledger.</div>
     <div class="grid" id="costGrid" style="margin-bottom:12px;"></div>
     <h3 style="font-size:13px;margin:8px 0 4px;color:var(--dim);">By provider</h3>
     <table>
       <thead><tr><th>Provider</th><th>Total spend</th><th>Calls</th></tr></thead>
       <tbody id="costByProviderBody"></tbody>
     </table>
+    <h3 style="font-size:13px;margin:14px 0 4px;color:var(--dim);">By model</h3>
+    <table>
+      <thead><tr><th>Model</th><th>Total spend</th><th>Calls</th></tr></thead>
+      <tbody id="costByModelBody"></tbody>
+    </table>
+    <h3 style="font-size:13px;margin:14px 0 4px;color:var(--dim);">By task type</h3>
+    <table>
+      <thead><tr><th>Task type</th><th>Total spend</th><th>Calls</th></tr></thead>
+      <tbody id="costByTaskTypeBody"></tbody>
+    </table>
     <h3 style="font-size:13px;margin:14px 0 4px;color:var(--dim);">Recent calls</h3>
     <table>
-      <thead><tr><th>Time</th><th>Provider</th><th>Cost (USD)</th></tr></thead>
+      <thead><tr><th>Time</th><th>Provider</th><th>Model</th><th>Cost (USD)</th><th>Tokens (in/cached/out)</th><th>Fallback</th></tr></thead>
       <tbody id="costRecentBody"></tbody>
     </table>
     <div id="costEmpty" class="empty">No cost data recorded yet.</div>
     <div id="costError" class="error-banner"></div>
+  </section>
+
+  <section id="cache-section">
+    <h2>Cache Effectiveness</h2>
+    <div class="desc">
+      Measured (not assumed) cache performance from <code>GET /cost-analytics</code> — Anthropic prompt-cache
+      hit rate (<code>CostTracker.getCacheStats()</code>) and the READ-tool result cache's hit rate
+      (<code>ToolResultCache.getStats()</code>). Dollar figures marked "estimated" are computed from a
+      per-token cost rate, not a real invoice line.
+    </div>
+    <div class="grid" id="cacheGrid"></div>
+    <div id="cacheEmpty" class="empty">No cache activity recorded yet.</div>
   </section>
 
   <section id="memory-section">
@@ -385,27 +407,74 @@
       const grid = $("costGrid");
       grid.innerHTML =
         "<div class='stat'><div class='label'>Today</div><div class='value'>" + fmtUsd(data.todaySpendUsd) + "</div></div>" +
+        "<div class='stat'><div class='label'>This week</div><div class='value'>" + fmtUsd(data.weekSpendUsd) + "</div></div>" +
         "<div class='stat'><div class='label'>This month</div><div class='value'>" + fmtUsd(data.monthSpendUsd) + "</div></div>";
-      const byProvider = data.byProvider || [];
-      const byProviderBody = $("costByProviderBody");
-      byProviderBody.innerHTML = "";
-      for (const p of byProvider) {
-        const tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + esc(p.provider) + "</td><td>" + fmtUsd(p.totalUsd) + "</td><td>" + esc(p.calls) + "</td>";
-        byProviderBody.appendChild(tr);
-      }
+
+      fillBreakdownTable("costByProviderBody", data.byProvider, "provider");
+      fillBreakdownTable("costByModelBody", data.byModel, "model");
+      fillBreakdownTable("costByTaskTypeBody", data.byTaskType, "taskType");
+
       const recent = data.recent || [];
       const recentBody = $("costRecentBody");
       recentBody.innerHTML = "";
       $("costEmpty").style.display = recent.length ? "none" : "block";
       for (const r of recent) {
+        const tokens = r.inputTokens != null
+          ? esc(r.inputTokens) + " / " + esc(r.cacheReadInputTokens || 0) + " / " + esc(r.outputTokens || 0)
+          : "—";
         const tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + esc(new Date(r.timestamp).toLocaleString()) + "</td><td>" + esc(r.provider) + "</td><td>" + fmtUsd(r.estimatedCostUsd) + "</td>";
+        tr.innerHTML =
+          "<td>" + esc(new Date(r.timestamp).toLocaleString()) + "</td>" +
+          "<td>" + esc(r.provider) + "</td>" +
+          "<td>" + esc(r.model || "—") + "</td>" +
+          "<td>" + fmtUsd(r.estimatedCostUsd) + "</td>" +
+          "<td>" + tokens + "</td>" +
+          "<td>" + (r.fallback ? "yes" : "—") + "</td>";
         recentBody.appendChild(tr);
       }
+
+      renderCacheStats(data.promptCache, data.toolCache);
     } catch (e) {
       errEl.textContent = "Could not load cost analytics: " + e.message;
     }
+  }
+
+  function fillBreakdownTable(bodyId, rows, keyField) {
+    const body = $(bodyId);
+    body.innerHTML = "";
+    for (const row of rows || []) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + esc(row[keyField]) + "</td><td>" + fmtUsd(row.totalUsd) + "</td><td>" + esc(row.calls) + "</td>";
+      body.appendChild(tr);
+    }
+  }
+
+  // ---- Cache Effectiveness ----
+  function renderCacheStats(promptCache, toolCache) {
+    const grid = $("cacheGrid");
+    const cards = [];
+
+    if (promptCache && promptCache.calls > 0) {
+      cards.push(
+        "<div class='stat'><div class='label'>Prompt cache hit rate</div><div class='value'>" +
+          Math.round(promptCache.cacheHitRate * 100) + "%</div></div>",
+        "<div class='stat'><div class='label'>Cache-read tokens</div><div class='value'>" +
+          esc(promptCache.cacheReadTokens) + "</div></div>",
+        "<div class='stat'><div class='label'>Est. $ saved (prompt cache)</div><div class='value'>" +
+          fmtUsd(promptCache.estimatedSavingsUsd) + "</div></div>"
+      );
+    }
+    if (toolCache && (toolCache.hits + toolCache.misses) > 0) {
+      cards.push(
+        "<div class='stat'><div class='label'>Tool-result cache hit rate</div><div class='value'>" +
+          Math.round(toolCache.hitRate * 100) + "%</div></div>",
+        "<div class='stat'><div class='label'>Tool cache hits / misses</div><div class='value'>" +
+          esc(toolCache.hits) + " / " + esc(toolCache.misses) + "</div></div>"
+      );
+    }
+
+    grid.innerHTML = cards.join("");
+    $("cacheEmpty").style.display = cards.length ? "none" : "block";
   }
 
   // ---- Memory Explorer ----

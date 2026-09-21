@@ -68,13 +68,17 @@ export interface JarvisEventMap {
    * daily/monthly cost cap blocked a paid provider), "run-budget-exceeded"
    * (this run's own `maxCostPerRunUsd` ceiling — Denial-of-wallet
    * protection — blocked a paid provider), "zero-cost-mode"
-   * (ZERO_COST_MODE forbade a paid provider outright), or "circuit-open"
-   * (the primary's circuit breaker is open after repeated failures).
+   * (ZERO_COST_MODE forbade a paid provider outright), "circuit-open"
+   * (the primary's circuit breaker is open after repeated failures), or
+   * "soft-budget-cap" (budget-constrained degradation — spend is close to,
+   * but not yet at, a configured daily/monthly cap, so a paid candidate
+   * was proactively swapped for a free one; see
+   * `AIRouterOptions.softBudgetCapRatio`).
    */
   "ai.providerFallback": {
     from: string;
     to: string;
-    reason: "call-failed" | "budget-exceeded" | "run-budget-exceeded" | "zero-cost-mode" | "circuit-open";
+    reason: "call-failed" | "budget-exceeded" | "run-budget-exceeded" | "zero-cost-mode" | "circuit-open" | "soft-budget-cap";
   };
   /**
    * Model Escalation: `AIRouter.chatWithEscalation` retried a call
