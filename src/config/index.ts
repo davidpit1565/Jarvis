@@ -37,6 +37,19 @@ export interface JarvisConfig {
   maxDailyCostUsd?: number;
   /** Optional monthly USD cap on paid-provider spend (estimated); unset means unlimited. See CostTracker. */
   maxMonthlyCostUsd?: number;
+  /**
+   * Hard zero-cost boundary: when true, AIRouter never calls a paid
+   * provider under any circumstance (not even as a fallback when the
+   * free provider fails) — it throws `ZeroCostModeError` instead. This
+   * is independent of, and stricter than, `maxDailyCostUsd`/
+   * `maxMonthlyCostUsd`, which bound paid usage rather than forbid it
+   * outright. Defaults to false.
+   */
+  zeroCostMode: boolean;
+  /** Consecutive call failures before AIRouter's per-provider circuit breaker opens (stops routing to it) for `aiCircuitBreakerCooldownMs`. Defaults to 3. */
+  aiCircuitBreakerThreshold: number;
+  /** How long (ms) an open provider circuit stays open before a single half-open trial call is let through. Defaults to 60000 (60s). */
+  aiCircuitBreakerCooldownMs: number;
   /** Path to the SQLite database storing AIRouter's per-call estimated-cost records (CostTracker). */
   aiCostDbPath: string;
   port: number;
@@ -335,6 +348,27 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("Invalid MAX_MONTHLY_COST_USD: must be a positive number");
   }
 
+  const zeroCostModeRaw = process.env.ZERO_COST_MODE?.trim().toLowerCase();
+  const zeroCostMode = zeroCostModeRaw === "true";
+
+  const aiCircuitBreakerThresholdRaw = process.env.AI_CIRCUIT_BREAKER_THRESHOLD?.trim();
+  const aiCircuitBreakerThreshold = aiCircuitBreakerThresholdRaw ? Number(aiCircuitBreakerThresholdRaw) : 3;
+  if (
+    aiCircuitBreakerThresholdRaw &&
+    (!Number.isInteger(aiCircuitBreakerThreshold) || aiCircuitBreakerThreshold <= 0)
+  ) {
+    throw new ConfigError("Invalid AI_CIRCUIT_BREAKER_THRESHOLD: must be a positive integer");
+  }
+
+  const aiCircuitBreakerCooldownMsRaw = process.env.AI_CIRCUIT_BREAKER_COOLDOWN_MS?.trim();
+  const aiCircuitBreakerCooldownMs = aiCircuitBreakerCooldownMsRaw ? Number(aiCircuitBreakerCooldownMsRaw) : 60_000;
+  if (
+    aiCircuitBreakerCooldownMsRaw &&
+    (!Number.isInteger(aiCircuitBreakerCooldownMs) || aiCircuitBreakerCooldownMs <= 0)
+  ) {
+    throw new ConfigError("Invalid AI_CIRCUIT_BREAKER_COOLDOWN_MS: must be a positive integer");
+  }
+
   const aiCostDbPath = process.env.JARVIS_AI_COST_DB_PATH ?? "./data/jarvis-ai-cost.sqlite";
   const port = Number(process.env.JARVIS_PORT ?? "4770");
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
@@ -566,6 +600,9 @@ export function loadConfig(): JarvisConfig {
     aiFallbackProvider,
     maxDailyCostUsd,
     maxMonthlyCostUsd,
+    zeroCostMode,
+    aiCircuitBreakerThreshold,
+    aiCircuitBreakerCooldownMs,
     aiCostDbPath,
     port,
     memoryDbPath,

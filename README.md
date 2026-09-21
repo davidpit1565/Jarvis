@@ -1820,9 +1820,40 @@ Routing policy, honestly stated:
   request. It uses a free provider instead if one is configured, or
   throws a clear `BudgetExceededError` if not. A free provider is never
   restricted by a budget cap — it's already $0.
+- **`ZERO_COST_MODE` is on** — a hard boundary, separate from and
+  stricter than the budget caps above: AIRouter will never call a paid
+  provider *at all*, under any circumstance, not even as a last-resort
+  fallback when the free provider's call fails. If no free-tier provider
+  is configured, or the free provider(s) available for this request
+  already failed, AIRouter throws a clear `ZeroCostModeError` naming
+  exactly which paid provider it refused to call and why — it never
+  silently falls through to a paid call, and never silently drops the
+  request either. The budget caps still exist and still apply whenever
+  `ZERO_COST_MODE` is off and a paid call *is* allowed — the two are
+  independent controls, not alternatives to each other.
+- **A provider fails repeatedly** — AIRouter tracks each provider's
+  consecutive-failure count. After `AI_CIRCUIT_BREAKER_THRESHOLD`
+  (default 3) failures in a row, that provider's circuit "opens" and
+  routing skips it entirely — treated exactly like an unconfigured
+  provider — for `AI_CIRCUIT_BREAKER_COOLDOWN_MS` (default 60s). After
+  the cooldown, a single half-open trial call is let through: success
+  closes the circuit again, failure re-opens it. This is provider-agnostic
+  — it's driven purely by call outcomes, not by any assumption about
+  which provider is "the free one", so it works the same if the free/paid
+  providers ever change. An open circuit with no usable fallback throws
+  `CircuitOpenError`.
 - **Neither `ANTHROPIC_API_KEY` nor `GROQ_API_KEY` is set** —
   `loadConfig()` throws a clear config error at startup; JARVIS never
   starts with zero usable brains.
+
+`AIRouter.getProviderStatus()` exposes each configured provider's live
+operational status — `circuitOpen`, `consecutiveFailures`, the most
+recent call's `latencyMs`, an `averageLatencyMs` and `successRate` over
+the last 20 calls, and `costTier` — for a future dashboard/status
+endpoint to read. This is in-memory-only telemetry (it resets on
+restart, same as the process's live provider connections) — it's
+operational data about "is this provider healthy right now", not
+something that needs to survive a restart or be shared across processes.
 
 `CostTracker` (`src/core/cost/CostTracker.ts`) is a small SQLite log
 (same house style as `ReminderStore`: constructor takes a db path,

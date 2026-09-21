@@ -111,7 +111,7 @@ export class Orchestrator {
       eventBus.emit("brain.request", { messageCount: conversation.getMessages().length });
 
       const response = await brain.chat({
-        messages: conversation.getMessages(),
+        messages: conversation.getMessagesForBrain(),
         tools: toolRegistry.toToolDefinitions(),
         context: systemPrompt,
       });
