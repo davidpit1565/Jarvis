@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { loadConfig, ConfigError } from "@/config";
+import { loadConfig, ConfigError, redactConfigForDisplay } from "@/config";
 
 const ENV_KEYS = [
   "ANTHROPIC_API_KEY",
@@ -847,5 +847,57 @@ describe("loadConfig", () => {
     process.env.JARVIS_QUIET_HOURS_START = "22:00";
     process.env.JARVIS_QUIET_HOURS_END = "25:00";
     expect(() => loadConfig()).toThrow(ConfigError);
+  });
+});
+
+describe("redactConfigForDisplay", () => {
+  test("never includes the real value of any secret field, anywhere in the serialized output", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-REAL-SECRET-VALUE";
+    process.env.GROQ_API_KEY = "gsk-REAL-SECRET-VALUE";
+    process.env.TWILIO_AUTH_TOKEN = "twilio-REAL-SECRET-VALUE";
+    process.env.TWILIO_PUBLIC_BASE_URL = "https://example.com";
+    process.env.JARVIS_PUBLIC_BASE_URL = "https://example.com";
+    process.env.JARVIS_ADMIN_TOKEN = "admin-REAL-SECRET-VALUE";
+    process.env.TELEGRAM_BOT_TOKEN = "telegram-REAL-SECRET-VALUE";
+    process.env.TELEGRAM_WEBHOOK_SECRET = "webhook-REAL-SECRET-VALUE";
+    process.env.GOOGLE_CLIENT_ID = "google-client-id";
+    process.env.GOOGLE_CLIENT_SECRET = "google-REAL-SECRET-VALUE";
+    process.env.SPOTIFY_CLIENT_ID = "spotify-client-id";
+    process.env.SPOTIFY_CLIENT_SECRET = "spotify-REAL-SECRET-VALUE";
+    process.env.JARVIS_STUDIO_BASE_URL = "https://studio.example.com";
+    process.env.JARVIS_STUDIO_SECRET = "studio-REAL-SECRET-VALUE";
+
+    const config = loadConfig();
+    const redacted = redactConfigForDisplay(config);
+    const serialized = JSON.stringify(redacted);
+
+    expect(serialized).not.toContain("REAL-SECRET-VALUE");
+    expect(redacted.anthropicApiKey).toEqual({ configured: true });
+    expect(redacted.groqApiKey).toEqual({ configured: true });
+    expect(redacted.twilioAuthToken).toEqual({ configured: true });
+    expect(redacted.adminToken).toEqual({ configured: true });
+    expect(redacted.telegramBotToken).toEqual({ configured: true });
+    expect(redacted.telegramWebhookSecret).toEqual({ configured: true });
+    expect(redacted.googleClientSecret).toEqual({ configured: true });
+    expect(redacted.spotifyClientSecret).toEqual({ configured: true });
+    expect(redacted.studioSecret).toEqual({ configured: true });
+  });
+
+  test("reports an unset secret as not configured", () => {
+    delete process.env.JARVIS_ADMIN_TOKEN;
+    const config = loadConfig();
+    const redacted = redactConfigForDisplay(config);
+
+    expect(redacted.adminToken).toEqual({ configured: false });
+  });
+
+  test("passes non-secret fields through unchanged", () => {
+    process.env.JARVIS_TIMEZONE = "Asia/Jerusalem";
+    process.env.JARVIS_PORT = "5555";
+    const config = loadConfig();
+    const redacted = redactConfigForDisplay(config);
+
+    expect(redacted.timezone).toBe("Asia/Jerusalem");
+    expect(redacted.port).toBe(5555);
   });
 });

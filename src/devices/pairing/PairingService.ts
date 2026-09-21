@@ -177,6 +177,19 @@ export class PairingService {
     return pending;
   }
 
+  /**
+   * Every currently-pending pairing request across all devices (expired
+   * ones purged first), for an admin UI to list — see the Device Approval
+   * Web UI (JARVIS_ROADMAP_AUDIT.md #200). The code itself is included:
+   * it's a short-lived (minutes), single-use, already human-visible value
+   * (the device itself displays/logs it for its owner to read out), not a
+   * long-lived secret like the minted credential.
+   */
+  listPending(): PendingPairing[] {
+    this.purgeExpiredPending();
+    return Array.from(this.pending.values());
+  }
+
   /** Revokes a device's credential (lost/decommissioned device). It must re-pair from scratch. */
   revoke(deviceId: string): void {
     this.credentials.delete(deviceId);

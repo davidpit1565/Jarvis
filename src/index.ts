@@ -1225,6 +1225,12 @@ function main() {
     aiRouter,
     schedulerHealthTracker,
     automationFailureStore,
+    // Admin panel (ui/admin/) read endpoints — see
+    // JARVIS_ROADMAP_AUDIT.md #205/#208. Purely additive: neither route
+    // did anything before this existed, and every other consumer of
+    // `permissionService`/`config` above is unaffected.
+    permissionServiceForAdmin: permissionService,
+    jarvisConfig: config,
     dataDirectory: config.memoryDbPath === ":memory:" ? undefined : dirname(config.memoryDbPath),
     backupDbPaths: [
       config.memoryDbPath,

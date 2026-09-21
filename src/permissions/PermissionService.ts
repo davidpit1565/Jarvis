@@ -36,6 +36,24 @@ export class PermissionService {
     this.grants.delete(grantKey(userId, toolId, deviceId));
   }
 
+  /**
+   * Every standing grant currently held, decoded back into its parts —
+   * for a read-only admin UI (Permission Management UI,
+   * JARVIS_ROADMAP_AUDIT.md #205) to show which tools are granted to
+   * which devices. `deviceId` is `undefined` for a grant with no device
+   * scope (the local-only sentinel used internally is never leaked out).
+   */
+  list(): Array<{ userId: string; toolId: string; deviceId?: string }> {
+    return Array.from(this.grants).map((key) => {
+      const [userId, toolId, deviceId] = key.split("::");
+      return {
+        userId: userId!,
+        toolId: toolId!,
+        deviceId: deviceId === LOCAL_SCOPE ? undefined : deviceId,
+      };
+    });
+  }
+
   check(request: PermissionCheckRequest): PermissionCheckResult {
     const { subject, toolId, requiredLevel, deviceId } = request;
 

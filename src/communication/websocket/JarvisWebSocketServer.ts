@@ -37,6 +37,7 @@ import { RateLimiter } from "./RateLimiter";
 import type { AIRouter } from "@/core/brain/AIRouter";
 import type { SchedulerHealthTracker } from "@/core/health/SchedulerHealthTracker";
 import type { AutomationFailureStore } from "@/automation/AutomationFailureStore";
+import { redactConfigForDisplay, type JarvisConfig } from "@/config";
 import { verifyDatabaseIntegrity } from "@/backup/verifyBackupIntegrity";
 import { Logger } from "@/core/logging/Logger";
 import { computeAudioLevel } from "@/communication/phone/audioLevel";
@@ -267,6 +268,21 @@ export interface JarvisWebSocketServerDependencies {
    * route 404s.
    */
   automationFailureStore?: AutomationFailureStore;
+  /**
+   * Optional: enables the admin-gated `GET /permissions` read-only
+   * endpoint, listing every standing `(userId, toolId, deviceId)` grant
+   * held by `PermissionService` — see JARVIS_ROADMAP_AUDIT.md #205
+   * (Permission Management UI). Without it, the route 404s.
+   */
+  permissionServiceForAdmin?: PermissionService;
+  /**
+   * Optional: enables the admin-gated `GET /config` read-only endpoint —
+   * the loaded `JarvisConfig`, with every secret-shaped field (API keys,
+   * the admin token itself, webhook secrets, etc.) replaced by whether
+   * it's set, never its real value — see JARVIS_ROADMAP_AUDIT.md #208
+   * (Config Center). Without it, the route 404s.
+   */
+  jarvisConfig?: JarvisConfig;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -286,6 +302,16 @@ const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 // params needed (see coreOrigin() in ui/hologram/index.html). Three
 // levels up from src/communication/websocket/ is the repo root.
 const HOLOGRAM_UI_DIR = join(import.meta.dir, "..", "..", "..", "ui", "hologram");
+
+// A separate, minimal admin panel (device approval/revocation,
+// permissions, security events, emergency lockdown, config) — see
+// JARVIS_ROADMAP_AUDIT.md #200/#205/#206/#207/#208. Deliberately its own
+// static page under ui/admin/, never inside ui/hologram/: the hologram
+// visual is off-limits to touch for any reason. Static shell only — it
+// carries no secrets itself; every admin token check happens on the data
+// endpoints it calls (GET /pairing/pending, /permissions, /config, etc.),
+// exactly like the hologram UI's own /status polling.
+const ADMIN_UI_DIR = join(import.meta.dir, "..", "..", "..", "ui", "admin");
 
 function readCookie(req: Request, name: string): string | null {
   const header = req.headers.get("cookie");
@@ -597,6 +623,28 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/automation-failures") {
             return this.handleAutomationFailuresHttp(req, url, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/pairing/pending") {
+            return this.handlePairingPendingHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/permissions") {
+            return this.handlePermissionsHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/config") {
+            return this.handleConfigHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/admin") {
+            return new Response(null, { status: 302, headers: { Location: "/admin/" } });
+          }
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/admin/") {
+            return new Response(Bun.file(join(ADMIN_UI_DIR, "index.html")));
+          }
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname.startsWith("/admin/")) {
+            return await this.serveAdminAsset(url.pathname.slice("/admin/".length));
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/assets/hologram.jpg") {
@@ -1497,6 +1545,75 @@ export class JarvisWebSocketServer {
   }
 
   /**
+   * GET /pairing/pending — read-only admin view of every currently
+   * pending device-pairing request (deviceId, its 6-digit code,
+   * expiry), for the Device Approval Web UI (JARVIS_ROADMAP_AUDIT.md
+   * #200) to render an approve/deny button against, without needing to
+   * already know a device's code from watching agent logs the way the
+   * CLI flow requires. Same admin-token gating rationale as GET
+   * /reminders above. This is purely additive: `bun run approve-device`
+   * keeps working exactly as before, this only adds a second way to see
+   * what's pending.
+   */
+  private handlePairingPendingHttp(req: Request, server: BunServer): Response {
+    const { adminToken, pairingService } = this.deps;
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "pairing-pending"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ pending: pairingService.listPending() });
+  }
+
+  /**
+   * GET /permissions — read-only admin view of every standing
+   * `(userId, toolId, deviceId)` grant held by `PermissionService` — see
+   * JARVIS_ROADMAP_AUDIT.md #205 (Permission Management UI). Read-only by
+   * design: granting/revoking individual permissions from a UI is a
+   * bigger surface for mistakes than this first pass is worth: revocation
+   * already has a real, safe path (`POST /pairing/revoke`, which clears a
+   * device's grants alongside its credential). 404s when no
+   * `permissionServiceForAdmin` is configured.
+   */
+  private handlePermissionsHttp(req: Request, server: BunServer): Response {
+    const { adminToken, permissionServiceForAdmin } = this.deps;
+    if (!permissionServiceForAdmin) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "permissions"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ grants: permissionServiceForAdmin.list() });
+  }
+
+  /**
+   * GET /config — read-only admin view of the loaded `JarvisConfig`, for
+   * the Config Center (JARVIS_ROADMAP_AUDIT.md #208). Every secret-shaped
+   * field (API keys, the admin token itself, webhook secrets, OAuth
+   * client secrets) is replaced by `redactConfigForDisplay` with just
+   * whether it's set — never the real value, the same care GET /status
+   * and GET /health already take not to leak one. 404s when no
+   * `jarvisConfig` is configured.
+   */
+  private handleConfigHttp(req: Request, server: BunServer): Response {
+    const { adminToken, jarvisConfig } = this.deps;
+    if (!jarvisConfig) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "config"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ config: redactConfigForDisplay(jarvisConfig) });
+  }
+
+  /**
    * GET /calendar/oauth/start — begins linking a Google account for
    * read-only Calendar access. Gated by the admin token as a query
    * parameter (`?token=...`), not a header: this is a route the user
@@ -1651,6 +1768,16 @@ export class JarvisWebSocketServer {
     if (relPath.includes("..")) return new Response("Not found", { status: 404 });
     const filePath = join(HOLOGRAM_UI_DIR, relPath);
     if (!filePath.startsWith(HOLOGRAM_UI_DIR)) return new Response("Not found", { status: 404 });
+    const file = Bun.file(filePath);
+    if (!(await file.exists())) return new Response("Not found", { status: 404 });
+    return new Response(file);
+  }
+
+  /** Same path-traversal defense as serveHologramAsset, for ui/admin/ instead. */
+  private async serveAdminAsset(relPath: string): Promise<Response> {
+    if (relPath.includes("..")) return new Response("Not found", { status: 404 });
+    const filePath = join(ADMIN_UI_DIR, relPath);
+    if (!filePath.startsWith(ADMIN_UI_DIR)) return new Response("Not found", { status: 404 });
     const file = Bun.file(filePath);
     if (!(await file.exists())) return new Response("Not found", { status: 404 });
     return new Response(file);

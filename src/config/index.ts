@@ -749,4 +749,49 @@ export function loadConfig(): JarvisConfig {
   };
 }
 
+/**
+ * Explicit allowlist of `JarvisConfig` fields known to hold a secret —
+ * kept in addition to (not instead of) the pattern match below, so a
+ * secret whose name happens not to contain "token"/"secret"/"key" is
+ * still caught by name, and a future secret field is still caught by
+ * pattern even if someone forgets to add it here. Belt-and-suspenders:
+ * Config Center (JARVIS_ROADMAP_AUDIT.md #208) must never leak one of
+ * these, the same care GET /status and GET /health already take.
+ */
+const KNOWN_SECRET_CONFIG_FIELDS: ReadonlySet<keyof JarvisConfig> = new Set([
+  "anthropicApiKey",
+  "groqApiKey",
+  "twilioAuthToken",
+  "telegramBotToken",
+  "telegramWebhookSecret",
+  "adminToken",
+  "googleClientSecret",
+  "spotifyClientSecret",
+  "studioSecret",
+]);
+
+/** Case-insensitive fallback pattern catching any field name that reads as a secret, even one not in the explicit list above. */
+const SECRET_FIELD_NAME_PATTERN = /token|secret|apikey|api_key|password|credential/i;
+
+function isSecretConfigField(field: string): boolean {
+  return KNOWN_SECRET_CONFIG_FIELDS.has(field as keyof JarvisConfig) || SECRET_FIELD_NAME_PATTERN.test(field);
+}
+
+/**
+ * A version of the loaded config safe to show in a UI or return from an
+ * HTTP endpoint (Config Center — JARVIS_ROADMAP_AUDIT.md #208): every
+ * secret-shaped field is replaced with a boolean "is it set" instead of
+ * its real value. Everything else (paths, timeouts, feature flags,
+ * non-secret IDs like `twilioAccountSid`/`googleClientId`) passes
+ * through unchanged, since none of it is a credential and seeing the
+ * real value is the entire point of a config viewer.
+ */
+export function redactConfigForDisplay(config: JarvisConfig): Record<string, unknown> {
+  const redacted: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(config)) {
+    redacted[field] = isSecretConfigField(field) ? { configured: value !== undefined && value !== "" } : value;
+  }
+  return redacted;
+}
+
 export { ConfigError };
