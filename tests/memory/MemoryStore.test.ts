@@ -112,4 +112,145 @@ describe("MemoryStore", () => {
     expect(mode.journal_mode).toBe("wal");
     store.close();
   });
+
+  describe("category and importance (Memory Quality Layer)", () => {
+    test("defaults category to 'fact' and importance to 3 when omitted", () => {
+      const store = new MemoryStore(":memory:");
+      const record = store.save({ key: "user.name", value: "David" });
+
+      expect(record.category).toBe("fact");
+      expect(record.importance).toBe(3);
+      store.close();
+    });
+
+    test("round-trips an explicit category and importance", () => {
+      const store = new MemoryStore(":memory:");
+      const record = store.save({ key: "user.pref.editor", value: "vim", category: "preference", importance: 5 });
+
+      expect(record.category).toBe("preference");
+      expect(record.importance).toBe(5);
+      expect(store.getByKey("user.pref.editor")).toEqual(record);
+      store.close();
+    });
+
+    test("a pre-existing untyped row (no category/importance columns populated) defaults sensibly when read back", () => {
+      const store = new MemoryStore(":memory:");
+      // Simulate a Phase 1 row written before category/importance existed —
+      // insert directly, bypassing save()'s defaulting.
+      (store as unknown as { db: { query: (sql: string) => { run: (...args: unknown[]) => void } } }).db
+        .query(`INSERT INTO memory_records (id, key, value, created_at) VALUES (?, ?, ?, ?)`)
+        .run("legacy-id", "legacy.key", "legacy value", new Date().toISOString());
+
+      const record = store.get("legacy-id");
+      expect(record?.category).toBe("fact");
+      expect(record?.importance).toBe(3);
+      expect(record?.expiresAt).toBeNull();
+      store.close();
+    });
+  });
+
+  describe("expiration (Memory Expiration)", () => {
+    test("a non-temporary memory has no expiry by default", () => {
+      const store = new MemoryStore(":memory:");
+      const record = store.save({ key: "user.name", value: "David" });
+      expect(record.expiresAt).toBeNull();
+      store.close();
+    });
+
+    test("a 'temporary' memory gets a default future expiry when none is given", () => {
+      const store = new MemoryStore(":memory:");
+      const record = store.save({ key: "session.topic", value: "discussing travel plans", category: "temporary" });
+
+      expect(record.expiresAt).not.toBeNull();
+      expect(new Date(record.expiresAt as string).getTime()).toBeGreaterThan(Date.now());
+      store.close();
+    });
+
+    test("an explicit expiresAt overrides the temporary default", () => {
+      const store = new MemoryStore(":memory:");
+      const explicit = new Date(Date.now() + 60_000).toISOString();
+      const record = store.save({ key: "session.topic", value: "x", category: "temporary", expiresAt: explicit });
+      expect(record.expiresAt).toBe(explicit);
+      store.close();
+    });
+
+    test("getActive excludes expired memories but includes non-expired and never-expiring ones", () => {
+      const store = new MemoryStore(":memory:");
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const future = new Date(Date.now() + 60_000).toISOString();
+
+      store.save({ key: "expired.fact", value: "gone", expiresAt: past });
+      store.save({ key: "active.fact", value: "still here", expiresAt: future });
+      store.save({ key: "permanent.fact", value: "forever" });
+
+      const active = store.getActive();
+      const keys = active.map((r) => r.key);
+      expect(keys).not.toContain("expired.fact");
+      expect(keys).toContain("active.fact");
+      expect(keys).toContain("permanent.fact");
+      store.close();
+    });
+
+    test("purgeExpired removes only expired rows and reports how many", () => {
+      const store = new MemoryStore(":memory:");
+      const past = new Date(Date.now() - 60_000).toISOString();
+      store.save({ key: "expired.fact", value: "gone", expiresAt: past });
+      store.save({ key: "permanent.fact", value: "forever" });
+
+      const purged = store.purgeExpired();
+      expect(purged).toBe(1);
+      expect(store.getByKey("expired.fact")).toBeNull();
+      expect(store.getByKey("permanent.fact")).not.toBeNull();
+      store.close();
+    });
+  });
+
+  describe("conflict history (Memory Conflict Resolver)", () => {
+    test("overwriting a key with a meaningfully different value logs old -> new history and still upserts", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.timezone", value: "America/New_York" });
+      store.save({ key: "user.timezone", value: "Asia/Jerusalem" });
+
+      expect(store.getByKey("user.timezone")?.value).toBe("Asia/Jerusalem");
+
+      const history = store.getHistory("user.timezone");
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({
+        memoryKey: "user.timezone",
+        oldValue: "America/New_York",
+        newValue: "Asia/Jerusalem",
+      });
+      expect(typeof history[0]?.changedAt).toBe("string");
+      store.close();
+    });
+
+    test("saving the same value again (no meaningful change) does not add a history entry", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.timezone", value: "America/New_York" });
+      store.save({ key: "user.timezone", value: "America/New_York" });
+
+      expect(store.getHistory("user.timezone")).toHaveLength(0);
+      store.close();
+    });
+
+    test("first save of a brand-new key logs no history", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.name", value: "David" });
+      expect(store.getHistory("user.name")).toHaveLength(0);
+      store.close();
+    });
+
+    test("multiple corrections accumulate multiple history entries in order", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.job", value: "Engineer" });
+      store.save({ key: "user.job", value: "Manager" });
+      store.save({ key: "user.job", value: "Director" });
+
+      const history = store.getHistory("user.job");
+      expect(history).toHaveLength(2);
+      expect(history[0]).toMatchObject({ oldValue: "Engineer", newValue: "Manager" });
+      expect(history[1]).toMatchObject({ oldValue: "Manager", newValue: "Director" });
+      store.close();
+    });
+  });
 });
