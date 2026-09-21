@@ -110,6 +110,16 @@ export interface JarvisConfig {
   twilioAccountSid?: string;
   twilioFromNumber?: string;
   ownerPhoneNumber?: string;
+  /**
+   * How many outbound Twilio calls (currently: scheduled wake-up calls)
+   * JARVIS will place per day, at most — Twilio bills per call, and
+   * unlike every AI-provider call (gated by CostTracker's daily/monthly
+   * $ budget), nothing previously stopped a misconfigured wake-up call
+   * rule (or many of them) from placing an unbounded number of real,
+   * billed calls. Defaults to 10 — generous for a genuinely daily wake-up
+   * call plus some headroom, but nowhere near "unbounded."
+   */
+  maxOutboundCallsPerDay: number;
   /** Path to the SQLite database storing recurring wake-up/scheduled-call times. */
   wakeUpCallDbPath: string;
   /** Path to the SQLite database storing recurring alarms (Telegram-notification, not a phone call). */
@@ -499,6 +509,12 @@ export function loadConfig(): JarvisConfig {
     );
   }
 
+  const maxOutboundCallsPerDayRaw = process.env.JARVIS_MAX_OUTBOUND_CALLS_PER_DAY?.trim();
+  const maxOutboundCallsPerDay = maxOutboundCallsPerDayRaw ? Number(maxOutboundCallsPerDayRaw) : 10;
+  if (!Number.isInteger(maxOutboundCallsPerDay) || maxOutboundCallsPerDay < 1) {
+    throw new ConfigError("JARVIS_MAX_OUTBOUND_CALLS_PER_DAY must be a positive integer");
+  }
+
   if (twilioAuthToken && twilioPublicBaseUrl && !adminToken) {
     throw new ConfigError(
       "JARVIS_ADMIN_TOKEN is required once the phone gateway is configured (TWILIO_AUTH_TOKEN/TWILIO_PUBLIC_BASE_URL) — " +
@@ -628,6 +644,7 @@ export function loadConfig(): JarvisConfig {
     twilioAccountSid,
     twilioFromNumber,
     ownerPhoneNumber,
+    maxOutboundCallsPerDay,
     wakeUpCallDbPath,
     alarmDbPath,
     adminToken,

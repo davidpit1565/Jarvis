@@ -61,11 +61,47 @@ describe("RssNewsClient.getTopHeadlines", () => {
     expect(headlines).toEqual([]);
   });
 
-  test("throws on a non-2xx response", async () => {
+  test("throws on a non-2xx, non-retryable response", async () => {
     global.fetch = (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch;
 
     const client = new RssNewsClient("https://example.com/feed.xml");
     await expect(client.getTopHeadlines()).rejects.toThrow(/404/);
+  });
+
+  test("dedups headlines by link across repeated entries in the same feed", async () => {
+    global.fetch = (async () =>
+      new Response(
+        `<rss><channel>
+          <item><title>Big story</title><link>https://example.com/story</link></item>
+          <item><title>Big story (updated)</title><link>https://example.com/story</link></item>
+          <item><title>Other story</title><link>https://example.com/other</link></item>
+        </channel></rss>`,
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    const headlines = await client.getTopHeadlines(10);
+
+    expect(headlines).toEqual([
+      { title: "Big story", link: "https://example.com/story" },
+      { title: "Other story", link: "https://example.com/other" },
+    ]);
+  });
+
+  test("dedups headlines by title across repeated entries with different links", async () => {
+    global.fetch = (async () =>
+      new Response(
+        `<rss><channel>
+          <item><title>Same headline</title><link>https://example.com/a</link></item>
+          <item><title>Same headline</title><link>https://example.com/b-syndicated</link></item>
+        </channel></rss>`,
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    const headlines = await client.getTopHeadlines(10);
+
+    expect(headlines).toEqual([{ title: "Same headline", link: "https://example.com/a" }]);
   });
 });
 
@@ -138,7 +174,10 @@ describe("RssNewsClient item caching", () => {
     let fetchCalls = 0;
     global.fetch = (async () => {
       fetchCalls++;
-      return new Response("boom", { status: 500 });
+      // A 404 is not retryable (unlike 429/5xx — see the retry test
+      // below), so this exercises "no caching on failure" without also
+      // depending on the retry helper's exact attempt count.
+      return new Response("not found", { status: 404 });
     }) as unknown as typeof fetch;
 
     const client = new RssNewsClient("https://example.com/feed.xml");
@@ -146,5 +185,32 @@ describe("RssNewsClient item caching", () => {
     await expect(client.getTopHeadlines()).rejects.toThrow();
 
     expect(fetchCalls).toBe(2);
+  });
+
+  test("retries a transient 5xx and succeeds once the feed recovers, without failing the call", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      if (fetchCalls < 2) return new Response("boom", { status: 503 });
+      return new Response(SAMPLE_FEED, { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    const headlines = await client.getTopHeadlines();
+
+    expect(headlines.length).toBeGreaterThan(0);
+    expect(fetchCalls).toBe(2);
+  });
+
+  test("gives up and throws after repeated 5xx failures", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      return new Response("boom", { status: 500 });
+    }) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    await expect(client.getTopHeadlines()).rejects.toThrow(/500/);
+    expect(fetchCalls).toBe(3);
   });
 });

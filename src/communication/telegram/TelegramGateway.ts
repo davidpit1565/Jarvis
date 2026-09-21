@@ -1,4 +1,5 @@
 import type { Orchestrator } from "@/core/orchestrator/Orchestrator";
+import { fetchWithRetry } from "@/core/net/fetchWithRetry";
 
 export interface TelegramSession {
   orchestrator: Orchestrator;
@@ -107,7 +108,13 @@ export class TelegramGateway {
 
   async sendMessage(chatId: string, text: string): Promise<void> {
     for (const chunk of splitIntoTelegramChunks(text)) {
-      const response = await fetch(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendMessage`, {
+      // Bounded fetch (timeout + retry-with-backoff on Telegram's own
+      // 429/5xx) — Telegram's Bot API rate-limits outbound sends per bot
+      // (roughly 30 messages/second, tighter per-chat), and this is the
+      // gateway's only outbound call site that user-visible activity (a
+      // busy digest, a burst of automation replies) can realistically
+      // drive into that limit.
+      const response = await fetchWithRetry(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chat_id: chatId, text: chunk }),
@@ -130,7 +137,7 @@ export class TelegramGateway {
     const body: Record<string, string> = { chat_id: chatId, photo: photoUrl };
     if (caption) body.caption = caption.slice(0, 1024); // Telegram's own caption length limit
 
-    const response = await fetch(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendPhoto`, {
+    const response = await fetchWithRetry(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendPhoto`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -167,7 +174,7 @@ export class TelegramGateway {
     form.append("chat_id", chatId);
     form.append("document", new Blob([bytes]), filename);
 
-    const response = await fetch(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendDocument`, {
+    const response = await fetchWithRetry(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendDocument`, {
       method: "POST",
       body: form,
     });

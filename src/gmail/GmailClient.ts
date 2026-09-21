@@ -1,5 +1,6 @@
 import type { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import type { EmailSummary } from "@/types/gmail";
+import { fetchWithRetry } from "@/core/net/fetchWithRetry";
 
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
@@ -11,6 +12,16 @@ const TOKEN_EXPIRY_SAFETY_MARGIN_MS = 60_000;
 
 const MAX_RESULTS_CAP = 10;
 const MAX_BODY_LENGTH = 4000;
+
+// Sending a message is not idempotent — retrying a request that actually
+// reached Gmail before the response got lost could send the email twice.
+// A 429 (rejected outright by Gmail's rate limiter before it did anything)
+// is unambiguous and safe to retry; a network-level failure (where it's
+// genuinely unclear whether Gmail received the request) is not, so this
+// only retries the one status that's actually safe here — narrower than
+// the default read-path retry policy (429 + any 5xx, network errors
+// included) used by every other call in this class.
+const SEND_RETRY_OPTIONS = { retryableStatuses: (status: number) => status === 429, retryNetworkErrors: false };
 
 /**
  * Gmail access via raw fetch calls to the Gmail v1 REST API. Originally
@@ -34,7 +45,7 @@ export class GmailClient {
   ) {}
 
   private async refreshAccessToken(refreshToken: string): Promise<string> {
-    const response = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
+    const response = await fetchWithRetry(GOOGLE_OAUTH_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -77,7 +88,7 @@ export class GmailClient {
     url.searchParams.append("metadataHeaders", "From");
     url.searchParams.append("metadataHeaders", "Date");
 
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithRetry(url.toString(), {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -141,7 +152,7 @@ export class GmailClient {
     const url = new URL(`${GMAIL_MESSAGES_URL}/${encodeURIComponent(id)}`);
     url.searchParams.set("format", "full");
 
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithRetry(url.toString(), {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -184,7 +195,7 @@ export class GmailClient {
     url.searchParams.set("q", query);
     url.searchParams.set("maxResults", String(cappedMaxResults));
 
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithRetry(url.toString(), {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -216,7 +227,7 @@ export class GmailClient {
     url.searchParams.set("q", query);
     url.searchParams.set("maxResults", "1");
 
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithRetry(url.toString(), {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -265,11 +276,15 @@ export class GmailClient {
     const accessToken = await this.getValidAccessToken();
     const raw = this.toBase64Url(this.buildRawMessage({ to, subject, body }));
 
-    const response = await fetch(GMAIL_SEND_URL, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ raw }),
-    });
+    const response = await fetchWithRetry(
+      GMAIL_SEND_URL,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ raw }),
+      },
+      SEND_RETRY_OPTIONS
+    );
 
     if (!response.ok) {
       throw new Error(`Gmail send failed (${response.status}): ${await response.text().catch(() => "")}`);
@@ -297,7 +312,7 @@ export class GmailClient {
     url.searchParams.append("metadataHeaders", "Message-ID");
     url.searchParams.append("metadataHeaders", "References");
 
-    const originalResponse = await fetch(url.toString(), {
+    const originalResponse = await fetchWithRetry(url.toString(), {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!originalResponse.ok) {
@@ -332,11 +347,15 @@ export class GmailClient {
       })
     );
 
-    const response = await fetch(GMAIL_SEND_URL, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ raw, threadId: original.threadId }),
-    });
+    const response = await fetchWithRetry(
+      GMAIL_SEND_URL,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ raw, threadId: original.threadId }),
+      },
+      SEND_RETRY_OPTIONS
+    );
 
     if (!response.ok) {
       throw new Error(`Gmail reply failed (${response.status}): ${await response.text().catch(() => "")}`);
