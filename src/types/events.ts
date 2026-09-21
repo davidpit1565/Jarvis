@@ -35,6 +35,8 @@ export interface JarvisEventMap {
     to: string;
     reason: "call-failed" | "budget-exceeded" | "zero-cost-mode" | "circuit-open";
   };
+  /** An AgentCore task moved from one state to another — see src/agent/AgentTaskStateMachine.ts for the legal transitions. */
+  "agent.task.transition": { taskId: string; userId: string; from: string; to: string; reason: string };
 }
 
 export type JarvisEventName = keyof JarvisEventMap;

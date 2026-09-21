@@ -97,4 +97,31 @@ describe("ToolAuditLog", () => {
     expect(second.list()).toHaveLength(1);
     second.close();
   });
+
+  test("recordAgentEvent/listAgentEvents form the agent task audit trail, kept separate from tool_audit_log", () => {
+    const log = new ToolAuditLog(":memory:");
+    log.recordAgentEvent("task-1", "user-1", "state.transition", { from: "PENDING", to: "PLANNING", reason: "task started" });
+    log.recordAgentEvent("task-1", "user-1", "step.executed", { stepId: "step-1", toolName: "create_reminder" });
+    log.recordAgentEvent("task-2", "user-2", "state.transition", { from: "PENDING", to: "PLANNING", reason: "task started" });
+
+    const task1Events = log.listAgentEvents({ taskId: "task-1" });
+    expect(task1Events).toHaveLength(2);
+    expect(task1Events.map((e) => e.event)).toEqual(["state.transition", "step.executed"]);
+    expect(JSON.parse(task1Events[0]!.detail)).toEqual({ from: "PENDING", to: "PLANNING", reason: "task started" });
+    expect(task1Events.every((e) => e.taskId === "task-1")).toBe(true);
+
+    // The existing per-tool-call trail is untouched by agent events.
+    expect(log.list()).toHaveLength(0);
+    log.close();
+  });
+
+  test("listAgentEvents across all tasks respects a limit, most recent first", () => {
+    const log = new ToolAuditLog(":memory:");
+    for (let i = 0; i < 5; i++) log.recordAgentEvent(`task-${i}`, "user-1", "state.transition", { i });
+
+    const events = log.listAgentEvents({ limit: 2 });
+    expect(events).toHaveLength(2);
+    expect(JSON.parse(events[0]!.detail)).toEqual({ i: 4 });
+    log.close();
+  });
 });
