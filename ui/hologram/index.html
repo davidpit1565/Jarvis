@@ -446,6 +446,119 @@
   }
   .voice-label.jarvis { color: #ffb15c; }
   #voice-spectrum, #voice-spectrum-jarvis { width: 100%; height: 48px; display: block; opacity: 0.9; }
+
+  /* -----------------------------------------------------------------
+   * Roadmap items 86-91/98-110 (JARVIS_ROADMAP_AUDIT.md): the floating
+   * chat panel (#chat-panel above) already existed and was already a
+   * non-blocking overlay before this pass — none of the rules above this
+   * point were touched. Everything below is new: additional small
+   * overlay panels (Cost, Recent Actions, Memory, Command Palette) and a
+   * real-backend live-state badge, all purely additive — new ids/classes
+   * only, nothing here redefines an existing selector, and nothing here
+   * touches the hologram head/canvas/bloom rendering.
+   * ------------------------------------------------------------- */
+
+  /* Real backend live state (jarvis.liveState.changed, forwarded to
+     /observer as of this pass — see JarvisWebSocketServer.ts's
+     OBSERVABLE_EVENTS) shown as its own small badge, deliberately
+     separate from the existing #jarvis-state element (which is driven by
+     local render-loop heuristics, not the real backend event, and is
+     left untouched per the "never touch existing hologram rendering
+     logic" rule). Hidden until the first real event arrives, so it never
+     shows fabricated state. */
+  #jx-live-badge {
+    position: fixed; left: 4%; top: calc(3% + env(safe-area-inset-top)); z-index: 6;
+    font-size: 9px; letter-spacing: 1.5px; color: #6fd8e8; opacity: 0;
+    background: rgba(10,18,20,0.4); border: 1px solid rgba(111,216,232,0.3);
+    padding: 6px 10px; border-radius: 3px; user-select: none;
+    transition: opacity 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+    pointer-events: none;
+  }
+  #jx-live-badge.jx-visible { opacity: 0.9; }
+  #jx-live-badge[data-state="LISTENING"] { color: #8bffb0; border-color: rgba(139,255,176,0.5); }
+  #jx-live-badge[data-state="THINKING"] { color: #ffb15c; border-color: rgba(255,177,92,0.5); }
+  #jx-live-badge[data-state="EXECUTING"] { color: #ffd9a0; border-color: rgba(255,217,160,0.5); }
+  #jx-live-badge[data-state="WAITING"] { color: #d3a8ff; border-color: rgba(211,168,255,0.5); }
+  #jx-live-badge[data-state="SPEAKING"] { color: #a8f2ff; border-color: rgba(168,242,255,0.5); }
+  #jx-live-badge[data-state="ERROR"] { color: #ff8a8a; border-color: rgba(255,138,138,0.5); }
+
+  /* Left-side dock of new panel toggles, mirroring the existing
+     audio-ctl/face-ctl stack on the right (same visual language, new
+     selectors — see the hard "additive only" rule above). */
+  .jx-dock-btn {
+    position: fixed; left: 4%; z-index: 6;
+    font-size: 9px; letter-spacing: 1.5px; color: #6fd8e8; opacity: 0.55;
+    background: rgba(10,18,20,0.4); border: 1px solid rgba(111,216,232,0.3);
+    padding: 6px 10px; border-radius: 3px; cursor: pointer; user-select: none;
+    transition: opacity 0.2s ease; font-family: inherit; appearance: none;
+  }
+  .jx-dock-btn:hover { opacity: 1; }
+  .jx-dock-btn:focus-visible { outline: 2px solid #6fd8e8; outline-offset: 2px; }
+  .jx-dock-btn.jx-active { color: #8bffb0; border-color: rgba(139,255,176,0.5); opacity: 0.9; }
+  #jx-cost-toggle { bottom: 3%; }
+  #jx-actions-toggle { bottom: 6.6%; }
+  #jx-memory-toggle { bottom: 10.2%; }
+  #jx-palette-toggle { bottom: 13.8%; }
+  @media (max-width: 600px) {
+    .jx-dock-btn { font-size: 8px; padding: 5px 8px; left: 3%; }
+    #jx-live-badge { font-size: 8px; padding: 5px 8px; }
+  }
+
+  /* Shared overlay chrome for the new panels — deliberately its own class
+     rather than reusing #chat-panel's id/classes, so nothing here can
+     ever collide with or override the existing chat panel's rules. */
+  .jx-overlay {
+    position: fixed; inset: 0; z-index: 21;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(2,6,8,0.72);
+  }
+  .jx-overlay.hidden { display: none; }
+  .jx-overlay-inner {
+    display: flex; flex-direction: column;
+    width: min(560px, 92vw); max-height: 78vh;
+    background: rgba(6,14,16,0.92); border: 1px solid rgba(111,216,232,0.3);
+    border-radius: 6px; box-shadow: 0 0 40px rgba(0,0,0,0.6);
+    box-sizing: border-box;
+  }
+  .jx-overlay-header {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border-bottom: 1px solid rgba(111,216,232,0.18);
+    color: #a8f2ff; font-size: 11px; letter-spacing: 2px;
+  }
+  .jx-overlay-header span:first-child { flex: 1; }
+  .jx-overlay-status { font-size: 9px; letter-spacing: 1px; }
+  .jx-overlay-status.live { color: #8bffb0; }
+  .jx-overlay-status.demo { color: #ffcf7f; }
+  .jx-overlay-status.error { color: #ff8a8a; }
+  .jx-overlay-close {
+    background: none; border: none; color: #a8f2ff; font-size: 13px;
+    cursor: pointer; padding: 2px 6px; font-family: inherit;
+  }
+  .jx-overlay-close:focus-visible { outline: 2px solid #6fd8e8; outline-offset: 2px; }
+  .jx-overlay-body {
+    flex: 1; overflow-y: auto; padding: 12px; font-size: 11.5px; line-height: 1.7;
+    color: #cdeffb; min-height: 20vh;
+  }
+  .jx-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px dashed rgba(111,216,232,0.12); }
+  .jx-row .jx-k { opacity: 0.75; }
+  .jx-row .jx-v { color: #ffd9a0; text-align: right; word-break: break-word; }
+  .jx-empty { opacity: 0.6; font-size: 11px; padding: 8px 0; }
+  .jx-section-title { color: #a8f2ff; font-size: 9.5px; letter-spacing: 2px; opacity: 0.8; margin: 14px 0 6px; }
+  .jx-section-title:first-child { margin-top: 0; }
+  .jx-action-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 9px 10px; border: 1px solid rgba(111,216,232,0.15); border-radius: 4px;
+    margin-bottom: 6px; cursor: pointer; color: #cdeffb;
+  }
+  .jx-action-item:hover, .jx-action-item.jx-selected {
+    background: rgba(111,216,232,0.12); border-color: rgba(111,216,232,0.4);
+  }
+  .jx-action-item .jx-hint { font-size: 9px; opacity: 0.55; letter-spacing: 1px; }
+  #jx-palette-input {
+    margin: 0 12px 10px; background: rgba(255,255,255,0.04); border: 1px solid rgba(111,216,232,0.25);
+    border-radius: 3px; color: #e8fbff; font-family: inherit; font-size: 12px; padding: 8px 10px;
+  }
+  #jx-palette-input:focus-visible { outline: 2px solid #6fd8e8; outline-offset: 1px; }
 </style>
 </head>
 <body>
@@ -564,6 +677,63 @@
         <input id="chat-input" type="text" autocomplete="off" placeholder="Type a message…" />
         <button type="submit">SEND</button>
       </form>
+    </div>
+  </div>
+
+  <!-- New, purely additive panels/controls (JARVIS_ROADMAP_AUDIT.md items
+       86-91/98-110). The chat panel above already was a non-blocking
+       overlay before this pass; these follow the same pattern: a small
+       dock toggle plus a centered dialog overlay, never removing the
+       hologram from view. See the "jx-" prefixed CSS above. -->
+  <div id="jx-live-badge" aria-live="polite"></div>
+
+  <button id="jx-cost-toggle" class="jx-dock-btn" type="button">💰 COST</button>
+  <button id="jx-actions-toggle" class="jx-dock-btn" type="button">⚡ RECENT ACTIONS</button>
+  <button id="jx-memory-toggle" class="jx-dock-btn" type="button">🧠 MEMORY</button>
+  <button id="jx-palette-toggle" class="jx-dock-btn" type="button">⌘ COMMANDS</button>
+
+  <div id="jx-cost-panel" class="jx-overlay hidden" role="dialog" aria-label="Cost panel">
+    <div class="jx-overlay-inner">
+      <div class="jx-overlay-header">
+        <span>COST &amp; USAGE</span>
+        <span id="jx-cost-status" class="jx-overlay-status demo">NO DATA</span>
+        <button class="jx-overlay-close" type="button" data-close="jx-cost-panel" aria-label="Close cost panel">✕</button>
+      </div>
+      <div id="jx-cost-body" class="jx-overlay-body"><div class="jx-empty">Waiting for Core…</div></div>
+    </div>
+  </div>
+
+  <div id="jx-actions-panel" class="jx-overlay hidden" role="dialog" aria-label="Recent actions panel">
+    <div class="jx-overlay-inner">
+      <div class="jx-overlay-header">
+        <span>RECENT ACTIONS</span>
+        <span id="jx-actions-status" class="jx-overlay-status demo">NO DATA</span>
+        <button class="jx-overlay-close" type="button" data-close="jx-actions-panel" aria-label="Close recent actions panel">✕</button>
+      </div>
+      <div id="jx-actions-body" class="jx-overlay-body"><div class="jx-empty">No tool activity observed yet.</div></div>
+    </div>
+  </div>
+
+  <div id="jx-memory-panel" class="jx-overlay hidden" role="dialog" aria-label="Memory panel">
+    <div class="jx-overlay-inner">
+      <div class="jx-overlay-header">
+        <span>MEMORY</span>
+        <span id="jx-memory-status" class="jx-overlay-status demo">NO DATA</span>
+        <button class="jx-overlay-close" type="button" data-close="jx-memory-panel" aria-label="Close memory panel">✕</button>
+      </div>
+      <div id="jx-memory-body" class="jx-overlay-body"><div class="jx-empty">Not loaded yet — open this panel to fetch it.</div></div>
+    </div>
+  </div>
+
+  <div id="jx-palette-panel" class="jx-overlay hidden" role="dialog" aria-label="Command palette">
+    <div class="jx-overlay-inner">
+      <div class="jx-overlay-header">
+        <span>COMMANDS</span>
+        <span class="jx-overlay-status live">⌘K / CTRL+K</span>
+        <button class="jx-overlay-close" type="button" data-close="jx-palette-panel" aria-label="Close command palette">✕</button>
+      </div>
+      <input id="jx-palette-input" type="text" autocomplete="off" placeholder="Type a command…" />
+      <div id="jx-palette-body" class="jx-overlay-body"></div>
     </div>
   </div>
 
@@ -2997,6 +3167,418 @@
     function stopVoiceMode() {
       stopVoiceModeImpl();
     }
+  })();
+
+  /* ---------------------------------------------------------------
+   * 7. New, purely additive panels/shortcuts (JARVIS_ROADMAP_AUDIT.md
+   *    items 86-91/98-110). Confirmed before writing any of this: the
+   *    chat panel above (#chat-toggle/#chat-panel) was ALREADY a
+   *    toggleable floating overlay — never a full-page navigation away
+   *    from the hologram — so this section only fills in what the audit
+   *    found missing (a real backend-driven state indicator, a keyboard
+   *    shortcut, a command palette, and three small dashboard-style
+   *    panels wired to real, already-existing Core endpoints:
+   *    GET /status, GET /memory, and the /observer event stream). Every
+   *    function/element here is new (a "jx" prefix throughout); nothing
+   *    in this block redefines or calls into setupChat()'s internals —
+   *    it only ever clicks the chat panel's own public toggle/close
+   *    buttons, exactly as a real user would.
+   *
+   *    Explicitly NOT built here, and why:
+   *      - Streaming Conversation (#90): both ClaudeBrain and GroqBrain
+   *        call the non-streaming completion API (roadmap #37) — there
+   *        is no token stream from Core to render.
+   *      - Active Tasks Panel (#107): AgentCore.listActiveTasks() exists
+   *        server-side, but no HTTP/WebSocket route exposes it, and this
+   *        pass's only allowed backend change is the one-line
+   *        OBSERVABLE_EVENTS addition below — adding a new endpoint is
+   *        out of scope. Documented here rather than stubbed with fake
+   *        data.
+   *      - Command Palette here is intentionally small (real actions
+   *        this page can already perform), not a fuzzy global search.
+   * ------------------------------------------------------------- */
+  (function setupExtraPanels() {
+    function jxOverlayEl(id) { return document.getElementById(id); }
+    function jxOpenOverlay(id) { jxOverlayEl(id).classList.remove("hidden"); }
+    function jxCloseOverlay(id) { jxOverlayEl(id).classList.add("hidden"); }
+    function jxToggleOverlay(id) { jxOverlayEl(id).classList.toggle("hidden"); }
+    function jxRow(k, v) {
+      return `<div class="jx-row"><span class="jx-k">${escapeHtml(String(k))}</span><span class="jx-v">${escapeHtml(String(v))}</span></div>`;
+    }
+
+    document.querySelectorAll(".jx-overlay-close").forEach((btn) => {
+      btn.addEventListener("click", () => jxCloseOverlay(btn.dataset.close));
+    });
+    document.querySelectorAll(".jx-overlay").forEach((overlay) => {
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) overlay.classList.add("hidden");
+      });
+    });
+
+    /* -------------------------------------------------------------
+     * Real backend live-state badge (roadmap items 92-97/101-103, the
+     * UI half of item 36, and item 100's LISTENING half) — driven by
+     * `jarvis.liveState.changed`, now forwarded to /observer clients
+     * (see the one-line OBSERVABLE_EVENTS addition in
+     * JarvisWebSocketServer.ts). Deliberately a NEW element
+     * (#jx-live-badge), not a rewrite of the existing #jarvis-state
+     * element below the plinth, which is driven by local render-loop
+     * heuristics (brainPulse/audioGlow) rather than this real event and
+     * is left completely untouched, per the hard "never touch existing
+     * hologram rendering logic" rule for this pass.
+     * ----------------------------------------------------------- */
+    const liveBadge = document.getElementById("jx-live-badge");
+    function renderLiveBadge(to) {
+      liveBadge.textContent = "JARVIS: " + to;
+      liveBadge.dataset.state = to;
+      liveBadge.classList.add("jx-visible");
+    }
+
+    /* Recent Actions (roadmap item 106): a filtered, tool-call-only view
+       distinct from the general "CORE ACTIVITY" feed — pairs a
+       tool.requested with its later tool.executed by tool name so each
+       row can show a real, final ok/error outcome. */
+    const JX_RECENT_MAX = 40;
+    const jxRecentActions = [];
+    const actionsStatusEl = document.getElementById("jx-actions-status");
+    const actionsBodyEl = document.getElementById("jx-actions-body");
+    function renderRecentActions() {
+      if (!jxRecentActions.length) {
+        actionsBodyEl.innerHTML = '<div class="jx-empty">No tool activity observed yet.</div>';
+        return;
+      }
+      actionsBodyEl.innerHTML = jxRecentActions
+        .slice()
+        .reverse()
+        .map((a) => {
+          const outcome = a.ok === undefined ? "…" : a.ok ? "OK" : "ERROR";
+          const style = a.ok === false ? ' style="color:#ff8a8a"' : a.ok === true ? ' style="color:#8bffb0"' : "";
+          return `<div class="jx-row"><span class="jx-k">${a.time}&nbsp; ${escapeHtml(a.tool)}</span><span class="jx-v"${style}>${outcome}</span></div>`;
+        })
+        .join("");
+    }
+
+    function handleAuxObserverEvent(type, payload, timestamp) {
+      if (type === "jarvis.liveState.changed" && payload && payload.to) {
+        renderLiveBadge(payload.to);
+        return;
+      }
+      if (type === "tool.requested" && payload && payload.toolCall) {
+        jxRecentActions.push({
+          time: new Date(timestamp || Date.now()).toLocaleTimeString([], { hour12: false }),
+          tool: String(payload.toolCall.toolName || "unknown"),
+          ok: undefined,
+        });
+        if (jxRecentActions.length > JX_RECENT_MAX) jxRecentActions.shift();
+        if (!jxOverlayEl("jx-actions-panel").classList.contains("hidden")) renderRecentActions();
+        return;
+      }
+      if (type === "tool.executed" && payload) {
+        for (let i = jxRecentActions.length - 1; i >= 0; i--) {
+          if (jxRecentActions[i].tool === payload.toolName && jxRecentActions[i].ok === undefined) {
+            jxRecentActions[i].ok = Boolean(payload.result && payload.result.success);
+            break;
+          }
+        }
+        if (!jxOverlayEl("jx-actions-panel").classList.contains("hidden")) renderRecentActions();
+      }
+    }
+
+    // A second, independent /observer connection — deliberately not
+    // sharing the existing connectObserver()'s `socket` (that variable
+    // is private to its own closure, by design; reaching into it would
+    // mean editing existing code, which this pass must not do). The
+    // extra connection is one lightweight read-only WebSocket, the same
+    // endpoint the main activity feed already uses.
+    function connectAuxObserver() {
+      let socket;
+      try {
+        const token = readAdminToken();
+        const url = coreOrigin("ws") + "/observer" + (token ? "?token=" + encodeURIComponent(token) : "");
+        socket = new WebSocket(url);
+      } catch (e) {
+        setTimeout(connectAuxObserver, 5000);
+        return;
+      }
+      socket.addEventListener("open", () => {
+        actionsStatusEl.textContent = "LIVE";
+        actionsStatusEl.className = "jx-overlay-status live";
+      });
+      socket.addEventListener("message", (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          handleAuxObserverEvent(msg.type, msg.payload, msg.timestamp);
+        } catch (e) { /* ignore malformed frames */ }
+      });
+      socket.addEventListener("close", () => {
+        actionsStatusEl.textContent = "NO DATA";
+        actionsStatusEl.className = "jx-overlay-status demo";
+        setTimeout(connectAuxObserver, 5000);
+      });
+      socket.addEventListener("error", () => { try { socket.close(); } catch (e2) {} });
+    }
+    connectAuxObserver();
+
+    /* Cost Panel (roadmap item 109): real data from GET /status's
+       tokenUsage/toolUsage fields — both already computed server-side
+       (see JarvisWebSocketServer.handleStatusJson), just never rendered
+       anywhere in this UI before now. */
+    const costStatusEl = document.getElementById("jx-cost-status");
+    const costBodyEl = document.getElementById("jx-cost-body");
+    async function refreshCostPanel() {
+      try {
+        const token = readAdminToken();
+        const url = new URL(`${coreOrigin("http")}/status`);
+        if (token) url.searchParams.set("token", token);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("status " + res.status);
+        const data = await res.json();
+        costStatusEl.textContent = "LIVE";
+        costStatusEl.className = "jx-overlay-status live";
+
+        let html = '<div class="jx-section-title">TOKEN USAGE &amp; COST</div>';
+        if (data.tokenUsage) {
+          html += jxRow("Input tokens", data.tokenUsage.inputTokens);
+          html += jxRow("Output tokens", data.tokenUsage.outputTokens);
+          html += jxRow(
+            "Estimated cost",
+            data.tokenUsage.estimatedCostUsd != null ? "$" + Number(data.tokenUsage.estimatedCostUsd).toFixed(4) : "—"
+          );
+        } else {
+          html += '<div class="jx-empty">Token usage tracking isn\'t enabled on this Core.</div>';
+        }
+
+        html += '<div class="jx-section-title">TOOL USAGE</div>';
+        if (data.toolUsage) {
+          html += jxRow("Total calls", data.toolUsage.totalCalls);
+          html += jxRow("Most-used tool", data.toolUsage.mostUsedTool ?? "—");
+          html += jxRow(
+            "Error rate",
+            data.toolUsage.errorRate != null ? (Number(data.toolUsage.errorRate) * 100).toFixed(1) + "%" : "—"
+          );
+        } else {
+          html += '<div class="jx-empty">Tool usage summary isn\'t enabled on this Core.</div>';
+        }
+
+        html += '<div class="jx-section-title">LOCKDOWN</div>';
+        html += jxRow("Active", data.lockdown && data.lockdown.active ? "YES" : "NO");
+        if (data.lockdown && data.lockdown.reason) html += jxRow("Reason", data.lockdown.reason);
+
+        costBodyEl.innerHTML = html;
+      } catch (e) {
+        costStatusEl.textContent = "NO DATA";
+        costStatusEl.className = "jx-overlay-status demo";
+        costBodyEl.innerHTML = '<div class="jx-empty">Couldn\'t reach Core\'s GET /status.</div>';
+      }
+    }
+    setInterval(() => {
+      if (!jxOverlayEl("jx-cost-panel").classList.contains("hidden")) refreshCostPanel();
+    }, 5000);
+
+    /* Memory Panel (roadmap item 110): real data from the existing
+       admin-gated GET /memory endpoint. Only reachable with the correct
+       X-Jarvis-Admin-Token when one is configured server-side, exactly
+       like the chat socket already requires for /chat — reuses that
+       same localStorage token (shared TOKEN_KEY convention) rather than
+       prompting for a second, separate one. */
+    const memoryStatusEl = document.getElementById("jx-memory-status");
+    const memoryBodyEl = document.getElementById("jx-memory-body");
+    async function refreshMemoryPanel() {
+      memoryBodyEl.innerHTML = '<div class="jx-empty">Loading…</div>';
+      try {
+        const token = readAdminToken();
+        const url = `${coreOrigin("http")}/memory`;
+        const res = await fetch(url, { headers: token ? { "X-Jarvis-Admin-Token": token } : {} });
+        if (res.status === 404) {
+          memoryStatusEl.textContent = "NOT AVAILABLE";
+          memoryStatusEl.className = "jx-overlay-status demo";
+          memoryBodyEl.innerHTML = '<div class="jx-empty">MemoryStore isn\'t configured on this Core.</div>';
+          return;
+        }
+        if (res.status === 401) {
+          memoryStatusEl.textContent = "NEEDS TOKEN";
+          memoryStatusEl.className = "jx-overlay-status error";
+          const entered = prompt("This Core requires an admin token to browse memory. Enter it (blank to cancel):");
+          if (entered && entered.trim()) {
+            try { localStorage.setItem("jarvis_admin_token", entered.trim()); } catch (e) {}
+            return refreshMemoryPanel();
+          }
+          memoryBodyEl.innerHTML = '<div class="jx-empty">Admin token required.</div>';
+          return;
+        }
+        if (!res.ok) throw new Error("memory " + res.status);
+        const data = await res.json();
+        const records = Array.isArray(data.memory) ? data.memory : [];
+        memoryStatusEl.textContent = "LIVE";
+        memoryStatusEl.className = "jx-overlay-status live";
+        memoryBodyEl.innerHTML = records.length
+          ? records
+              .map(
+                (m) =>
+                  `<div class="jx-row"><span class="jx-k">${escapeHtml(m.key)} <span style="opacity:.5">[${escapeHtml(
+                    m.category || "fact"
+                  )}]</span></span><span class="jx-v">${escapeHtml(m.value)}</span></div>`
+              )
+              .join("")
+          : '<div class="jx-empty">No memories saved yet.</div>';
+      } catch (e) {
+        memoryStatusEl.textContent = "NO DATA";
+        memoryStatusEl.className = "jx-overlay-status demo";
+        memoryBodyEl.innerHTML = '<div class="jx-empty">Couldn\'t reach Core\'s GET /memory.</div>';
+      }
+    }
+
+    /* Toggle each panel from its dock button. */
+    document.getElementById("jx-cost-toggle").addEventListener("click", () => {
+      const opening = jxOverlayEl("jx-cost-panel").classList.contains("hidden");
+      jxToggleOverlay("jx-cost-panel");
+      if (opening) refreshCostPanel();
+    });
+    document.getElementById("jx-actions-toggle").addEventListener("click", () => {
+      const opening = jxOverlayEl("jx-actions-panel").classList.contains("hidden");
+      jxToggleOverlay("jx-actions-panel");
+      if (opening) renderRecentActions();
+    });
+    document.getElementById("jx-memory-toggle").addEventListener("click", () => {
+      const opening = jxOverlayEl("jx-memory-panel").classList.contains("hidden");
+      jxToggleOverlay("jx-memory-panel");
+      if (opening) refreshMemoryPanel();
+    });
+
+    /* Toggles the existing chat panel by clicking its own real, public
+       toggle/close buttons — never reimplements or reaches into
+       setupChat()'s private connect/socket logic. */
+    function toggleChatPanel() {
+      const panel = document.getElementById("chat-panel");
+      if (!panel) return;
+      if (panel.classList.contains("hidden")) document.getElementById("chat-toggle").click();
+      else document.getElementById("chat-close").click();
+    }
+
+    /* Command Palette (roadmap item 105) — a small, real list of actions
+       this page can actually perform, not a fuzzy global search over
+       content that doesn't exist here. Ctrl/Cmd+K opens it; type to
+       filter, arrow keys + Enter (or a click) to run. */
+    const jxCommands = [
+      { label: "Toggle chat with JARVIS", hint: "Ctrl/Cmd+J", run: toggleChatPanel },
+      { label: "Toggle cost & usage panel", hint: "", run: () => document.getElementById("jx-cost-toggle").click() },
+      { label: "Toggle recent actions panel", hint: "", run: () => document.getElementById("jx-actions-toggle").click() },
+      { label: "Toggle memory panel", hint: "", run: () => document.getElementById("jx-memory-toggle").click() },
+      {
+        label: "Jump activity feed to latest",
+        hint: "",
+        run: () => {
+          const el = document.getElementById("activity-lines");
+          if (el) el.scrollTop = el.scrollHeight;
+        },
+      },
+      {
+        label: "Set / clear admin token",
+        hint: "",
+        run: () => {
+          const key = "jarvis_admin_token";
+          let current = "";
+          try { current = localStorage.getItem(key) || ""; } catch (e) {}
+          const entered = prompt("Admin token (blank clears it):", current);
+          if (entered === null) return;
+          try {
+            if (entered.trim()) localStorage.setItem(key, entered.trim());
+            else localStorage.removeItem(key);
+          } catch (e) {}
+        },
+      },
+    ];
+    const paletteInput = document.getElementById("jx-palette-input");
+    const paletteBody = document.getElementById("jx-palette-body");
+    let paletteSelected = 0;
+    let paletteFiltered = jxCommands.slice();
+
+    function renderPalette() {
+      const q = paletteInput.value.trim().toLowerCase();
+      paletteFiltered = jxCommands.filter((c) => c.label.toLowerCase().includes(q));
+      if (paletteSelected >= paletteFiltered.length) paletteSelected = 0;
+      paletteBody.innerHTML = paletteFiltered.length
+        ? paletteFiltered
+            .map(
+              (c, i) =>
+                `<div class="jx-action-item${i === paletteSelected ? " jx-selected" : ""}" data-idx="${i}">` +
+                `<span>${escapeHtml(c.label)}</span><span class="jx-hint">${escapeHtml(c.hint)}</span></div>`
+            )
+            .join("")
+        : '<div class="jx-empty">No matching command.</div>';
+    }
+    function runPaletteSelection() {
+      const cmd = paletteFiltered[paletteSelected];
+      if (!cmd) return;
+      jxCloseOverlay("jx-palette-panel");
+      cmd.run();
+    }
+    function openPalette() {
+      jxOpenOverlay("jx-palette-panel");
+      paletteInput.value = "";
+      paletteSelected = 0;
+      renderPalette();
+      setTimeout(() => paletteInput.focus(), 0);
+    }
+    document.getElementById("jx-palette-toggle").addEventListener("click", openPalette);
+    paletteInput.addEventListener("input", () => {
+      paletteSelected = 0;
+      renderPalette();
+    });
+    paletteBody.addEventListener("click", (e) => {
+      const item = e.target.closest(".jx-action-item");
+      if (!item) return;
+      paletteSelected = Number(item.dataset.idx);
+      runPaletteSelection();
+    });
+    paletteInput.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        paletteSelected = Math.min(paletteFiltered.length - 1, paletteSelected + 1);
+        renderPalette();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        paletteSelected = Math.max(0, paletteSelected - 1);
+        renderPalette();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        runPaletteSelection();
+      } else if (e.key === "Escape") {
+        jxCloseOverlay("jx-palette-panel");
+      }
+    });
+
+    /* Keyboard Shortcut (roadmap item 104): Ctrl/Cmd+J toggles chat,
+       Ctrl/Cmd+K toggles the command palette, Escape closes whichever
+       new overlay (or the existing chat panel, via its own real close
+       button) is currently open. A single new listener — none of this
+       rebinds or removes any existing key handling on the page. */
+    document.addEventListener("keydown", (e) => {
+      const key = e.key.toLowerCase();
+      if ((e.metaKey || e.ctrlKey) && key === "k") {
+        e.preventDefault();
+        if (jxOverlayEl("jx-palette-panel").classList.contains("hidden")) openPalette();
+        else jxCloseOverlay("jx-palette-panel");
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && key === "j") {
+        e.preventDefault();
+        toggleChatPanel();
+        return;
+      }
+      if (key === "escape") {
+        const openOverlay = document.querySelector(".jx-overlay:not(.hidden)");
+        if (openOverlay) {
+          openOverlay.classList.add("hidden");
+          return;
+        }
+        const chatPanel = document.getElementById("chat-panel");
+        const chatCloseBtn = document.getElementById("chat-close");
+        if (chatPanel && chatCloseBtn && !chatPanel.classList.contains("hidden")) {
+          chatCloseBtn.click();
+        }
+      }
+    });
   })();
 })();
 </script>
