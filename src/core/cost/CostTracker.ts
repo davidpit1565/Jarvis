@@ -111,6 +111,41 @@ export class CostTracker {
     return row.total;
   }
 
+  /**
+   * Per-provider spend/call-count totals, most-expensive-first — the
+   * breakdown a Cost Analytics panel needs (JARVIS_ROADMAP_AUDIT.md #192)
+   * that `getTodaySpend`/`getMonthSpend` alone don't give (they only sum
+   * across every provider). `sinceIso` restricts to calls recorded at or
+   * after that timestamp; omit for all-time.
+   */
+  getBreakdownByProvider(sinceIso?: string): Array<{ provider: string; totalUsd: number; calls: number }> {
+    const rows = sinceIso
+      ? (this.db
+          .query(
+            `SELECT provider, COALESCE(SUM(estimated_cost_usd), 0) as totalUsd, COUNT(*) as calls
+             FROM ai_costs WHERE timestamp >= ? GROUP BY provider ORDER BY totalUsd DESC`
+          )
+          .all(sinceIso) as Array<{ provider: string; totalUsd: number; calls: number }>)
+      : (this.db
+          .query(
+            `SELECT provider, COALESCE(SUM(estimated_cost_usd), 0) as totalUsd, COUNT(*) as calls
+             FROM ai_costs GROUP BY provider ORDER BY totalUsd DESC`
+          )
+          .all() as Array<{ provider: string; totalUsd: number; calls: number }>);
+    return rows;
+  }
+
+  /** The most recent `limit` recorded calls, newest first — for a Cost Analytics panel's "recent activity" list. */
+  listRecent(limit = 50): CostRecord[] {
+    const rows = this.db
+      .query(
+        `SELECT id, provider, estimated_cost_usd as estimatedCostUsd, timestamp
+         FROM ai_costs ORDER BY timestamp DESC LIMIT ?`
+      )
+      .all(limit) as CostRecord[];
+    return rows;
+  }
+
   close(): void {
     this.db.close();
   }

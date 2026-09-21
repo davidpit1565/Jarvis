@@ -82,4 +82,39 @@ describe("CostTracker", () => {
     expect(second.getTodaySpend(now)).toBeCloseTo(0.5, 5);
     second.close();
   });
+
+  test("getBreakdownByProvider sums spend/calls per provider, most-expensive-first", () => {
+    tracker = new CostTracker(":memory:");
+    tracker.record("anthropic", 0.5);
+    tracker.record("anthropic", 0.3);
+    tracker.record("groq", 0);
+
+    const breakdown = tracker.getBreakdownByProvider();
+    expect(breakdown).toHaveLength(2);
+    expect(breakdown[0]).toMatchObject({ provider: "anthropic", calls: 2 });
+    expect(breakdown[0]!.totalUsd).toBeCloseTo(0.8, 5);
+    expect(breakdown.find((p) => p.provider === "groq")).toMatchObject({ provider: "groq", totalUsd: 0, calls: 1 });
+  });
+
+  test("getBreakdownByProvider(sinceIso) excludes calls recorded before that timestamp", () => {
+    tracker = new CostTracker(":memory:");
+    tracker.record("anthropic", 1, "2025-01-01T00:00:00.000Z");
+    tracker.record("anthropic", 2, "2025-02-01T00:00:00.000Z");
+
+    const breakdown = tracker.getBreakdownByProvider("2025-01-15T00:00:00.000Z");
+    expect(breakdown).toHaveLength(1);
+    expect(breakdown[0]!.totalUsd).toBeCloseTo(2, 5);
+  });
+
+  test("listRecent returns the most recent calls, newest first, bounded by limit", () => {
+    tracker = new CostTracker(":memory:");
+    tracker.record("anthropic", 1, "2025-01-01T00:00:00.000Z");
+    tracker.record("anthropic", 2, "2025-01-02T00:00:00.000Z");
+    tracker.record("groq", 0, "2025-01-03T00:00:00.000Z");
+
+    const recent = tracker.listRecent(2);
+    expect(recent).toHaveLength(2);
+    expect(recent[0]!.provider).toBe("groq");
+    expect(recent[1]!.estimatedCostUsd).toBeCloseTo(2, 5);
+  });
 });
