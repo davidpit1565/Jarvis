@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { AIRouter, BudgetExceededError } from "@/core/brain/AIRouter";
+import { AIRouter, BudgetExceededError, ZeroCostModeError, CircuitOpenError } from "@/core/brain/AIRouter";
 import { AIProviderRegistry } from "@/core/brain/AIProviderRegistry";
 import { CostTracker } from "@/core/cost/CostTracker";
 import { EventBus } from "@/core/events/EventBus";
@@ -28,6 +28,19 @@ function countingBrain(text: string, calls: string[], name: string): Brain {
     async chat(): Promise<BrainResponse> {
       calls.push(name);
       return { text, toolCalls: [], stopReason: "stop" };
+    },
+  };
+}
+
+/** A brain whose `chat()` behavior is controlled by a mutable flag/queue, for circuit-breaker tests that need several sequential calls to the same provider to behave differently. */
+function scriptedBrain(script: Array<"ok" | "fail">): Brain {
+  let i = 0;
+  return {
+    async chat(): Promise<BrainResponse> {
+      const step = script[Math.min(i, script.length - 1)]!;
+      i++;
+      if (step === "fail") throw new Error(`scripted failure #${i}`);
+      return { text: "ok", toolCalls: [], stopReason: "stop" };
     },
   };
 }
@@ -232,6 +245,235 @@ describe("AIRouter", () => {
 
       await router.chat(REQUEST);
       expect(costTracker.getTodaySpend()).toBeCloseTo(3, 5); // $3/M input tokens
+    });
+  });
+
+  describe("ZERO_COST_MODE", () => {
+    test("routes to the free provider instead of an explicit paid one, without touching the paid provider", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      registry.register("groq", countingBrain("free reply", calls, "groq"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, {
+        explicitProvider: "anthropic",
+        zeroCostMode: true,
+      });
+
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("free reply");
+      expect(calls).toEqual(["groq"]);
+    });
+
+    test("throws ZeroCostModeError (never calling the paid provider) when no free provider is configured at all", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { zeroCostMode: true });
+
+      await expect(router.chat(REQUEST)).rejects.toThrow(ZeroCostModeError);
+      expect(calls).toEqual([]);
+    });
+
+    test("throws ZeroCostModeError (never falling through to paid) when the free provider fails and no other free provider exists", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", (() => {
+        return {
+          async chat(): Promise<BrainResponse> {
+            calls.push("groq");
+            throw new Error("groq down");
+          },
+        };
+      })(), "free");
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { zeroCostMode: true, freeFirst: true });
+
+      await expect(router.chat(REQUEST)).rejects.toThrow(ZeroCostModeError);
+      // The free provider was tried (and failed) — the paid one never was.
+      expect(calls).toEqual(["groq"]);
+    });
+
+    test("never restricts a free provider even in ZERO_COST_MODE", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", okBrain("free reply"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { zeroCostMode: true });
+
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("free reply");
+    });
+
+    test("ZERO_COST_MODE is a hard boundary independent of the (unmet) budget caps", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      // Budget caps are nowhere near exceeded — but zero-cost mode still blocks.
+      const router = new AIRouter(registry, costTracker, {
+        zeroCostMode: true,
+        maxDailyCostUsd: 1000,
+        maxMonthlyCostUsd: 1000,
+      });
+
+      await expect(router.chat(REQUEST)).rejects.toThrow(ZeroCostModeError);
+      expect(calls).toEqual([]);
+    });
+  });
+
+  describe("circuit breaker", () => {
+    test("opens a provider's circuit after N consecutive failures and routes around it", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", scriptedBrain(["fail", "fail", "fail", "fail"]), "free");
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, {
+        freeFirst: true,
+        circuitBreakerThreshold: 2,
+        circuitBreakerCooldownMs: 60_000,
+      });
+
+      // 1st call: groq fails (1 consecutive failure), falls back to anthropic.
+      await router.chat(REQUEST);
+      // 2nd call: groq fails again (2 consecutive failures -> circuit opens), falls back to anthropic.
+      await router.chat(REQUEST);
+      expect(calls.filter((c) => c === "anthropic").length).toBe(2);
+
+      // 3rd call: groq's circuit is now open — routing must skip straight to
+      // anthropic without ever invoking groq's chat() a third time.
+      calls.length = 0;
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("paid reply");
+      expect(calls).toEqual(["anthropic"]);
+
+      const status = router.getProviderStatus();
+      expect(status.groq!.circuitOpen).toBe(true);
+    });
+
+    test("after the cooldown elapses, allows a half-open trial call that closes the circuit again on success", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("groq", scriptedBrain(["fail", "fail", "ok"]), "free");
+      registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, {
+        freeFirst: true,
+        circuitBreakerThreshold: 2,
+        circuitBreakerCooldownMs: 30,
+      });
+
+      await router.chat(REQUEST); // groq fails (1)
+      await router.chat(REQUEST); // groq fails (2) -> circuit opens
+
+      // Wait past the (1ms) cooldown so the next call is a half-open trial.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const response = await router.chat(REQUEST); // groq succeeds -> circuit closes
+      expect(response.text).toBe("ok");
+
+      const status = router.getProviderStatus();
+      expect(status.groq!.circuitOpen).toBe(false);
+      expect(status.groq!.consecutiveFailures).toBe(0);
+    });
+
+    test("a failed half-open trial re-opens the circuit", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", scriptedBrain(["fail", "fail", "fail", "fail"]), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, {
+        circuitBreakerThreshold: 2,
+        circuitBreakerCooldownMs: 30,
+      });
+
+      await expect(router.chat(REQUEST)).rejects.toThrow(); // failure 1
+      await expect(router.chat(REQUEST)).rejects.toThrow(); // failure 2 -> opens
+      expect(router.getProviderStatus().groq!.circuitOpen).toBe(true);
+
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      // Half-open trial call fails -> circuit re-opens (single-provider setup,
+      // so the call is still attempted and the error still propagates).
+      await expect(router.chat(REQUEST)).rejects.toThrow();
+      expect(router.getProviderStatus().groq!.circuitOpen).toBe(true);
+    });
+
+    test("an open circuit with no usable fallback throws CircuitOpenError", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", scriptedBrain(["fail", "fail"]), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { circuitBreakerThreshold: 1 });
+
+      await expect(router.chat(REQUEST)).rejects.toThrow(); // 1 failure -> circuit opens
+      await expect(router.chat(REQUEST)).rejects.toThrow(CircuitOpenError); // circuit open, no fallback, never even calls groq again
+    });
+
+    test("a success resets the consecutive-failure count", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", scriptedBrain(["fail", "ok", "fail", "ok"]), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { circuitBreakerThreshold: 2 });
+
+      await expect(router.chat(REQUEST)).rejects.toThrow(); // 1 failure
+      await router.chat(REQUEST); // success -> resets to 0
+      expect(router.getProviderStatus().groq!.consecutiveFailures).toBe(0);
+      await expect(router.chat(REQUEST)).rejects.toThrow(); // 1 failure again (not 3rd consecutive)
+      expect(router.getProviderStatus().groq!.circuitOpen).toBe(false); // threshold is 2, only 1 consecutive failure
+    });
+  });
+
+  describe("getProviderStatus", () => {
+    test("only lists configured providers, with circuitOpen false and no samples before any call", () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", okBrain("hi"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, {});
+
+      const status = router.getProviderStatus();
+      expect(Object.keys(status)).toEqual(["groq"]);
+      expect(status.groq).toEqual({
+        configured: true,
+        costTier: "free",
+        circuitOpen: false,
+        consecutiveFailures: 0,
+        latencyMs: undefined,
+        averageLatencyMs: undefined,
+        successRate: undefined,
+        sampleSize: 0,
+      });
+    });
+
+    test("records latency and success rate for both successful and failed calls", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", scriptedBrain(["ok", "fail", "ok"]), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { circuitBreakerThreshold: 100 });
+
+      await router.chat(REQUEST);
+      await expect(router.chat(REQUEST)).rejects.toThrow();
+      await router.chat(REQUEST);
+
+      const status = router.getProviderStatus().groq!;
+      expect(status.sampleSize).toBe(3);
+      expect(status.successRate).toBeCloseTo(2 / 3, 5);
+      expect(typeof status.latencyMs).toBe("number");
+      expect(status.latencyMs).toBeGreaterThanOrEqual(0);
+      expect(typeof status.averageLatencyMs).toBe("number");
+      expect(status.averageLatencyMs).toBeGreaterThanOrEqual(0);
+    });
+
+    test("reports each configured provider's costTier", () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", okBrain("hi"), "free");
+      registry.register("anthropic", okBrain("hi"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, {});
+
+      const status = router.getProviderStatus();
+      expect(status.groq!.costTier).toBe("free");
+      expect(status.anthropic!.costTier).toBe("paid");
     });
   });
 });
