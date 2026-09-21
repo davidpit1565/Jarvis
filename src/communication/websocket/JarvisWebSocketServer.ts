@@ -77,6 +77,13 @@ const OBSERVABLE_EVENTS = [
   "device.registered",
   "device.connected",
   "device.disconnected",
+  // Forwards JARVIS's user-facing live state (LISTENING/THINKING/EXECUTING/
+  // SPEAKING/…) to observer clients — see the doc comment on
+  // "jarvis.liveState.changed" in src/types/events.ts. Roadmap items 92-97/
+  // 101-103 and the UI half of item 36: this is the one-line addition that
+  // comment says was intentionally deferred, now wired so the hologram UI
+  // can show a real state indicator instead of a fake one.
+  "jarvis.liveState.changed",
 ] as const;
 
 export interface JarvisWebSocketServerDependencies {

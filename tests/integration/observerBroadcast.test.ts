@@ -125,6 +125,43 @@ describe("Observer broadcast (/observer)", () => {
     deviceWs.close();
   });
 
+  test("mirrors jarvis.liveState.changed to a connected observer (roadmap items 92-97/101-103, UI half of item 36)", async () => {
+    const { handle, port, eventBus } = setupServer();
+    activeHandle = handle;
+
+    const ws = new WebSocket(`ws://localhost:${port}/observer`);
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("observer socket failed to open"));
+      setTimeout(() => reject(new Error("Timed out opening observer socket")), 2000);
+    });
+
+    const received = new Promise<{ type: string; payload: unknown }>((resolve, reject) => {
+      ws.onmessage = (event) => resolve(JSON.parse(event.data as string));
+      setTimeout(() => reject(new Error("Timed out waiting for broadcast")), 2000);
+    });
+
+    eventBus.emit("jarvis.liveState.changed", {
+      sessionId: "chat:user-1",
+      userId: "user-1",
+      from: "IDLE",
+      to: "LISTENING",
+      reason: "user message received",
+      timestamp: Date.now(),
+    });
+
+    const message = await received;
+    expect(message.type).toBe("jarvis.liveState.changed");
+    expect(message.payload).toMatchObject({
+      sessionId: "chat:user-1",
+      userId: "user-1",
+      from: "IDLE",
+      to: "LISTENING",
+    });
+
+    ws.close();
+  });
+
   test("rejects an /observer upgrade with no token when an admin token is configured", async () => {
     const { handle, port } = setupServer("secret-token");
     activeHandle = handle;

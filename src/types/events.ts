@@ -45,8 +45,8 @@ export interface JarvisEventMap {
    * `userId` is included directly too so a consumer that only cares about
    * "this user" doesn't need to parse `sessionId`. `language`, when
    * present, is the reply language ("en" | "he") known for this session at
-   * the time of the transition. Not yet forwarded to WebSocket observer
-   * clients — see JarvisWebSocketServer's OBSERVABLE_EVENTS comment.
+   * the time of the transition. Forwarded to WebSocket observer clients —
+   * see JarvisWebSocketServer's OBSERVABLE_EVENTS list.
    */
   "jarvis.liveState.changed": {
     sessionId: string;
