@@ -39,6 +39,23 @@ export interface JarvisEventMap {
   "tool.callLimitExceeded": { toolName: string; userId: string; totalToolCalls: number; limit: number };
   /** A local tool's `execute()` was aborted after exceeding its configured timeout instead of hanging forever. */
   "tool.timedOut": { toolName: string; userId: string; timeoutMs: number };
+  /**
+   * Fast Path: a user message deterministically matched one of a small set
+   * of known simple single-tool-call shapes (see
+   * `src/core/intent/FastPathClassifier.ts`) and was routed straight to
+   * that tool instead of a full brain round-trip with the whole tool
+   * registry exposed. `shape` names which recognized pattern matched (e.g.
+   * "weather.current") — pure observability, never used for control flow.
+   */
+  "fastPath.hit": { userId: string; toolName: string; shape: string };
+  /**
+   * Fast Path: the message didn't clearly match any known fast-path shape
+   * and fell through to the normal full path unchanged. Emitted so
+   * fast-path coverage is measurable (hit-rate) rather than assumed —
+   * every `handleUserMessage` turn emits exactly one of `fastPath.hit` or
+   * `fastPath.miss`.
+   */
+  "fastPath.miss": { userId: string };
   "permission.checked": { toolId: string; result: PermissionCheckResult };
   "device.registered": { device: Device };
   "device.connected": { deviceId: string };
@@ -48,15 +65,26 @@ export interface JarvisEventMap {
   /**
    * AIRouter switched away from its primary provider for this call:
    * "call-failed" (the primary's call threw), "budget-exceeded" (a
-   * daily/monthly cost cap blocked a paid provider), "zero-cost-mode"
+   * daily/monthly cost cap blocked a paid provider), "run-budget-exceeded"
+   * (this run's own `maxCostPerRunUsd` ceiling — Denial-of-wallet
+   * protection — blocked a paid provider), "zero-cost-mode"
    * (ZERO_COST_MODE forbade a paid provider outright), or "circuit-open"
    * (the primary's circuit breaker is open after repeated failures).
    */
   "ai.providerFallback": {
     from: string;
     to: string;
-    reason: "call-failed" | "budget-exceeded" | "zero-cost-mode" | "circuit-open";
+    reason: "call-failed" | "budget-exceeded" | "run-budget-exceeded" | "zero-cost-mode" | "circuit-open";
   };
+  /**
+   * Model Escalation: `AIRouter.chatWithEscalation` retried a call
+   * against a stronger provider after the caller's deterministic
+   * `isValid` check rejected the first response (schema validation
+   * failure, empty response, tool-call parse failure). Always exactly
+   * one retry per call — never emitted more than once per
+   * `chatWithEscalation` invocation.
+   */
+  "ai.escalation": { from: string; to: string; reason: "validation-failed" };
   /** An AgentCore task moved from one state to another — see src/agent/AgentTaskStateMachine.ts for the legal transitions. */
   "agent.task.transition": {
     taskId: string;

@@ -2,9 +2,32 @@ import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { EventBus } from "@/core/events/EventBus";
 import { AIProviderRegistry, type ProviderName } from "./AIProviderRegistry";
 import { CostTracker, estimateCostUsd } from "@/core/cost/CostTracker";
+import { modelsForProvider, type ModelCapabilities } from "./ModelCatalog";
 
 /** Thrown when a paid provider would be used but a configured budget cap is already met/exceeded and no free provider is available to fall back to. */
 export class BudgetExceededError extends Error {}
+
+/**
+ * Denial-of-wallet protection: thrown when a paid provider would be used
+ * but this specific run (`request.runId` — one `handleUserMessage` turn
+ * or one `AgentCore` task) has already spent at least `maxCostPerRunUsd`
+ * and no free provider is available to fall back to. Distinct from
+ * `BudgetExceededError`: that one bounds total spend across every run
+ * (daily/monthly); this one bounds a single runaway run/task (a retry
+ * loop, a plan that keeps re-calling the same expensive tool) regardless
+ * of how far under the daily/monthly cap the account still is overall.
+ */
+export class RunBudgetExceededError extends Error {}
+
+/**
+ * Fallback Correctness: thrown when a request declares a hard capability
+ * requirement (today, only "this request has an attached image") that
+ * *no* configured provider's `ModelCatalog` entry supports — routing
+ * refuses outright rather than silently sending the request to a
+ * provider that would ignore or error on the image. See
+ * `requestNeedsVision`/`providerSupportsVision` below.
+ */
+export class NoCapableProviderError extends Error {}
 
 /**
  * Thrown when `ZERO_COST_MODE` is on and routing would otherwise have to
@@ -61,6 +84,19 @@ export interface AIRouterOptions {
   maxDailyCostUsd?: number;
   maxMonthlyCostUsd?: number;
   /**
+   * Denial-of-wallet protection: hard ceiling (USD) on estimated spend
+   * within a single run (`request.runId` — one `handleUserMessage` turn
+   * or one `AgentCore` task). Once a run's own accumulated spend reaches
+   * this, further paid-provider calls *within that same run* fall back
+   * to a free provider (or throw `RunBudgetExceededError` if none is
+   * available) — independent of, and checked before, the daily/monthly
+   * caps below, which only bound spend in aggregate and wouldn't catch a
+   * single runaway retry/verification loop still well under the daily
+   * total. A request with no `runId` set is never subject to this cap.
+   * Unset means unlimited (today's behavior).
+   */
+  maxCostPerRunUsd?: number;
+  /**
    * Hard zero-cost boundary: when true, AIRouter will NEVER call a paid
    * provider, under any circumstance — not as a fallback, not when the
    * free provider fails, nothing. This is stricter than and independent
@@ -81,6 +117,32 @@ export interface AIRouterOptions {
 const PROVIDER_STATS_WINDOW = 20;
 const DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+
+/** Coarse, ordered ranking of `ModelCatalogEntry.capabilities.quality` — used only to pick a "stronger" model for escalation, never for routine routing. */
+const QUALITY_RANK: Record<ModelCapabilities["quality"], number> = { basic: 0, good: 1, excellent: 2 };
+
+/**
+ * A request "needs vision" if any user message carries at least one
+ * attached image — the same real, already-live signal `ClaudeBrain`/
+ * `GroqBrain`/`OpenRouterBrain` each already read off `message.images`
+ * to build their own provider-specific request bodies. This is not
+ * speculative plumbing: it's the one capability JARVIS's message flow
+ * genuinely already exercises (see `UserMessageImage`/`Orchestrator`'s
+ * image handling).
+ */
+function requestNeedsVision(request: BrainRequest): boolean {
+  return request.messages.some((message) => message.role === "user" && (message.images?.length ?? 0) > 0);
+}
+
+/** Whether `provider`'s catalog entry/entries claim vision support. Only one model per provider is in `MODEL_CATALOG` today, so this is exact, not a guess. */
+function providerSupportsVision(provider: ProviderName): boolean {
+  return modelsForProvider(provider).some((entry) => entry.capabilities.vision);
+}
+
+/** The highest `quality` rank any cataloged model for `provider` reaches, or -1 if `provider` has no catalog entry at all. */
+function maxQualityForProvider(provider: ProviderName): number {
+  return modelsForProvider(provider).reduce((max, entry) => Math.max(max, QUALITY_RANK[entry.capabilities.quality]), -1);
+}
 
 type CircuitState = "closed" | "open" | "half-open";
 
@@ -172,7 +234,56 @@ export class AIRouter implements Brain {
   }
 
   async chat(request: BrainRequest): Promise<BrainResponse> {
-    const primary = this.applyBudget(this.resolvePrimary());
+    return this.chatInternal(request);
+  }
+
+  /**
+   * Model Escalation: calls `chat()` normally, then — only if `isValid`
+   * (a caller-supplied, deterministic check: schema validation, non-empty
+   * response, tool-call parse success — never "ask another AI call to
+   * judge this one") rejects the response — retries **once** against a
+   * genuinely *stronger* allowed provider (by `ModelCatalog` `quality`),
+   * respecting every existing boundary along the way: `zeroCostMode`
+   * (never escalates to a paid provider when it's on), the daily/monthly
+   * and per-run budget caps, and the circuit breaker. If no stronger
+   * provider is configured, the escalation call itself fails, or budget/
+   * zero-cost-mode forbids it, this simply returns the original
+   * (possibly-invalid) response rather than throwing — escalation is a
+   * best-effort improvement on top of a call that already succeeded, and
+   * must never turn an otherwise-working turn into a hard failure.
+   */
+  async chatWithEscalation(request: BrainRequest, isValid: (response: BrainResponse) => boolean): Promise<BrainResponse> {
+    const used: { value?: ProviderName } = {};
+    const first = await this.chatInternal(request, used);
+    if (isValid(first) || !used.value) return first;
+
+    const candidate = this.resolveEscalationCandidate(used.value, request);
+    if (!candidate) return first;
+
+    let actual: ProviderName;
+    try {
+      actual = this.applyBudget(candidate, request, new Set([used.value]));
+    } catch {
+      // Escalating isn't affordable/allowed right now (budget cap,
+      // ZERO_COST_MODE) — that's not a reason to fail a call that
+      // already produced *a* response; return it as-is.
+      return first;
+    }
+    if (actual === used.value || this.effectiveCircuitState(actual) === "open") return first;
+
+    this.options.eventBus?.emit("ai.escalation", { from: used.value, to: actual, reason: "validation-failed" });
+    try {
+      return await this.timedCall(actual, request);
+    } catch {
+      // The stronger provider's call itself failed — fall back to the
+      // original response rather than throwing, and never retry again
+      // (escalation is capped at exactly one attempt).
+      return first;
+    }
+  }
+
+  private async chatInternal(request: BrainRequest, providerUsedOut?: { value?: ProviderName }): Promise<BrainResponse> {
+    const primary = this.applyBudget(this.resolvePrimary(request), request);
     const tried = new Set<ProviderName>([primary]);
 
     if (this.effectiveCircuitState(primary) === "open") {
@@ -181,14 +292,17 @@ export class AIRouter implements Brain {
         request,
         "circuit-open",
         tried,
-        new CircuitOpenError(this.circuitOpenMessage(primary))
+        new CircuitOpenError(this.circuitOpenMessage(primary)),
+        providerUsedOut
       );
     }
 
     try {
-      return await this.timedCall(primary, request);
+      const response = await this.timedCall(primary, request);
+      if (providerUsedOut) providerUsedOut.value = primary;
+      return response;
     } catch (primaryError) {
-      return this.routeToFallback(primary, request, "call-failed", tried, primaryError);
+      return this.routeToFallback(primary, request, "call-failed", tried, primaryError, providerUsedOut);
     }
   }
 
@@ -225,20 +339,23 @@ export class AIRouter implements Brain {
     request: BrainRequest,
     reason: "call-failed" | "circuit-open",
     tried: Set<ProviderName>,
-    errorIfUnusable: unknown
+    errorIfUnusable: unknown,
+    providerUsedOut?: { value?: ProviderName }
   ): Promise<BrainResponse> {
-    const fallback = this.resolveFallback(primary);
+    const fallback = this.resolveFallback(primary, request);
     if (!fallback) throw errorIfUnusable;
 
-    // applyBudget may itself throw (BudgetExceededError/ZeroCostModeError)
-    // — that's a more specific, more useful error than errorIfUnusable
-    // and is allowed to propagate as-is.
-    const actualFallback = this.applyBudget(fallback, tried);
+    // applyBudget may itself throw (BudgetExceededError/ZeroCostModeError/
+    // RunBudgetExceededError) — that's a more specific, more useful error
+    // than errorIfUnusable and is allowed to propagate as-is.
+    const actualFallback = this.applyBudget(fallback, request, tried);
     tried.add(actualFallback);
     if (this.effectiveCircuitState(actualFallback) === "open") throw errorIfUnusable;
 
     this.options.eventBus?.emit("ai.providerFallback", { from: primary, to: actualFallback, reason });
-    return this.timedCall(actualFallback, request);
+    const response = await this.timedCall(actualFallback, request);
+    if (providerUsedOut) providerUsedOut.value = actualFallback;
+    return response;
   }
 
   private async timedCall(provider: ProviderName, request: BrainRequest): Promise<BrainResponse> {
@@ -247,7 +364,7 @@ export class AIRouter implements Brain {
     try {
       const response = await this.registry.get(provider)!.chat(request);
       this.recordOutcome(provider, true, performance.now() - start, wasHalfOpenTrial);
-      this.recordCost(provider, response);
+      this.recordCost(provider, response, request.runId);
       return response;
     } catch (err) {
       this.recordOutcome(provider, false, performance.now() - start, wasHalfOpenTrial);
@@ -255,9 +372,36 @@ export class AIRouter implements Brain {
     }
   }
 
-  private resolvePrimary(): ProviderName {
+  /**
+   * Fallback Correctness: when `request` needs vision, only ever
+   * considers providers whose `ModelCatalog` entry claims vision support
+   * — cost-tier preference still applies *within* that capable subset
+   * (free-first is tried first among capable providers). Throws
+   * `NoCapableProviderError` if the request needs vision and *no*
+   * configured provider can serve it at all, rather than silently
+   * sending the image to a text-only model. An explicit
+   * `options.explicitProvider` still always wins, same as before this
+   * capability check existed — a deliberate operator choice isn't
+   * second-guessed here.
+   */
+  private resolvePrimary(request: BrainRequest): ProviderName {
     if (this.options.explicitProvider && this.registry.has(this.options.explicitProvider)) {
       return this.options.explicitProvider;
+    }
+
+    if (requestNeedsVision(request)) {
+      const visionCapable = this.registry.listConfigured().filter((name) => providerSupportsVision(name));
+      if (visionCapable.length === 0) {
+        throw new NoCapableProviderError(
+          "This request includes an attached image, but no configured AI provider's model supports vision " +
+            "(per ModelCatalog) — refusing rather than silently sending the image to a text-only model."
+        );
+      }
+      if (this.freeFirst) {
+        const freeVisionCapable = visionCapable.find((name) => this.registry.getMeta(name)?.costTier === "free");
+        if (freeVisionCapable) return freeVisionCapable;
+      }
+      return visionCapable[0]!;
     }
 
     if (this.freeFirst) {
@@ -272,15 +416,48 @@ export class AIRouter implements Brain {
     return this.registry.listConfigured()[0]!;
   }
 
-  private resolveFallback(primary: ProviderName): ProviderName | undefined {
+  /**
+   * Fallback Correctness: a candidate that lacks a capability `request`
+   * actually needs (today: vision) is never picked as a fallback,
+   * including an explicit `fallbackProvider` override — it's skipped in
+   * favor of another configured provider that does have it, or, if none
+   * does, `routeToFallback` throws the original error instead of
+   * silently degrading to a broken/incomplete response.
+   */
+  private resolveFallback(primary: ProviderName, request: BrainRequest): ProviderName | undefined {
+    const needsVision = requestNeedsVision(request);
+    const isCapable = (name: ProviderName) => !needsVision || providerSupportsVision(name);
+
     if (
       this.options.fallbackProvider &&
       this.options.fallbackProvider !== primary &&
-      this.registry.has(this.options.fallbackProvider)
+      this.registry.has(this.options.fallbackProvider) &&
+      isCapable(this.options.fallbackProvider)
     ) {
       return this.options.fallbackProvider;
     }
-    return this.registry.listConfigured().find((name) => name !== primary);
+    return this.registry.listConfigured().find((name) => name !== primary && isCapable(name));
+  }
+
+  /**
+   * Model Escalation: the strongest other *configured* provider (by
+   * `ModelCatalog` `quality`) that is genuinely stronger than `exclude`
+   * — never a lateral or weaker pick, and never `exclude` itself.
+   * `zeroCostMode`/budget enforcement happens separately, in
+   * `applyBudget`, after this — this only answers "which provider would
+   * be the escalation target if we could afford it".
+   */
+  private resolveEscalationCandidate(exclude: ProviderName, request: BrainRequest): ProviderName | undefined {
+    const excludeQuality = maxQualityForProvider(exclude);
+    const needsVision = requestNeedsVision(request);
+    const stronger = this.registry
+      .listConfigured()
+      .filter(
+        (name) =>
+          name !== exclude && maxQualityForProvider(name) > excludeQuality && (!needsVision || providerSupportsVision(name))
+      );
+    if (stronger.length === 0) return undefined;
+    return stronger.reduce((best, name) => (maxQualityForProvider(name) > maxQualityForProvider(best) ? name : best));
   }
 
   /**
@@ -294,7 +471,11 @@ export class AIRouter implements Brain {
    * same request is not a usable alternative, and retrying it silently
    * would contradict "never silently degrade".
    */
-  private applyBudget(candidate: ProviderName, alreadyTried: ReadonlySet<ProviderName> = new Set()): ProviderName {
+  private applyBudget(
+    candidate: ProviderName,
+    request: BrainRequest,
+    alreadyTried: ReadonlySet<ProviderName> = new Set()
+  ): ProviderName {
     const meta = this.registry.getMeta(candidate);
     if (!meta || meta.costTier !== "paid") return candidate;
 
@@ -311,6 +492,26 @@ export class AIRouter implements Brain {
           ? `ZERO_COST_MODE is enabled and no free-tier provider is configured at all — refusing to call the paid "${candidate}" provider. Chat capability is unavailable until a free-tier provider (e.g. GROQ_API_KEY) is configured or ZERO_COST_MODE is disabled.`
           : `ZERO_COST_MODE is enabled and the free-tier provider(s) available for this request already failed or are unavailable — refusing to call the paid "${candidate}" provider. Chat capability is unavailable for this request.`
       );
+    }
+
+    // Denial-of-wallet protection: a hard per-run ceiling, checked before
+    // the softer daily/monthly caps below — a single runaway run/task can
+    // otherwise burn well past what's reasonable for one turn while the
+    // account-wide daily/monthly totals are still nowhere near their cap.
+    if (this.options.maxCostPerRunUsd !== undefined && request.runId) {
+      const runSpend = this.costTracker.getRunSpend(request.runId);
+      if (runSpend >= this.options.maxCostPerRunUsd) {
+        const free = this.registry.findByCostTier("free").find((name) => !alreadyTried.has(name));
+        if (free) {
+          this.options.eventBus?.emit("ai.providerFallback", { from: candidate, to: free, reason: "run-budget-exceeded" });
+          return free;
+        }
+        throw new RunBudgetExceededError(
+          `This run's cost ceiling ($${this.options.maxCostPerRunUsd}) has already been reached ` +
+            `(spent $${runSpend.toFixed(4)} so far this run) and no free-tier provider is available to fall back to — ` +
+            `refusing to call the paid "${candidate}" provider for the rest of this run.`
+        );
+      }
     }
 
     const dailyExceeded =
@@ -333,7 +534,7 @@ export class AIRouter implements Brain {
     );
   }
 
-  private recordCost(provider: ProviderName, response: BrainResponse): void {
+  private recordCost(provider: ProviderName, response: BrainResponse, runId?: string): void {
     // Failed calls aren't recorded: a call that errors (network failure,
     // 429/5xx) is the common case where no tokens were actually billed,
     // and without a response there's no usage data to estimate from
@@ -341,6 +542,7 @@ export class AIRouter implements Brain {
     // recording nothing.
     const cost = estimateCostUsd(provider, response.usage);
     this.costTracker.record(provider, cost);
+    if (runId) this.costTracker.recordRunCost(runId, cost);
   }
 
   private circuitOpenMessage(provider: ProviderName): string {

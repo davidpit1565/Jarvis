@@ -18,9 +18,15 @@ export class ToolRegistry {
     return Array.from(this.tools.values());
   }
 
-  /** Produces the tool definitions Claude needs to decide what to call. */
-  toToolDefinitions(): ToolDefinition[] {
-    return this.listTools().map((tool) => ({
+  /**
+   * Produces the tool definitions Claude needs to decide what to call.
+   * Pass `tools` (e.g. the output of Dynamic Tool Scoping's
+   * `scopeToolsForMessage`) to build definitions for a narrowed subset
+   * instead of the full registry; omitted defaults to every registered
+   * tool, today's behavior.
+   */
+  toToolDefinitions(tools?: readonly Tool[]): ToolDefinition[] {
+    return (tools ?? this.listTools()).map((tool) => ({
       name: tool.name,
       description: tool.description,
       input_schema: tool.inputSchema,

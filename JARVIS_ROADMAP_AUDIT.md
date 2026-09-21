@@ -636,3 +636,399 @@ Not touched, per the hard constraints: `ui/hologram/index.html`'s visuals,
 arbitrary-execution tool was added (already covered by
 `tests/security/noArbitraryExecution.test.ts`, unchanged and still
 passing), no Swift files.
+
+---
+
+## Premium Agent Intelligence/Security Upgrade — batch 2 (2026-09-21)
+
+Continuation of the same 50-phase prompt above, run in parallel with
+another agent doing Fast Path/parallel-execution/tool-scoping work on
+different files. Scope this pass: Hard Zero Cost Mode (verify/close gaps),
+Denial-of-wallet protection (per-run budget ceiling), Model Escalation
+(cheap-first, escalate on validation failure), Fallback Correctness
+(capability-aware routing). Baseline before this pass: 1686 tests passing,
+0 failures, 0 typecheck errors. After this pass: **1714 tests passing, 0
+failures, 0 typecheck errors** (28 new tests, 0 regressions).
+
+### 1. Hard Zero Cost Mode — ALREADY_EXISTS_AND_GOOD
+
+Read `AIRouter.applyBudget` in full and traced every path that can reach a
+*paid* candidate: `chat()`'s primary selection, its exception-fallback
+path, and (new this pass) `chatWithEscalation`'s escalation path all funnel
+through the exact same `applyBudget()`, which checks `zeroCostMode` first,
+before the daily/monthly caps and before the new per-run ceiling — a paid
+candidate is always swapped for an untried free provider or the call
+throws `ZeroCostModeError`; there is no code path that skips this check.
+Confirmed no gap exists even with the new Model Escalation feature: the
+escalation path (`chatWithEscalation`) reuses `applyBudget()` unchanged
+rather than reimplementing budget/zero-cost logic, so it inherits the same
+hard boundary automatically — escalating "up" to a paid provider under
+ZERO_COST_MODE is structurally impossible, not just avoided by
+convention.
+
+**Adversarial test added**
+(`tests/brain/AIRouter.test.ts`, "ZERO_COST_MODE adversarial — combined
+with Model Escalation"): forces every free provider to either fail
+outright or return a response the caller's deterministic validator
+rejects, with `zeroCostMode: true` and a paid provider configured, and
+asserts the paid provider's `chat()` is never invoked (`calls` stays
+`["groq"]`) — either the invalid-but-affordable free response is returned
+as-is (no exception, no silent paid call) or, when the free provider fails
+outright, `ZeroCostModeError` is thrown. Nothing was changed in
+`AIRouter`'s zero-cost logic itself — it was already airtight; this only
+adds test coverage proving the new escalation feature didn't introduce a
+gap.
+
+### 2. Denial-of-wallet protection — MISSING, now built (per-run ceiling)
+
+**Already existed:** `maxDailyCostUsd`/`maxMonthlyCostUsd` (global,
+persisted-to-SQLite totals via `CostTracker.getTodaySpend`/
+`getMonthSpend`) — these bound aggregate spend but do nothing about a
+single runaway turn/task still well under the daily total.
+
+**Built new:** `CostTracker` gains an in-memory (never persisted) per-run
+accumulator — `recordRunCost(runId, cost)`, `getRunSpend(runId)`,
+`resetRun(runId)` — bounded to `MAX_TRACKED_RUNS` (2000) entries with
+least-recently-touched eviction, so no caller is required to remember to
+clean up after itself for correctness (though `resetRun` exists for
+callers that want to free a slot early). `AIRouter` gains
+`maxCostPerRunUsd` (env `JARVIS_MAX_COST_PER_RUN_USD`), enforced inside
+`applyBudget()` — checked *before* the daily/monthly caps, since a
+per-run ceiling is the more specific/stricter constraint — and a new
+`RunBudgetExceededError` thrown when the ceiling is hit and no free
+provider is available to fall back to. `BrainRequest` gains an optional
+`runId` field: `Orchestrator.handleUserMessage` generates one `randomUUID()`
+per turn and reuses it for every `brain.chat()` call within that turn's
+`MAX_TOOL_ITERATIONS` loop; `AgentCore` passes its `taskId` through
+`AgentPlanRequest`/`AgentVerificationRequest` (both gained an optional
+`taskId` field) into `BrainAgentPlanner`'s `chat()`/`chatWithEscalation`
+calls, so one AgentCore task's plan + verification calls share one run
+scope. A request with no `runId` is never subject to this cap (unchanged
+default behavior).
+
+Tests: `tests/brain/AIRouter.test.ts` ("Denial-of-wallet protection —
+per-run cost ceiling", 6 tests: falls back to free once the ceiling is
+hit despite the daily cap being far off, throws `RunBudgetExceededError`
+with no free fallback, a different run's spend never counts against this
+run, real accumulated spend across multiple calls on one runId eventually
+trips the ceiling, ZERO_COST_MODE still wins over `maxCostPerRunUsd`, no
+`runId` means no cap); `tests/cost/CostTracker.test.ts` ("per-run cost
+accumulator", 5 tests).
+
+### 3. Model Escalation — MISSING, now built (one well-scoped case)
+
+**Already existed:** nothing — prior work was free-vs-paid routing and
+circuit breakers, not confidence/validation-based escalation, confirmed
+by reading `AIRouter.ts` in full before starting.
+
+**Built new:** `AIRouter.chatWithEscalation(request, isValid)` — calls
+`chat()` normally, and only if the caller's deterministic `isValid`
+predicate rejects the response, retries **exactly once** against the
+strongest other *configured* provider that is genuinely stronger by
+`ModelCatalog`'s `quality` ranking (never a lateral or weaker pick, never
+the same provider twice). Reuses `applyBudget()` for the escalation
+candidate too, so ZERO_COST_MODE/budget caps are enforced identically —
+if escalating isn't affordable/allowed, or the escalation call itself
+fails, or no stronger provider exists, `chatWithEscalation` simply returns
+the original response rather than throwing (escalation is a best-effort
+improvement on a call that already produced *something*, never a new
+failure mode). Deliberately deterministic-signal-only, per the task's own
+instruction: no "ask an LLM to judge another LLM's answer" anywhere in
+this path.
+
+**Wired into one concrete, well-scoped case:** `BrainAgentPlanner.plan()`
+— a plan response that fails to parse into a JSON array (malformed
+prose, a truncated response, an empty string) is exactly the "schema
+validation failure" signal the feature targets; a *legitimately* empty
+`[]` plan ("goal can't be accomplished") is explicitly not treated as
+invalid, so it never triggers a wasted escalation call. `BrainAgentPlanner`
+duck-types its `Brain` dependency (`supportsEscalation`, checking for a
+`chatWithEscalation` method) rather than adding this to the base `Brain`
+interface, so `ClaudeBrain`/`GroqBrain`/`OpenRouterBrain`/every existing
+test stub need zero changes — only `AIRouter` (the production `Brain`
+`src/index.ts` actually wires up) implements it.
+
+**Deliberately not wired into:** `BrainAgentPlanner.verify()` — its
+existing `parseVerdict()` already fails closed on anything unparseable
+(`{ verified: false, ... }`), which is itself already the safe outcome an
+escalation retry would be trying to avoid failing into; escalating there
+would only add a second AI call to *possibly* get a more favorable verdict
+on the same claim, which is a different (judgment-shaped) concern the
+task explicitly said not to build.
+
+Tests: `tests/brain/AIRouter.test.ts` ("Model Escalation", 6 tests:
+escalates once on validation failure, skips escalation when already
+valid, caps at exactly one retry, never escalates to a weaker/equal-
+quality provider, respects ZERO_COST_MODE, emits `ai.escalation`);
+`tests/agent/BrainAgentPlanner.test.ts` ("BrainAgentPlanner.plan — Model
+Escalation", 4 tests: escalates and uses the escalated plan, doesn't
+escalate on a legitimate empty plan, passes `taskId` through as `runId`,
+a plain non-escalating `Brain` behaves exactly as before).
+
+### 4. Fallback Correctness — NEEDS_UPGRADE (real latent bug found and fixed)
+
+**Investigated whether this is moot, per the task's own instruction not to
+invent vision-routing that has nothing real to route yet:** it is **not**
+moot. Read `ClaudeBrain.ts`/`GroqBrain.ts`/`OpenRouterBrain.ts` in full —
+all three already read `message.images` off `ConversationMessage` and
+build real image content blocks (`image` for Anthropic, `image_url` for
+the OpenAI-compatible Groq/OpenRouter APIs) regardless of whether the
+underlying model actually supports vision. `Orchestrator.handleUserMessage`
+already accepts and threads `images` through today. `ModelCatalog` already
+marks `capabilities.vision: true` only for the Anthropic model — Groq's
+and OpenRouter's free Llama models are `vision: false`. But `AIRouter`'s
+routing (`resolvePrimary`/`resolveFallback`, both pre-this-pass) never
+consulted `ModelCatalog` at all — with `freeFirst` on (the default) and an
+image attached, the router would route straight to Groq/OpenRouter every
+time, silently sending a broken/ignored `image_url` block to a model that
+doesn't support it. This is the exact "real latent bug" the task described
+as worth fixing minimally.
+
+**Fixed:** `resolvePrimary(request)` now checks `requestNeedsVision(request)`
+(true iff any user message has at least one attached image — the same
+already-live signal the three Brain implementations already read) and, if
+so, only selects among providers whose `ModelCatalog` entry claims vision
+support (still free-first *within* that capable subset); if literally no
+configured provider supports vision, it throws the new
+`NoCapableProviderError` rather than silently sending the image anywhere.
+`resolveFallback(primary, request)` applies the same capability filter —
+including skipping an explicit `fallbackProvider` override that lacks the
+capability — so a failed vision-capable primary never silently falls back
+to a text-only provider B; it either finds a capable provider C or the
+original error propagates. An explicit `explicitProvider`
+(`JARVIS_BRAIN_PROVIDER`) still always wins even for an image request it
+can't serve well — a deliberate operator override isn't second-guessed,
+consistent with how explicit provider selection already worked before this
+pass. A text-only request (the overwhelming majority) is entirely
+unaffected: `requestNeedsVision` is false, so routing is identical to
+before this pass.
+
+Tests: `tests/brain/AIRouter.test.ts` ("Fallback Correctness —
+capability-aware routing", 5 tests: picks the vision-capable paid provider
+over a non-vision free one for an image request, a text-only request is
+unaffected, throws `NoCapableProviderError` when nothing configured
+supports vision, fallback-on-failure skips a non-vision provider and
+propagates the original error instead of degrading, an explicit provider
+still wins even for an image request).
+
+### Files touched this pass
+
+`src/types/brain.ts` (`BrainRequest.runId`), `src/types/events.ts`
+(`ai.providerFallback`'s `reason` gained `"run-budget-exceeded"`, new
+`ai.escalation` event), `src/core/brain/AIRouter.ts`
+(`RunBudgetExceededError`, `NoCapableProviderError`, `maxCostPerRunUsd`,
+`chatWithEscalation`, capability-aware `resolvePrimary`/`resolveFallback`),
+`src/core/cost/CostTracker.ts` (per-run accumulator),
+`src/core/orchestrator/Orchestrator.ts` (per-turn `runId`),
+`src/agent/types.ts` (`AgentPlanRequest.taskId`,
+`AgentVerificationRequest.taskId`), `src/agent/AgentCore.ts` (passes
+`taskId` through), `src/agent/BrainAgentPlanner.ts` (`chatWithEscalation`
+wiring, `runId` threading), `src/config/index.ts`
+(`JARVIS_MAX_COST_PER_RUN_USD`), `src/index.ts` (wires `maxCostPerRunUsd`
+into `AIRouter`). Tests: `tests/brain/AIRouter.test.ts` (extended, 17 new
+tests), `tests/cost/CostTracker.test.ts` (extended, 5 new tests),
+`tests/agent/BrainAgentPlanner.test.ts` (extended, 4 new tests) — 26 total
+new/changed test files' worth of coverage, 28 new tests overall.
+
+Not touched, per the hard constraints: `ui/hologram/index.html`'s visuals,
+`src/communication/websocket/dashboard.ts`'s visuals, no shell/AppleScript/
+arbitrary-execution tool was added, no provider API key or token count
+logged anywhere in the new code (cost figures are dollar amounts only,
+never token counts tied to conversation content beyond what
+`estimateCostUsd`/`CostTracker` already logged before this pass).
+## Premium Agent Intelligence/Security Upgrade — batch 2 (2026-09-21)
+
+Continuation of the same 50-phase prompt, batch 2 of 3 in-scope items:
+Fast Path, Parallel Tool Execution, Dynamic Tool Scoping. Baseline before
+this pass: 1686 tests passing, 0 failures, 0 typecheck errors. After this
+pass: **1733 tests passing, 0 failures, 0 typecheck errors** (47 new
+tests, 0 regressions).
+
+Read `src/core/orchestrator/Orchestrator.ts`, `src/core/brain/AIRouter.ts`,
+`src/core/brain/AIProviderRegistry.ts`, `src/tools/registry/ToolRegistry.ts`
+and `src/agent/AgentCore.ts` in full before starting, as instructed.
+Confirmed: `AgentCore` executes its plan steps through
+`Orchestrator.executeToolCall` directly, never through
+`Orchestrator.handleUserMessage` — so none of the three items below (all
+implemented inside `handleUserMessage`) touch AgentCore's autonomous-task
+path at all; that path is unaffected by this pass.
+
+### Shared classification module
+
+`src/core/intent/MessageTopics.ts` (new): `classifyMessageTopics(text)`,
+a deterministic (no LLM call), keyword/substring matcher tagging a message
+with zero or more `MessageTopic`s (weather, calendar, spotify, email,
+telegram, news, reminders, commitments, alarms, wakeup, automation,
+memory, files, system, images, studio, phone, history, undo, devices).
+This is the single shared building block both Fast Path and Dynamic Tool
+Scoping import — per the task's own instruction not to duplicate similar
+keyword-matching logic in two places. It only ever tags topics; it never
+decides what to do about them, since the two consumers have very different
+false-positive tolerance (a Fast Path false positive is a real bug; a Tool
+Scoping false negative is just a bloated tool list, the explicitly safer
+failure mode).
+
+### 1. Fast Path — built
+
+`src/core/intent/FastPathClassifier.ts` (new): `classifyFastPath(message)`,
+a small table of `RULES`, each an anchored (`^...$`) regex matched against
+the ENTIRE normalized message, mapped to one tool name + exact input.
+Covers: current weather (`get_weather`, no args — deliberately never
+matches a named city or "forecast"/"tomorrow", since the tool can't safely
+honor those), today's calendar (`list_calendar_events`, no args), and
+Spotify pause/resume/skip(-next/-previous)/currently-playing. `play_music`
+only fast-paths the no-argument "resume" shape — never a named song,
+since the classifier has no safe way to fill in the tool's `query` input.
+Every rule requires the shared `classifyMessageTopics` to detect exactly
+that one topic and no other, as a second independent guard on top of the
+anchored regex. Deliberately conservative throughout: a message matches
+only if it says nothing more than one of these exact simple shapes;
+anything else (a city, a song name, two topics in one message, an image
+attached) falls through to the full path unchanged.
+
+Wired into `Orchestrator.handleUserMessage`: classification + tool-registry
+lookup happen synchronously (no `await`) before any other work, so a
+message that *doesn't* match costs nothing extra and doesn't shift any
+turn's microtask timing (this actually broke a timing-sensitive
+`liveState.integration.test.ts` test during development — fixed by moving
+the classify+lookup out of the async helper and only awaiting when a real
+match was found). A match runs through `executeToolCall` — the exact same
+permission/confirmation/lockdown/audit pipeline as any other tool call, so
+"fast" never means "unchecked" — then makes exactly one `brain.chat` call
+with `tools: []` (no tool-selection exposure) to phrase the final reply,
+instead of the normal path's brain call with the full/scoped tool registry
+exposed. A message whose fast-path tool isn't registered on this
+Orchestrator (e.g. Spotify not configured) falls through to the full path
+rather than erroring. New events `fastPath.hit` (`userId`, `toolName`,
+`shape`) / `fastPath.miss` (`userId`) — every turn emits exactly one,
+giving a measurable hit rate instead of an assumed one.
+
+**Deliberately not built:** semantic/embedding-based fast-path matching —
+that needs an embeddings call, which would both cost money (contradicting
+`ZERO_COST_MODE`, which Fast Path must respect exactly like everything
+else) and reintroduce the LLM round-trip Fast Path exists to avoid. No
+"time" fast-path shape (mentioned as an example in the task prompt) — this
+repo has no `GET_TIME`/current-time tool at all, so there is nothing to
+route to; adding one was out of scope. No fast-path shape that takes a
+free-text argument (a city, a song, a search query) — filling one in
+without an LLM call would mean guessing, which is exactly the false-
+positive risk the task says to bias hard against.
+
+### 2. Parallel Tool Execution — built
+
+`Orchestrator.runToolCallBatch` (replacing the old single `for` loop over
+`response.toolCalls` after per-run-limit checks): walks the tool calls in
+order, and whenever it finds a run of consecutive calls whose
+`requiredPermission` is `READ`, batches up to `MAX_PARALLEL_TOOL_CALLS`
+(5) of them and runs the batch via `Promise.allSettled` — never
+`Promise.all`, so one call throwing never aborts or drops its siblings'
+results; every settled outcome (including any `{success:false}` result,
+which is not a throw and always completes normally) is recorded via
+`completeToolCall` before this method reacts to a rejection, and only
+after the whole batch has settled does it re-throw the first rejection (if
+any), preserving the existing behavior that an uncaught tool error ends
+the turn. Any call whose `requiredPermission` is above READ
+(SAFE_ACTION/CONFIRM/DANGEROUS) is always run alone — a hard rule, not a
+heuristic: it is never batched with another call, however many
+same-or-higher-permission calls appear in a row. Each call, batched or
+solo, still goes through the exact same `executeToolCall` pipeline
+(permission check, confirmation, lockdown, audit events) independently —
+parallelism here is purely wall-clock scheduling, never a shortcut around
+that pipeline. The per-run call-count/limit check (Tool Risk Model, batch
+1) still runs synchronously over the whole `response.toolCalls` array
+*before* any batching, so counting/limit behavior is unchanged.
+
+Tests (`tests/integration/orchestrator.test.ts`, "Parallel Tool Execution"
+describe block): two independent 50ms READ tool calls in one turn complete
+in well under the ~100ms sequential floor (asserted `<90ms`, run 5x in a
+row during development with no flakiness observed); a failing READ call
+alongside a succeeding one leaves both results correctly recorded, neither
+swallowed nor corrupted; two DANGEROUS calls (with an auto-approving
+`ConfirmationService`) are proven via a concurrency counter to never have
+more than one in flight at once; a READ call immediately followed by a
+SAFE_ACTION call is likewise proven never to overlap.
+
+**Deliberately not built:** a configurable concurrency limit (kept as a
+private constant, `MAX_PARALLEL_TOOL_CALLS = 5`) — no concrete need for
+per-deployment tuning exists yet, and the task only asked for "a
+concurrency limit," not a configurable one. No cross-batch parallelism
+(e.g. overlapping a READ batch with a following solo SAFE_ACTION call) —
+batches are still processed in the original left-to-right order of
+`response.toolCalls`, since the brain's own ordering of calls in one
+response can itself carry intent (e.g. "check the weather, then turn on
+the AC" — a SAFE_ACTION after a READ) that this pass has no reason to
+second-guess.
+
+### 3. Dynamic Tool Scoping — built
+
+`src/core/intent/ToolScoping.ts` (new): `scopeToolsForMessage(message,
+tools, recentContext?)`. Rule-based, not another AI call: classifies the
+combined `message` + optional `recentContext` text via the shared
+`classifyMessageTopics`. If zero topics or more than one topic is
+detected, returns the full `tools` list unchanged — both a plain
+"hi"/"thanks" message and a genuinely multi-topic message ("what's the
+weather and what's on my calendar") fall back to full exposure rather than
+guess. If exactly one topic is detected, returns: an always-on core set
+(`SAVE_MEMORY`/`SEARCH_MEMORY`/`DELETE_MEMORY`, the reminder tools,
+`UNDO_LAST_ACTION` — per the task's own "memory tools, reminders" example)
++ that topic's own mapped tool ids (by stable `Tool.id`, not the
+human-facing `name`) + every tool this module has no topic mapping for at
+all. That last clause is the real safety valve: an unclassified tool
+(including any future tool nobody's updated this map for yet) is *never*
+hidden — the task's own instruction that a false "tool not available" is
+worse than a bloated context is implemented literally, as "unknown ->
+always include," not just as a vague intention.
+
+`ToolRegistry.toToolDefinitions()` gained an optional `tools?: Tool[]`
+parameter (build definitions for a given subset instead of the whole
+registry; omitted keeps today's behavior). Wired into
+`Orchestrator.handleUserMessage`: the scoped subset is computed once per
+turn (from the triggering user message + the previous turn's user message
+text as `recentContext`, captured before the current message is added to
+conversation history) and reused for every brain call within that turn's
+tool-iteration loop — not recomputed per iteration, since re-scoping
+mid-turn against a tool result rather than the user's own words would risk
+narrowing away something the model legitimately needs next.
+
+Tests (`tests/intent/ToolScoping.test.ts`): a weather-only message scopes
+out Gmail/calendar/Telegram/SMS/file-write tools while keeping
+`GET_WEATHER`/`GET_WEATHER_FORECAST`; the core set (memory/reminders/undo)
+survives scoping; an unmapped tool is never hidden; an ambiguous message
+and a genuinely multi-topic message both fall back to the full set;
+`recentContext` alone can supply the topic signal for a context-free
+follow-up message ("and tomorrow?"); scoping never adds a tool that wasn't
+in the input list.
+
+**Deliberately not built:** per-turn re-scoping as the tool-iteration loop
+progresses (see above — same-message scoping only, for the whole turn).
+No embeddings/semantic similarity scoring — rule-based keyword tagging
+only, per the task's explicit instruction. No topic weighting/ranking (a
+topic either matches or it doesn't) — the task asked for "reasonably
+scoped," not "surgically precise."
+
+### Files touched this pass
+
+New: `src/core/intent/MessageTopics.ts`, `src/core/intent/
+FastPathClassifier.ts`, `src/core/intent/ToolScoping.ts`. Changed:
+`src/types/events.ts` (`fastPath.hit`/`fastPath.miss`),
+`src/tools/registry/ToolRegistry.ts` (`toToolDefinitions` subset param),
+`src/core/orchestrator/Orchestrator.ts` (Fast Path routing, scoped-tools
+brain calls, `runToolCallBatch`). Tests: `tests/intent/
+FastPathClassifier.test.ts` (new), `tests/intent/ToolScoping.test.ts`
+(new), `tests/integration/orchestrator.test.ts` (two new `describe`
+blocks: "Fast Path", "Parallel Tool Execution"; `setup()`'s options
+gained an optional `confirmationService` passthrough for the new
+DANGEROUS-tool concurrency tests).
+
+Not touched, per the hard constraints: `ui/hologram/index.html`'s visuals,
+`src/communication/websocket/dashboard.ts`'s visuals, no shell/AppleScript/
+arbitrary-execution tool was added, no new env vars/config flags were
+introduced (Fast Path and Tool Scoping are always-on optimizations with no
+per-deployment toggle — kept out of scope to minimize the blast radius of
+touching `src/config/index.ts` and all 6 `new Orchestrator(...)` call
+sites in `src/index.ts` for something the task didn't ask for), no Swift
+files, `ZERO_COST_MODE`/budget/circuit-breaker routing in `AIRouter` is
+untouched and still fully respected (Fast Path's one finalize call and the
+normal path's tool-selection call both go through the exact same injected
+`Brain`, so both are still fully subject to zero-cost/budget/circuit-
+breaker enforcement — neither optimization bypasses `AIRouter` in any way).

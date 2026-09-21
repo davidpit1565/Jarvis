@@ -117,4 +117,42 @@ describe("CostTracker", () => {
     expect(recent[0]!.provider).toBe("groq");
     expect(recent[1]!.estimatedCostUsd).toBeCloseTo(2, 5);
   });
+
+  describe("per-run cost accumulator (Denial-of-wallet protection)", () => {
+    test("getRunSpend is 0 for a run with no recorded cost", () => {
+      tracker = new CostTracker(":memory:");
+      expect(tracker.getRunSpend("never-touched")).toBe(0);
+    });
+
+    test("accumulates multiple recordRunCost calls for the same runId", () => {
+      tracker = new CostTracker(":memory:");
+      tracker.recordRunCost("run-1", 1.5);
+      tracker.recordRunCost("run-1", 2.5);
+      expect(tracker.getRunSpend("run-1")).toBeCloseTo(4, 5);
+    });
+
+    test("keeps separate runs' accumulators independent", () => {
+      tracker = new CostTracker(":memory:");
+      tracker.recordRunCost("run-a", 10);
+      tracker.recordRunCost("run-b", 1);
+      expect(tracker.getRunSpend("run-a")).toBeCloseTo(10, 5);
+      expect(tracker.getRunSpend("run-b")).toBeCloseTo(1, 5);
+    });
+
+    test("resetRun clears a run's accumulator back to 0", () => {
+      tracker = new CostTracker(":memory:");
+      tracker.recordRunCost("run-1", 5);
+      tracker.resetRun("run-1");
+      expect(tracker.getRunSpend("run-1")).toBe(0);
+    });
+
+    test("per-run spend is independent of the persisted daily/monthly totals", () => {
+      tracker = new CostTracker(":memory:");
+      tracker.recordRunCost("run-1", 100);
+      // recordRunCost never touches the persisted ai_costs table that
+      // getTodaySpend/getMonthSpend read from.
+      expect(tracker.getTodaySpend()).toBe(0);
+      expect(tracker.getMonthSpend()).toBe(0);
+    });
+  });
 });

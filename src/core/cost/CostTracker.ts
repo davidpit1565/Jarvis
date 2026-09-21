@@ -63,8 +63,31 @@ export interface CostRecord {
  * re-deriving spend from scratch each time. Same house style as
  * ReminderStore: a plain constructor(dbPath), a close(), no ORM.
  */
+/**
+ * Denial-of-wallet protection: hard upper bound on how many distinct
+ * "run" (one `handleUserMessage` turn, one `AgentCore` task) cost
+ * accumulators `CostTracker` keeps in memory at once. Runs are never
+ * explicitly closed by every caller (a turn/task that errors out before
+ * completing would otherwise leak its entry forever), so instead of
+ * requiring callers to remember to call `resetRun`, the tracker evicts
+ * the least-recently-touched run once this cap is hit — generous enough
+ * that no real deployment's concurrent-run count gets anywhere near it,
+ * while still bounding a long-lived process's memory.
+ */
+const MAX_TRACKED_RUNS = 2_000;
+
 export class CostTracker {
   private db: Database;
+  /**
+   * In-memory (never persisted) per-run cost accumulator, insertion-
+   * ordered so the oldest/least-recently-touched run is evicted first
+   * once `MAX_TRACKED_RUNS` is hit. Deliberately not durable: a "run" is
+   * gone the moment its turn/task ends, so there is nothing worth saving
+   * past that — this exists only to enforce `AIRouter.maxCostPerRunUsd`
+   * (Denial-of-wallet protection) while the run is still in flight, which
+   * is a different concern from the persisted daily/monthly totals below.
+   */
+  private runSpend = new Map<string, number>();
 
   constructor(dbPath: string = ":memory:") {
     if (dbPath !== ":memory:") {
@@ -144,6 +167,36 @@ export class CostTracker {
       )
       .all(limit) as CostRecord[];
     return rows;
+  }
+
+  /**
+   * Denial-of-wallet protection: adds `estimatedCostUsd` to `runId`'s
+   * in-memory accumulator, in addition to (never instead of) the
+   * persisted global record `record()` already wrote. `AIRouter` calls
+   * this right after `record()` for every call that carries a `runId`.
+   */
+  recordRunCost(runId: string, estimatedCostUsd: number): void {
+    const current = this.runSpend.get(runId) ?? 0;
+    // Delete-then-set bumps this run to "most recently touched" in the
+    // Map's iteration order, so eviction below always removes the
+    // actually-oldest run, not just the first one ever inserted.
+    this.runSpend.delete(runId);
+    this.runSpend.set(runId, current + estimatedCostUsd);
+
+    if (this.runSpend.size > MAX_TRACKED_RUNS) {
+      const oldestKey = this.runSpend.keys().next().value;
+      if (oldestKey !== undefined) this.runSpend.delete(oldestKey);
+    }
+  }
+
+  /** Total estimated cost recorded against `runId` so far (0 if none recorded, or it was evicted/reset). */
+  getRunSpend(runId: string): number {
+    return this.runSpend.get(runId) ?? 0;
+  }
+
+  /** Clears `runId`'s accumulator. Optional — callers don't need to call this for correctness (see `MAX_TRACKED_RUNS`), only to free its slot early. */
+  resetRun(runId: string): void {
+    this.runSpend.delete(runId);
   }
 
   close(): void {

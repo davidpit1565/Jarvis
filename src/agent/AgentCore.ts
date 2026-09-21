@@ -357,6 +357,7 @@ export class AgentCore {
           userId: task.userId,
           priorFailure,
           completedSteps,
+          taskId,
         });
         this.deps.auditLog.recordAgentEvent(taskId, task.userId, "plan.produced", {
           stepCount: proposals.length,
@@ -434,6 +435,7 @@ export class AgentCore {
         }
 
         const verification = await this.deps.planner.verify({
+          taskId,
           step,
           result: step.lastResult,
           runVerificationTool: (toolName, input) =>
