@@ -43,6 +43,9 @@ import { MemoryStore } from "@/memory/MemoryStore";
 import { ReminderStore } from "@/reminders/ReminderStore";
 import { buildContextNote } from "@/core/buildContextNote";
 import { ToolAuditLog } from "@/audit/ToolAuditLog";
+import { AgentCore } from "@/agent/AgentCore";
+import { AgentTaskStore } from "@/agent/AgentTaskStore";
+import { BrainAgentPlanner } from "@/agent/BrainAgentPlanner";
 import { TokenUsageStore } from "@/audit/TokenUsageStore";
 import { CostAlertMonitor } from "@/audit/CostAlertMonitor";
 import { estimateCostUsd } from "@/audit/estimateCostUsd";
@@ -494,6 +497,39 @@ function main() {
     contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
     lockdownService,
   });
+
+  // Autonomous Agent Core — Goal Engine + persistent/priority task queue +
+  // background worker (roadmap items 26-34). Reuses the exact same
+  // Orchestrator/ToolRegistry/PermissionService pipeline as any other tool
+  // call; never wired into `Orchestrator.handleUserMessage` itself, an
+  // explicit opt-in surface only. `resumeIncompleteTasks()` runs once,
+  // synchronously, before the queue worker's first tick, so a task a
+  // previous process left mid-flight (PLANNING/EXECUTING/VERIFYING/
+  // RETRYING/RECOVERING/WAITING) is failed cleanly with a clear reason
+  // instead of sitting there forever, invisible — see the doc comment on
+  // `AgentCore.resumeIncompleteTasks` for why that's the safe default
+  // rather than attempting a risky mid-tool-execution resume.
+  const agentTaskStore = new AgentTaskStore(config.agentTaskDbPath);
+  const agentCore = new AgentCore({
+    orchestrator,
+    planner: new BrainAgentPlanner(brain, toolRegistry),
+    toolRegistry,
+    taskStore: agentTaskStore,
+    auditLog: toolAuditLog,
+    eventBus,
+  });
+  const resumedTasks = agentCore.resumeIncompleteTasks();
+  if (resumedTasks.length > 0) {
+    console.warn(
+      `[jarvis] resumeIncompleteTasks: failed ${resumedTasks.length} agent task(s) left non-terminal by a previous process (interrupted by restart)`
+    );
+  }
+  const agentQueueInterval = setInterval(() => {
+    schedulerHealthTracker.tick("agentQueue");
+    agentCore.runQueueTick().catch((error) => {
+      console.error("[jarvis] agent queue tick failed:", error instanceof Error ? error.message : String(error));
+    });
+  }, config.agentQueueTickMs);
 
   // A phone call gets its own conversation thread (a fresh ConversationManager
   // + Orchestrator) but shares every other live instance — same JARVIS,
@@ -1372,6 +1408,8 @@ function main() {
     if (morningBriefingInterval) clearInterval(morningBriefingInterval);
     clearInterval(reminderNotificationInterval);
     clearInterval(automationRuleInterval);
+    clearInterval(agentQueueInterval);
+    agentTaskStore.close();
     calendarTokenStore.close();
     spotifyTokenStore.close();
     rl.close();

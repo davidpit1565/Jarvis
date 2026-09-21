@@ -172,6 +172,109 @@ describe("AgentTaskStore", () => {
     store.close();
   });
 
+  test("create accepts goalId/dependsOnTaskId/priority, defaulting to null/null/0", () => {
+    const store = new AgentTaskStore(":memory:");
+    const plain = store.create({ userId: "user-1", goal: "plain" });
+    expect(plain.goalId).toBeNull();
+    expect(plain.dependsOnTaskId).toBeNull();
+    expect(plain.priority).toBe(0);
+
+    const dep = store.create({ userId: "user-1", goal: "dep" });
+    const tagged = store.create({ userId: "user-1", goal: "tagged", goalId: "goal-1", dependsOnTaskId: dep.id, priority: 7 });
+    expect(tagged.goalId).toBe("goal-1");
+    expect(tagged.dependsOnTaskId).toBe(dep.id);
+    expect(tagged.priority).toBe(7);
+
+    // round-trips through get() too
+    expect(store.get(tagged.id)).toEqual(tagged);
+    store.close();
+  });
+
+  test("listByState returns only tasks currently in that state, oldest first", () => {
+    const store = new AgentTaskStore(":memory:");
+    const a = store.create({ userId: "user-1", goal: "a" });
+    const b = store.create({ userId: "user-1", goal: "b" });
+    store.create({ userId: "user-1", goal: "c" }); // stays PENDING
+    store.setState(a.id, "PLANNING");
+    store.setState(b.id, "PLANNING");
+
+    const planning = store.listByState("PLANNING");
+    expect(planning.map((t) => t.id)).toEqual([a.id, b.id]);
+    expect(store.listByState("EXECUTING")).toEqual([]);
+    store.close();
+  });
+
+  test("listForGoal and getGoalProgress aggregate only tasks tagged with that goalId", () => {
+    const store = new AgentTaskStore(":memory:");
+    const a = store.create({ userId: "user-1", goal: "a", goalId: "g1" });
+    const b = store.create({ userId: "user-1", goal: "b", goalId: "g1" });
+    store.create({ userId: "user-1", goal: "unrelated", goalId: "g2" });
+
+    store.setState(a.id, "PLANNING");
+    store.setState(a.id, "EXECUTING");
+    store.setState(a.id, "COMPLETED");
+    store.setState(b.id, "PLANNING");
+    store.setState(b.id, "FAILED");
+
+    expect(store.listForGoal("g1").map((t) => t.id)).toEqual([a.id, b.id]);
+
+    const progress = store.getGoalProgress("g1");
+    expect(progress).toEqual({ goalId: "g1", total: 2, completed: 1, failed: 1, cancelled: 0, inProgress: 0, waiting: 0 });
+    store.close();
+  });
+
+  test("getProgress computes percentComplete from verified steps out of the plan", () => {
+    const store = new AgentTaskStore(":memory:");
+    const task = store.create({ userId: "user-1", goal: "goal" });
+    expect(store.getProgress(task.id).percentComplete).toBe(0); // no plan yet
+
+    store.setPlan(task.id, [
+      { toolName: "a", input: {}, description: "a" },
+      { toolName: "b", input: {}, description: "b" },
+    ]);
+    const stepId = store.get(task.id)!.plan[0]!.id;
+    store.markStepVerified(task.id, stepId, true, "ok");
+
+    const progress = store.getProgress(task.id);
+    expect(progress.totalSteps).toBe(2);
+    expect(progress.stepsVerified).toBe(1);
+    expect(progress.percentComplete).toBe(50);
+    store.close();
+  });
+
+  test("listActive excludes terminal tasks and getNextEligibleQueuedTask orders by priority then age", () => {
+    const store = new AgentTaskStore(":memory:");
+    const low = store.create({ userId: "user-1", goal: "low", priority: 1 });
+    const high = store.create({ userId: "user-1", goal: "high", priority: 9 });
+    const done = store.create({ userId: "user-1", goal: "done" });
+    store.setState(done.id, "PLANNING");
+    store.setState(done.id, "EXECUTING");
+    store.setState(done.id, "COMPLETED");
+
+    expect(store.listActive("user-1").map((t) => t.id).sort()).toEqual([low.id, high.id].sort());
+
+    const next = store.getNextEligibleQueuedTask();
+    expect(next?.id).toBe(high.id);
+    expect(store.getNextEligibleQueuedTask(new Set([high.id]))?.id).toBe(low.id);
+    store.close();
+  });
+
+  test("getNextEligibleQueuedTask picks up a WAITING task once its dependency has COMPLETED, but not before", () => {
+    const store = new AgentTaskStore(":memory:");
+    const dep = store.create({ userId: "user-1", goal: "dep" });
+    store.setState(dep.id, "PLANNING"); // in flight, not PENDING and not yet COMPLETED
+    const waiter = store.create({ userId: "user-1", goal: "waiter", dependsOnTaskId: dep.id });
+    store.setState(waiter.id, "WAITING");
+
+    expect(store.getNextEligibleQueuedTask()?.id).toBeUndefined();
+
+    store.setState(dep.id, "EXECUTING");
+    store.setState(dep.id, "COMPLETED");
+
+    expect(store.getNextEligibleQueuedTask()?.id).toBe(waiter.id);
+    store.close();
+  });
+
   test("survives a restart: a fresh AgentTaskStore against the same file sees the persisted task", () => {
     const path = `${import.meta.dir}/.tmp-agent-task-store-test.sqlite`;
     try {

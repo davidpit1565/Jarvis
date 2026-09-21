@@ -78,6 +78,10 @@ export interface JarvisConfig {
   toolAuditLogDbPath: string;
   /** Path to the SQLite database storing per-call token usage, for real cost visibility. */
   tokenUsageDbPath: string;
+  /** Path to the SQLite database storing Autonomous Agent Core task state (src/agent/AgentTaskStore.ts) — roadmap items 26-34. */
+  agentTaskDbPath: string;
+  /** How often (ms) the background agent queue worker's `AgentCore.runQueueTick` fires — roadmap item 33. */
+  agentQueueTickMs: number;
   /**
    * IANA timezone (e.g. "Asia/Jerusalem") used to tell Claude the user's
    * local time every turn, so relative times ("tomorrow at 9am") resolve
@@ -421,6 +425,12 @@ export function loadConfig(): JarvisConfig {
   const deviceRegistryDbPath = process.env.JARVIS_DEVICE_REGISTRY_DB_PATH ?? "./data/jarvis-devices.sqlite";
   const toolAuditLogDbPath = process.env.JARVIS_TOOL_AUDIT_LOG_DB_PATH ?? "./data/jarvis-tool-audit.sqlite";
   const tokenUsageDbPath = process.env.JARVIS_TOKEN_USAGE_DB_PATH ?? "./data/jarvis-token-usage.sqlite";
+  const agentTaskDbPath = process.env.JARVIS_AGENT_TASK_DB_PATH ?? "./data/jarvis-agent-tasks.sqlite";
+  const agentQueueTickMsRaw = process.env.JARVIS_AGENT_QUEUE_TICK_MS;
+  const agentQueueTickMs = agentQueueTickMsRaw ? Number(agentQueueTickMsRaw) : 5_000;
+  if (!Number.isFinite(agentQueueTickMs) || agentQueueTickMs <= 0) {
+    throw new ConfigError("Invalid JARVIS_AGENT_QUEUE_TICK_MS: must be a positive integer");
+  }
 
   const timezone = process.env.JARVIS_TIMEZONE?.trim() || "UTC";
   try {
@@ -684,6 +694,8 @@ export function loadConfig(): JarvisConfig {
     deviceRegistryDbPath,
     toolAuditLogDbPath,
     tokenUsageDbPath,
+    agentTaskDbPath,
+    agentQueueTickMs,
     timezone,
     twilioAuthToken,
     twilioPublicBaseUrl,

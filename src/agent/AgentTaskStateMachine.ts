@@ -33,13 +33,20 @@ export type AgentTaskState = (typeof AGENT_TASK_STATES)[number];
 export const AGENT_TASK_TERMINAL_STATES: ReadonlySet<AgentTaskState> = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
 
 const TRANSITIONS: Record<AgentTaskState, ReadonlySet<AgentTaskState>> = {
-  PENDING: new Set(["PLANNING", "CANCELLED"]),
+  // PENDING -> WAITING: a task with an unresolved `dependsOnTaskId` (see
+  // AgentTaskRecord.dependsOnTaskId) is gated straight into WAITING before
+  // it ever reaches PLANNING — roadmap items 28/29 (Dependencies/Waiting
+  // States).
+  PENDING: new Set(["PLANNING", "WAITING", "CANCELLED"]),
   PLANNING: new Set(["EXECUTING", "FAILED", "CANCELLED"]),
   EXECUTING: new Set(["VERIFYING", "RETRYING", "RECOVERING", "EXECUTING", "COMPLETED", "WAITING", "FAILED", "CANCELLED"]),
   VERIFYING: new Set(["COMPLETED", "EXECUTING", "RETRYING", "RECOVERING", "WAITING", "FAILED", "CANCELLED"]),
   RETRYING: new Set(["EXECUTING", "FAILED", "CANCELLED"]),
   RECOVERING: new Set(["PLANNING", "FAILED", "CANCELLED"]),
-  WAITING: new Set(["EXECUTING", "VERIFYING", "FAILED", "CANCELLED"]),
+  // WAITING -> PLANNING: once the dependency a WAITING task was gated on
+  // resolves (completes), the task resumes at PLANNING exactly like a
+  // brand-new PENDING task would.
+  WAITING: new Set(["PLANNING", "EXECUTING", "VERIFYING", "FAILED", "CANCELLED"]),
   COMPLETED: new Set([]),
   FAILED: new Set([]),
   CANCELLED: new Set([]),

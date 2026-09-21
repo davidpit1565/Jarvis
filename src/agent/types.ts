@@ -40,6 +40,28 @@ export interface AgentTaskRecord {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+  /**
+   * Groups this task under a lightweight "Goal" (roadmap items 26-27) —
+   * an opaque id shared by every AgentTask that decomposes the same goal.
+   * There is no separate Goal row/table: a goal is just this shared id,
+   * and its aggregate progress is computed on demand from the linked
+   * tasks via `AgentTaskStore.getGoalProgress`. `null` for a standalone
+   * task not part of any goal.
+   */
+  goalId: string | null;
+  /**
+   * Roadmap item 28 (Dependencies): this task will not leave PENDING/
+   * WAITING for PLANNING until the task with this id has reached
+   * COMPLETED. `null` for a task with no dependency. Kept deliberately
+   * single-link (not a DAG) — chain multiple tasks for a longer sequence.
+   */
+  dependsOnTaskId: string | null;
+  /**
+   * Roadmap items 31-32 (Persistent + Priority Agent Queue): higher runs
+   * first when `AgentCore.runQueueTick` picks the next eligible PENDING/
+   * resolved-WAITING task. Defaults to 0; ties break oldest-first.
+   */
+  priority: number;
 }
 
 /** Request handed to an AgentPlanner to produce (or re-produce, after a failure) an ordered plan. */

@@ -77,4 +77,9 @@ describe("AgentTaskStateMachine", () => {
     expect(canTransition("WAITING", "FAILED")).toBe(true);
     expect(canTransition("WAITING", "CANCELLED")).toBe(true);
   });
+
+  test("a dependency-gated task can go PENDING -> WAITING, and resume WAITING -> PLANNING once resolved", () => {
+    expect(canTransition("PENDING", "WAITING")).toBe(true);
+    expect(canTransition("WAITING", "PLANNING")).toBe(true);
+  });
 });

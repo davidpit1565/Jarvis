@@ -27,6 +27,35 @@ interface AgentTaskDbRow {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  goal_id: string | null;
+  depends_on_task_id: string | null;
+  priority: number;
+}
+
+/** Aggregate progress across every AgentTask linked to one goalId — roadmap item 27. */
+export interface GoalProgress {
+  goalId: string;
+  total: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
+  inProgress: number;
+  waiting: number;
+}
+
+/** A cheap, poll-friendly progress snapshot for one task — roadmap item 34 (Agent Progress API). */
+export interface AgentTaskProgress {
+  taskId: string;
+  state: AgentTaskState;
+  goalId: string | null;
+  totalSteps: number;
+  stepsVerified: number;
+  currentStepIndex: number;
+  totalStepsExecuted: number;
+  /** 0-100, based on verified steps out of the planned total; 0 for a task with no plan yet. */
+  percentComplete: number;
+  failureReason: string | null;
+  updatedAt: string;
 }
 
 /**
@@ -61,11 +90,38 @@ export class AgentTaskStore {
         completed_at TEXT
       )
     `);
+    // Additive, best-effort ALTER TABLEs — same pattern used elsewhere in
+    // this codebase for evolving a SQLite schema without a migration
+    // framework: a column that already exists (a fresh CREATE TABLE run on
+    // a newer version of this file, or a second AgentTaskStore instance
+    // against the same file) throws "duplicate column name", which is
+    // swallowed since it just means the column is already there.
+    for (const ddl of [
+      `ALTER TABLE agent_tasks ADD COLUMN goal_id TEXT`,
+      `ALTER TABLE agent_tasks ADD COLUMN depends_on_task_id TEXT`,
+      `ALTER TABLE agent_tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,
+    ]) {
+      try {
+        this.db.run(ddl);
+      } catch {
+        // column already exists — fine.
+      }
+    }
     this.db.run(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_user_id ON agent_tasks(user_id)`);
     this.db.run(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_state ON agent_tasks(state)`);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_goal_id ON agent_tasks(goal_id)`);
   }
 
-  create(input: { userId: string; goal: string }): AgentTaskRecord {
+  create(input: {
+    userId: string;
+    goal: string;
+    /** Links this task to a Goal — see AgentTaskRecord.goalId doc comment. */
+    goalId?: string | null;
+    /** This task stays PENDING/WAITING until the referenced task COMPLETEs — see AgentTaskRecord.dependsOnTaskId. */
+    dependsOnTaskId?: string | null;
+    /** Higher runs first in the queue — see AgentTaskRecord.priority. Defaults to 0. */
+    priority?: number;
+  }): AgentTaskRecord {
     const now = new Date().toISOString();
     const record: AgentTaskRecord = {
       id: randomUUID(),
@@ -81,6 +137,9 @@ export class AgentTaskStore {
       createdAt: now,
       updatedAt: now,
       completedAt: null,
+      goalId: input.goalId ?? null,
+      dependsOnTaskId: input.dependsOnTaskId ?? null,
+      priority: input.priority ?? 0,
     };
     this.insert(record);
     return record;
@@ -90,8 +149,8 @@ export class AgentTaskStore {
     this.db
       .query(
         `INSERT INTO agent_tasks
-          (id, user_id, goal, state, plan, current_step_index, step_retry_count, recovery_count, total_steps_executed, failure_reason, created_at, updated_at, completed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (id, user_id, goal, state, plan, current_step_index, step_retry_count, recovery_count, total_steps_executed, failure_reason, created_at, updated_at, completed_at, goal_id, depends_on_task_id, priority)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         record.id,
@@ -106,7 +165,10 @@ export class AgentTaskStore {
         record.failureReason,
         record.createdAt,
         record.updatedAt,
-        record.completedAt
+        record.completedAt,
+        record.goalId,
+        record.dependsOnTaskId,
+        record.priority
       );
   }
 
@@ -131,6 +193,9 @@ export class AgentTaskStore {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       completedAt: row.completed_at,
+      goalId: row.goal_id ?? null,
+      dependsOnTaskId: row.depends_on_task_id ?? null,
+      priority: row.priority ?? 0,
     };
   }
 
@@ -243,6 +308,118 @@ export class AgentTaskStore {
   setFailureReason(id: string, reason: string): AgentTaskRecord {
     const task = this.requireTask(id);
     return this.persist({ ...task, failureReason: reason });
+  }
+
+  /** Every task currently in one specific state, oldest first — used by `AgentCore.resumeIncompleteTasks`. */
+  listByState(state: AgentTaskState): AgentTaskRecord[] {
+    const rows = this.db
+      .query(`SELECT * FROM agent_tasks WHERE state = ? ORDER BY created_at ASC, rowid ASC`)
+      .all(state) as AgentTaskDbRow[];
+    return rows.map((row) => this.rowToRecord(row));
+  }
+
+  /** Every task linked to one goal, oldest first — roadmap items 26-27. */
+  listForGoal(goalId: string): AgentTaskRecord[] {
+    const rows = this.db
+      .query(`SELECT * FROM agent_tasks WHERE goal_id = ? ORDER BY created_at ASC, rowid ASC`)
+      .all(goalId) as AgentTaskDbRow[];
+    return rows.map((row) => this.rowToRecord(row));
+  }
+
+  /**
+   * Aggregate progress for a Goal, computed on demand from its linked
+   * tasks' current states (roadmap item 27) — no separate Goal row is
+   * ever written or kept in sync; this always reflects the live truth.
+   */
+  getGoalProgress(goalId: string): GoalProgress {
+    const tasks = this.listForGoal(goalId);
+    const progress: GoalProgress = {
+      goalId,
+      total: tasks.length,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+      inProgress: 0,
+      waiting: 0,
+    };
+    for (const task of tasks) {
+      switch (task.state) {
+        case "COMPLETED":
+          progress.completed++;
+          break;
+        case "FAILED":
+          progress.failed++;
+          break;
+        case "CANCELLED":
+          progress.cancelled++;
+          break;
+        case "WAITING":
+          progress.waiting++;
+          break;
+        default:
+          progress.inProgress++;
+      }
+    }
+    return progress;
+  }
+
+  /** Poll-friendly progress snapshot for one task — roadmap item 34 (Agent Progress API). */
+  getProgress(id: string): AgentTaskProgress {
+    const task = this.requireOrThrow(id);
+    const totalSteps = task.plan.length;
+    const stepsVerified = task.plan.filter((step) => step.status === "verified").length;
+    return {
+      taskId: task.id,
+      state: task.state,
+      goalId: task.goalId,
+      totalSteps,
+      stepsVerified,
+      currentStepIndex: task.currentStepIndex,
+      totalStepsExecuted: task.totalStepsExecuted,
+      percentComplete: totalSteps === 0 ? 0 : Math.round((stepsVerified / totalSteps) * 100),
+      failureReason: task.failureReason,
+      updatedAt: task.updatedAt,
+    };
+  }
+
+  /** Every currently non-terminal task, optionally filtered to one user — roadmap item 34/107 (Active Tasks). */
+  listActive(userId?: string): AgentTaskRecord[] {
+    const rows = userId
+      ? (this.db
+          .query(
+            `SELECT * FROM agent_tasks WHERE user_id = ? AND state NOT IN ('COMPLETED','FAILED','CANCELLED') ORDER BY created_at DESC, rowid DESC`
+          )
+          .all(userId) as AgentTaskDbRow[])
+      : (this.db
+          .query(`SELECT * FROM agent_tasks WHERE state NOT IN ('COMPLETED','FAILED','CANCELLED') ORDER BY created_at DESC, rowid DESC`)
+          .all() as AgentTaskDbRow[]);
+    return rows.map((row) => this.rowToRecord(row));
+  }
+
+  /**
+   * The next task the background queue worker should pick up (roadmap
+   * items 31-32): any PENDING task, or a WAITING task whose
+   * `dependsOnTaskId` has since reached COMPLETED, ordered by priority
+   * (highest first) then age (oldest first). `excludeIds` lets the caller
+   * skip tasks it already has in flight this tick. Returns null when
+   * nothing is eligible.
+   */
+  getNextEligibleQueuedTask(excludeIds: ReadonlySet<string> = new Set()): AgentTaskRecord | null {
+    const rows = this.db
+      .query(
+        `SELECT t.* FROM agent_tasks t
+         WHERE t.state = 'PENDING'
+            OR (t.state = 'WAITING' AND t.depends_on_task_id IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM agent_tasks d WHERE d.id = t.depends_on_task_id AND d.state = 'COMPLETED'
+                ))
+         ORDER BY t.priority DESC, t.created_at ASC, t.rowid ASC
+         LIMIT 50`
+      )
+      .all() as AgentTaskDbRow[];
+    for (const row of rows) {
+      if (!excludeIds.has(row.id)) return this.rowToRecord(row);
+    }
+    return null;
   }
 
   close(): void {

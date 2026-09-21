@@ -5,11 +5,11 @@ import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import type { ToolAuditLog } from "@/audit/ToolAuditLog";
 import type { ToolResult } from "@/types/tools";
 import { toolRequiresVerification } from "@/tools/verificationPolicy";
-import { AgentTaskStore } from "./AgentTaskStore";
+import { AgentTaskStore, type AgentTaskProgress, type GoalProgress } from "./AgentTaskStore";
 import type { AgentPlanner, AgentTaskRecord } from "./types";
 import { classifyError } from "./errorClassification";
 import { AgentTimeoutError, withTimeout } from "./timeout";
-import type { AgentTaskState } from "./AgentTaskStateMachine";
+import { isTerminalState, type AgentTaskState } from "./AgentTaskStateMachine";
 import { liveStateForAgentTaskState, type JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 
 function readEnvInt(name: string, fallback: number): number {
@@ -56,6 +56,18 @@ export interface AgentCoreOptions {
   maxRecoveryCycles?: number;
   stepTimeoutMs?: number;
   taskTimeoutMs?: number;
+  /** How many queued tasks `runQueueTick` runs concurrently. Default 1 — same "one at a time" spirit as the codebase's other setInterval schedulers. */
+  queueConcurrency?: number;
+}
+
+/** Optional extras for creating a task via `runTask`/`enqueueTask` — a goal link, a dependency, and/or a queue priority. */
+export interface RunTaskOptions {
+  /** Groups this task under a Goal — see AgentTaskRecord.goalId. */
+  goalId?: string;
+  /** This task will not start PLANNING until the referenced task COMPLETEs — see AgentTaskRecord.dependsOnTaskId. */
+  dependsOnTaskId?: string;
+  /** Higher runs first in the queue. Defaults to 0. Ignored by `runTask` itself (which always runs immediately), used by `enqueueTask`/`runQueueTick`. */
+  priority?: number;
 }
 
 export class AgentTaskCancelledError extends Error {
@@ -79,6 +91,8 @@ export class AgentTaskCancelledError extends Error {
 export class AgentCore {
   private readonly cancelled = new Set<string>();
   private readonly options: Required<AgentCoreOptions>;
+  /** Task ids currently being processed by `runQueueTick`, so overlapping ticks (or a concurrency > 1 tick) never pick up the same task twice. */
+  private readonly inFlightQueueTasks = new Set<string>();
 
   constructor(
     private readonly deps: AgentCoreDependencies,
@@ -90,13 +104,126 @@ export class AgentCore {
       maxRecoveryCycles: options.maxRecoveryCycles ?? DEFAULT_MAX_RECOVERY_CYCLES,
       stepTimeoutMs: options.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS,
       taskTimeoutMs: options.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
+      queueConcurrency: options.queueConcurrency ?? 1,
     };
   }
 
-  /** Creates a new agent task for `goal` and runs it to completion (COMPLETED, FAILED, or CANCELLED). */
-  async runTask(userId: string, goal: string): Promise<AgentTaskRecord> {
-    const task = this.deps.taskStore.create({ userId, goal });
+  /** Creates a new agent task for `goal` and runs it to completion (COMPLETED, FAILED, CANCELLED, or WAITING on an unresolved dependency). */
+  async runTask(userId: string, goal: string, options: RunTaskOptions = {}): Promise<AgentTaskRecord> {
+    const task = this.deps.taskStore.create({
+      userId,
+      goal,
+      goalId: options.goalId,
+      dependsOnTaskId: options.dependsOnTaskId,
+    });
     return this.runTaskLoop(task.id, Date.now());
+  }
+
+  /**
+   * Creates a task without running it — roadmap items 31-32 (Persistent +
+   * Priority Agent Queue). It sits PENDING in `AgentTaskStore` until a
+   * `runQueueTick` call (normally driven by a `setInterval` in `src/index.ts`,
+   * the same pattern as every other background loop there) picks it up.
+   */
+  enqueueTask(userId: string, goal: string, options: RunTaskOptions = {}): AgentTaskRecord {
+    return this.deps.taskStore.create({
+      userId,
+      goal,
+      goalId: options.goalId,
+      dependsOnTaskId: options.dependsOnTaskId,
+      priority: options.priority,
+    });
+  }
+
+  /**
+   * Starts a lightweight Goal (roadmap items 26-27): one new goalId shared
+   * by one enqueued task per sub-goal string. Tasks are independent (no
+   * auto-chained dependency) unless the caller passes its own via
+   * `dependsOnTaskId` per sub-goal — this is intentionally not a planning
+   * hierarchy, just a shared tag multiple tasks can be grouped and
+   * progress-queried under via `getGoalProgress`.
+   */
+  startGoal(userId: string, subGoals: string[], options: { priority?: number } = {}): { goalId: string; tasks: AgentTaskRecord[] } {
+    const goalId = randomUUID();
+    const tasks = subGoals.map((goal) => this.enqueueTask(userId, goal, { goalId, priority: options.priority }));
+    return { goalId, tasks };
+  }
+
+  /** Aggregate progress for a Goal — see AgentTaskStore.getGoalProgress. */
+  getGoalProgress(goalId: string): GoalProgress {
+    return this.deps.taskStore.getGoalProgress(goalId);
+  }
+
+  /** Poll-friendly progress snapshot for one task — roadmap item 34 (Agent Progress API). */
+  getTaskProgress(taskId: string): AgentTaskProgress {
+    return this.deps.taskStore.getProgress(taskId);
+  }
+
+  /** Every currently non-terminal task, optionally filtered to one user — roadmap item 34/107 (Live Activity / Active Tasks). */
+  listActiveTasks(userId?: string): AgentTaskRecord[] {
+    return this.deps.taskStore.listActive(userId);
+  }
+
+  /**
+   * Runs up to `queueConcurrency` eligible queued tasks to completion (or
+   * to their next WAITING/terminal state) — roadmap item 33 (Background
+   * Agent Worker). Intended to be driven by a `setInterval` in
+   * `src/index.ts`, exactly like the wake-up-call/automation-rule/reminder
+   * loops there; each call is a single "tick", not a long-running loop
+   * itself, so it composes with that pattern instead of introducing a new
+   * one. Returns the tasks it processed this tick (possibly empty).
+   */
+  async runQueueTick(maxConcurrent: number = this.options.queueConcurrency): Promise<AgentTaskRecord[]> {
+    const picked: AgentTaskRecord[] = [];
+    for (let i = 0; i < maxConcurrent; i++) {
+      const next = this.deps.taskStore.getNextEligibleQueuedTask(this.inFlightQueueTasks);
+      if (!next) break;
+      this.inFlightQueueTasks.add(next.id);
+      picked.push(next);
+    }
+    if (picked.length === 0) return [];
+
+    try {
+      return await Promise.all(picked.map((task) => this.runTaskLoop(task.id, Date.now())));
+    } finally {
+      for (const task of picked) this.inFlightQueueTasks.delete(task.id);
+    }
+  }
+
+  /**
+   * Resume After Restart (roadmap item 30). `AgentTaskStore` already
+   * persists every task's exact state, but nothing previously acted on a
+   * task a restart caught mid-flight (PLANNING/EXECUTING/VERIFYING/
+   * RETRYING/RECOVERING/WAITING) — it would just sit there forever,
+   * invisible, never resumed and never marked failed.
+   *
+   * Deliberate, documented choice: this does NOT attempt to resume
+   * mid-tool-execution — there is no way to know whether an interrupted
+   * tool call actually completed on the far end (sent the email? not?)
+   * before the process died, so blindly re-running it could double an
+   * effect the original run may have already caused. The safe default is
+   * to mark every such task FAILED with a clear "interrupted by restart"
+   * reason instead, leaving a human/caller free to re-run the goal from
+   * scratch if it's still wanted. A PENDING task (never even started
+   * planning) is left untouched — nothing about it was in flight, and the
+   * background queue will pick it up normally.
+   *
+   * Call this once at process startup, before the queue worker's first
+   * tick, from `src/index.ts`.
+   */
+  resumeIncompleteTasks(): AgentTaskRecord[] {
+    const interruptible: AgentTaskState[] = ["PLANNING", "EXECUTING", "VERIFYING", "RETRYING", "RECOVERING", "WAITING"];
+    const affected: AgentTaskRecord[] = [];
+    for (const state of interruptible) {
+      for (const task of this.deps.taskStore.listByState(state)) {
+        const withReason = this.deps.taskStore.setFailureReason(
+          task.id,
+          `Interrupted by restart: task was still ${state} when the process last stopped. Safe default: fail rather than risk an unsafe mid-tool-execution resume.`
+        );
+        affected.push(this.emitTransition(withReason, "FAILED", "process restart: task left non-terminal, failed instead of resumed"));
+      }
+    }
+    return affected;
   }
 
   /** Marks a task cancelled; the loop stops before its next step rather than mid-flight. */
@@ -141,10 +268,45 @@ export class AgentCore {
     return updated;
   }
 
+  /**
+   * Roadmap items 28-29 (Dependencies/Waiting States): gates a PENDING/
+   * WAITING task on `dependsOnTaskId`. Returns `{ ready: true }` when the
+   * loop should proceed into PLANNING, or `{ ready: false }` when the task
+   * has been left WAITING (dependency not yet COMPLETED) — or failed, if
+   * the dependency itself already ended terminally without COMPLETEing,
+   * since it can then never resolve.
+   */
+  private resolveDependencyGate(task: AgentTaskRecord): { ready: boolean; task: AgentTaskRecord } {
+    if (!task.dependsOnTaskId) return { ready: true, task };
+    const dep = this.deps.taskStore.get(task.dependsOnTaskId);
+    if (dep?.state === "COMPLETED") return { ready: true, task };
+
+    let waiting = task;
+    if (waiting.state !== "WAITING") {
+      waiting = this.emitTransition(waiting, "WAITING", `waiting on dependency task ${task.dependsOnTaskId}`);
+    }
+    if (dep && isTerminalState(dep.state)) {
+      const withReason = this.deps.taskStore.setFailureReason(
+        waiting.id,
+        `Dependency task ${task.dependsOnTaskId} ended in ${dep.state}, not COMPLETED — this task can never proceed`
+      );
+      waiting = this.emitTransition(withReason, "FAILED", `dependency ended in ${dep.state}`);
+    }
+    return { ready: false, task: waiting };
+  }
+
   private async runTaskLoop(taskId: string, startedAtMs: number): Promise<AgentTaskRecord> {
     const { maxTotalSteps, maxStepRetries, maxRecoveryCycles, stepTimeoutMs, taskTimeoutMs } = this.options;
     let task = this.deps.taskStore.requireOrThrow(taskId);
-    task = this.emitTransition(task, "PLANNING", "task started");
+
+    if (task.state === "PENDING" || task.state === "WAITING") {
+      const gate = this.resolveDependencyGate(task);
+      task = gate.task;
+      if (!gate.ready) {
+        return this.deps.taskStore.requireOrThrow(taskId);
+      }
+      task = this.emitTransition(task, "PLANNING", task.state === "WAITING" ? "dependency resolved; resuming" : "task started");
+    }
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
