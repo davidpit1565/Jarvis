@@ -4,7 +4,7 @@ import type { ConversationManager } from "@/core/conversation/ConversationManage
 import type { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import type { PermissionService } from "@/permissions/PermissionService";
 import type { EventBus } from "@/core/events/EventBus";
-import type { ToolCallRequest, UserMessageImage } from "@/types/conversation";
+import type { ToolCallRequest, UserMessage, UserMessageImage } from "@/types/conversation";
 import type { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import type { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import type { ConfirmationService } from "@/core/confirmation/ConfirmationService";
@@ -16,6 +16,8 @@ import type { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 import type { ToolResultCache } from "@/core/cache/ToolResultCache";
 import { quarantineToolResult } from "@/core/orchestrator/toolResultQuarantine";
 import { summarizeToolResult } from "./toolResultSummary";
+import { classifyFastPath } from "@/core/intent/FastPathClassifier";
+import { scopeToolsForMessage } from "@/core/intent/ToolScoping";
 
 export interface OrchestratorDependencies {
   brain: Brain;
@@ -173,6 +175,16 @@ const MAX_IMAGE_BASE64_LENGTH = 7_000_000;
 const MAX_IMAGES_PER_MESSAGE = 4;
 
 /**
+ * Parallel Tool Execution: the maximum number of independent READ-level
+ * tool calls run concurrently (via `Promise.allSettled`) within a single
+ * batch. Only ever applies to consecutive READ calls in one brain
+ * response's `toolCalls` array — see `runToolCallBatch`'s doc comment for
+ * the full reasoning. Bounded so a single response can't fire an unbounded
+ * number of concurrent network/DB calls at once.
+ */
+const MAX_PARALLEL_TOOL_CALLS = 5;
+
+/**
  * The central JARVIS loop: user message -> Claude -> tool decision ->
  * permission check -> tool execution -> result back to Claude -> final
  * response. Claude only ever *requests* tools; this class is the sole
@@ -214,7 +226,46 @@ export class Orchestrator {
     liveState?.reset(sessionId, userId, "new turn starting");
     liveState?.transition(sessionId, userId, "LISTENING", { reason: "user message received" });
 
+    // Dynamic Tool Scoping's "recent context" input — the previous user
+    // turn, if any, captured before this turn's message is added below (so
+    // it never includes the message itself). See `scopeToolsForMessage`'s
+    // doc comment.
+    const recentContext = this.lastUserMessageText(conversation);
+
     conversation.addUserMessage(content, images);
+
+    // Fast Path: a small set of known simple single-tool-call shapes are
+    // recognized deterministically (no LLM call) and routed straight to
+    // that one tool, through the exact same permission/confirmation/audit
+    // pipeline as any other tool call — never attempted for an image
+    // message, since "what's in this photo" is never one of the known
+    // shapes. See `classifyFastPath`'s own doc comment for the
+    // conservatism this relies on. The classification and tool-registry
+    // lookup below are both synchronous and happen before any `await` in
+    // this method (deliberately — introducing an `await` here even on a
+    // miss would shift every turn's microtask timing by one tick, which
+    // broke timing-sensitive live-state tests).
+    if (!images || images.length === 0) {
+      const fastPathMatch = classifyFastPath(content);
+      const fastPathTool = fastPathMatch ? toolRegistry.listTools().find((t) => t.name === fastPathMatch.toolName) : undefined;
+
+      if (fastPathMatch && fastPathTool) {
+        eventBus.emit("fastPath.hit", { userId, toolName: fastPathTool.name, shape: fastPathMatch.shape });
+        return await this.runFastPath(userId, sessionId, fastPathTool.name, fastPathMatch.input, systemPrompt);
+      }
+
+      // Either nothing matched, or a recognized shape's tool isn't
+      // registered on this Orchestrator (e.g. Spotify not configured) —
+      // never guess, fall through to the full path unchanged.
+      eventBus.emit("fastPath.miss", { userId });
+    }
+
+    // Dynamic Tool Scoping: a reasonably scoped subset of the tool
+    // registry for this turn's brain calls, instead of always sending
+    // every registered tool regardless of what the message is about. See
+    // `scopeToolsForMessage`'s own doc comment for the conservative
+    // fallback-to-full-set rules.
+    const scopedTools = scopeToolsForMessage(content, toolRegistry.listTools(), recentContext);
 
     // Tool Risk Model per-run call counter — scoped to this one turn (this
     // call to handleUserMessage), reset every time. See
@@ -235,7 +286,7 @@ export class Orchestrator {
 
         const response = await brain.chat({
           messages: conversation.getMessagesForBrain(),
-          tools: toolRegistry.toToolDefinitions(),
+          tools: toolRegistry.toToolDefinitions(scopedTools),
           context: systemPrompt,
         });
 
@@ -268,6 +319,7 @@ export class Orchestrator {
           reason: `running ${response.toolCalls.length} tool call(s)`,
         });
 
+        const pendingToolCalls: ToolCallRequest[] = [];
         for (const toolCall of response.toolCalls) {
           if (liveState?.isStopRequested(sessionId)) {
             return "Stopped.";
@@ -289,8 +341,10 @@ export class Orchestrator {
             continue;
           }
 
-          await this.runToolCall(userId, toolCall);
+          pendingToolCalls.push(toolCall);
         }
+
+        await this.runToolCallBatch(userId, sessionId, pendingToolCalls);
 
         if (liveState?.isStopRequested(sessionId)) {
           return "Stopped.";
@@ -350,9 +404,151 @@ export class Orchestrator {
     return null;
   }
 
+  /** The previous user turn's raw text, if any — see its one call site's comment. */
+  private lastUserMessageText(conversation: ConversationManager): string | undefined {
+    const messages = conversation.getMessages();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]!;
+      if (message.role === "user") return (message as UserMessage).content;
+    }
+    return undefined;
+  }
+
+  /**
+   * Fast Path: runs `toolName` (already matched by `classifyFastPath` and
+   * confirmed to be registered by the caller) through the exact same
+   * `executeToolCall` pipeline every other tool call goes through — so
+   * "fast" never means "unchecked": permission checks, confirmation,
+   * lockdown, and audit events all still apply — then asks the brain for a
+   * short final reply (with no tools exposed, since the one relevant
+   * result is already known) instead of a full tool-selection round-trip
+   * against the whole registry. Always returns the turn's final reply text
+   * (including "Stopped." if a stop was requested mid-flight, and any
+   * error message the model chose to surface for a denied/failed tool
+   * call) — by the time this is called, the turn IS taking the fast path.
+   */
+  private async runFastPath(
+    userId: string,
+    sessionId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    systemPrompt: string
+  ): Promise<string> {
+    const { eventBus, brain, conversation, liveState } = this.deps;
+
+    // LISTENING can only legally transition to THINKING/IDLE (see
+    // JarvisLiveState's transition table) — fast path still passes through
+    // THINKING here (no brain call happens for it, classification already
+    // ran synchronously above) purely to keep this a legal state sequence,
+    // consistent with the normal path's LISTENING -> THINKING -> EXECUTING.
+    liveState?.transition(sessionId, userId, "THINKING", { reason: "fast path: shape recognized" });
+
+    if (liveState?.isStopRequested(sessionId)) {
+      return "Stopped.";
+    }
+
+    const toolCall: ToolCallRequest = { id: randomUUID(), toolName, input };
+
+    liveState?.transition(sessionId, userId, "EXECUTING", { reason: `fast path: running ${toolName}` });
+    conversation.addAssistantMessage("", [toolCall]);
+    const result = await this.executeToolCall(userId, toolCall);
+    this.completeToolCall(toolCall, result);
+
+    if (liveState?.isStopRequested(sessionId)) {
+      return "Stopped.";
+    }
+
+    liveState?.transition(sessionId, userId, "THINKING", { reason: "fast path: formatting final reply" });
+
+    eventBus.emit("brain.request", { messageCount: conversation.getMessages().length });
+    const response = await brain.chat({
+      messages: conversation.getMessagesForBrain(),
+      // No tools exposed: the one relevant result is already known, so
+      // this call's only job is to phrase a reply, not select a tool —
+      // the whole point of Fast Path is skipping that selection round-trip.
+      tools: [],
+      context: systemPrompt,
+    });
+    eventBus.emit("brain.response", {
+      text: response.text,
+      toolCallCount: response.toolCalls.length,
+      serverToolUses: response.serverToolUses,
+      usage: response.usage,
+    });
+
+    conversation.addAssistantMessage(response.text);
+    liveState?.transition(sessionId, userId, "SPEAKING", { reason: "formatting final reply" });
+    liveState?.reset(sessionId, userId, "turn complete (fast path)");
+    return response.text;
+  }
+
   private async runToolCall(userId: string, toolCall: ToolCallRequest): Promise<void> {
     const result = await this.executeToolCall(userId, toolCall);
     this.completeToolCall(toolCall, result);
+  }
+
+  /**
+   * Parallel Tool Execution: runs `toolCalls` (already past the per-run
+   * limit check) in order, but groups consecutive READ-permission calls
+   * into batches of up to `MAX_PARALLEL_TOOL_CALLS` and runs each such
+   * batch concurrently via `Promise.allSettled` — a failure in one call
+   * never aborts or corrupts its siblings' results, since `allSettled`
+   * always waits for every promise in the batch before this method reacts
+   * to any of them. Any non-READ call (SAFE_ACTION/CONFIRM/DANGEROUS) is
+   * always run alone, never batched alongside another call, however many
+   * calls in a row share that permission level — this is a hard rule, not
+   * a heuristic: a tool above READ can have a real side effect, and two
+   * such calls could interact in ways this Orchestrator has no way to
+   * reason about. Each call, whether run solo or as part of a batch, still
+   * goes through the exact same `executeToolCall` -> permission check ->
+   * confirmation -> execution -> audit pipeline as any other tool call —
+   * parallelism here is purely about wall-clock scheduling, never a
+   * shortcut around that pipeline.
+   *
+   * If any call in a parallel batch throws (a genuine bug in a tool's
+   * `execute()`, not an `{ success: false }` result — see
+   * `runLocalTool`'s own handling of the latter), every other call in that
+   * batch still completes and has its result recorded via
+   * `completeToolCall` before the first such error is re-thrown — matching
+   * the existing sequential behavior where an uncaught tool error ends the
+   * turn, while never leaving a sibling call's result silently dropped.
+   */
+  private async runToolCallBatch(userId: string, sessionId: string, toolCalls: ToolCallRequest[]): Promise<void> {
+    const { toolRegistry, liveState } = this.deps;
+    let index = 0;
+
+    while (index < toolCalls.length) {
+      if (liveState?.isStopRequested(sessionId)) {
+        return;
+      }
+
+      const toolCall = toolCalls[index]!;
+      const tool = toolRegistry.listTools().find((t) => t.name === toolCall.toolName);
+      const isReadOnly = tool?.requiredPermission === PermissionLevel.READ;
+
+      if (!isReadOnly) {
+        await this.runToolCall(userId, toolCall);
+        index++;
+        continue;
+      }
+
+      const batch: ToolCallRequest[] = [];
+      while (index < toolCalls.length && batch.length < MAX_PARALLEL_TOOL_CALLS) {
+        const next = toolCalls[index]!;
+        const nextTool = toolRegistry.listTools().find((t) => t.name === next.toolName);
+        if (nextTool?.requiredPermission !== PermissionLevel.READ) break;
+        batch.push(next);
+        index++;
+      }
+
+      const settled = await Promise.allSettled(batch.map((tc) => this.runToolCall(userId, tc)));
+      const firstRejection = settled.find(
+        (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected"
+      );
+      if (firstRejection) {
+        throw firstRejection.reason;
+      }
+    }
   }
 
   /**

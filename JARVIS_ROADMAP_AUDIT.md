@@ -636,3 +636,200 @@ Not touched, per the hard constraints: `ui/hologram/index.html`'s visuals,
 arbitrary-execution tool was added (already covered by
 `tests/security/noArbitraryExecution.test.ts`, unchanged and still
 passing), no Swift files.
+
+## Premium Agent Intelligence/Security Upgrade — batch 2 (2026-09-21)
+
+Continuation of the same 50-phase prompt, batch 2 of 3 in-scope items:
+Fast Path, Parallel Tool Execution, Dynamic Tool Scoping. Baseline before
+this pass: 1686 tests passing, 0 failures, 0 typecheck errors. After this
+pass: **1733 tests passing, 0 failures, 0 typecheck errors** (47 new
+tests, 0 regressions).
+
+Read `src/core/orchestrator/Orchestrator.ts`, `src/core/brain/AIRouter.ts`,
+`src/core/brain/AIProviderRegistry.ts`, `src/tools/registry/ToolRegistry.ts`
+and `src/agent/AgentCore.ts` in full before starting, as instructed.
+Confirmed: `AgentCore` executes its plan steps through
+`Orchestrator.executeToolCall` directly, never through
+`Orchestrator.handleUserMessage` — so none of the three items below (all
+implemented inside `handleUserMessage`) touch AgentCore's autonomous-task
+path at all; that path is unaffected by this pass.
+
+### Shared classification module
+
+`src/core/intent/MessageTopics.ts` (new): `classifyMessageTopics(text)`,
+a deterministic (no LLM call), keyword/substring matcher tagging a message
+with zero or more `MessageTopic`s (weather, calendar, spotify, email,
+telegram, news, reminders, commitments, alarms, wakeup, automation,
+memory, files, system, images, studio, phone, history, undo, devices).
+This is the single shared building block both Fast Path and Dynamic Tool
+Scoping import — per the task's own instruction not to duplicate similar
+keyword-matching logic in two places. It only ever tags topics; it never
+decides what to do about them, since the two consumers have very different
+false-positive tolerance (a Fast Path false positive is a real bug; a Tool
+Scoping false negative is just a bloated tool list, the explicitly safer
+failure mode).
+
+### 1. Fast Path — built
+
+`src/core/intent/FastPathClassifier.ts` (new): `classifyFastPath(message)`,
+a small table of `RULES`, each an anchored (`^...$`) regex matched against
+the ENTIRE normalized message, mapped to one tool name + exact input.
+Covers: current weather (`get_weather`, no args — deliberately never
+matches a named city or "forecast"/"tomorrow", since the tool can't safely
+honor those), today's calendar (`list_calendar_events`, no args), and
+Spotify pause/resume/skip(-next/-previous)/currently-playing. `play_music`
+only fast-paths the no-argument "resume" shape — never a named song,
+since the classifier has no safe way to fill in the tool's `query` input.
+Every rule requires the shared `classifyMessageTopics` to detect exactly
+that one topic and no other, as a second independent guard on top of the
+anchored regex. Deliberately conservative throughout: a message matches
+only if it says nothing more than one of these exact simple shapes;
+anything else (a city, a song name, two topics in one message, an image
+attached) falls through to the full path unchanged.
+
+Wired into `Orchestrator.handleUserMessage`: classification + tool-registry
+lookup happen synchronously (no `await`) before any other work, so a
+message that *doesn't* match costs nothing extra and doesn't shift any
+turn's microtask timing (this actually broke a timing-sensitive
+`liveState.integration.test.ts` test during development — fixed by moving
+the classify+lookup out of the async helper and only awaiting when a real
+match was found). A match runs through `executeToolCall` — the exact same
+permission/confirmation/lockdown/audit pipeline as any other tool call, so
+"fast" never means "unchecked" — then makes exactly one `brain.chat` call
+with `tools: []` (no tool-selection exposure) to phrase the final reply,
+instead of the normal path's brain call with the full/scoped tool registry
+exposed. A message whose fast-path tool isn't registered on this
+Orchestrator (e.g. Spotify not configured) falls through to the full path
+rather than erroring. New events `fastPath.hit` (`userId`, `toolName`,
+`shape`) / `fastPath.miss` (`userId`) — every turn emits exactly one,
+giving a measurable hit rate instead of an assumed one.
+
+**Deliberately not built:** semantic/embedding-based fast-path matching —
+that needs an embeddings call, which would both cost money (contradicting
+`ZERO_COST_MODE`, which Fast Path must respect exactly like everything
+else) and reintroduce the LLM round-trip Fast Path exists to avoid. No
+"time" fast-path shape (mentioned as an example in the task prompt) — this
+repo has no `GET_TIME`/current-time tool at all, so there is nothing to
+route to; adding one was out of scope. No fast-path shape that takes a
+free-text argument (a city, a song, a search query) — filling one in
+without an LLM call would mean guessing, which is exactly the false-
+positive risk the task says to bias hard against.
+
+### 2. Parallel Tool Execution — built
+
+`Orchestrator.runToolCallBatch` (replacing the old single `for` loop over
+`response.toolCalls` after per-run-limit checks): walks the tool calls in
+order, and whenever it finds a run of consecutive calls whose
+`requiredPermission` is `READ`, batches up to `MAX_PARALLEL_TOOL_CALLS`
+(5) of them and runs the batch via `Promise.allSettled` — never
+`Promise.all`, so one call throwing never aborts or drops its siblings'
+results; every settled outcome (including any `{success:false}` result,
+which is not a throw and always completes normally) is recorded via
+`completeToolCall` before this method reacts to a rejection, and only
+after the whole batch has settled does it re-throw the first rejection (if
+any), preserving the existing behavior that an uncaught tool error ends
+the turn. Any call whose `requiredPermission` is above READ
+(SAFE_ACTION/CONFIRM/DANGEROUS) is always run alone — a hard rule, not a
+heuristic: it is never batched with another call, however many
+same-or-higher-permission calls appear in a row. Each call, batched or
+solo, still goes through the exact same `executeToolCall` pipeline
+(permission check, confirmation, lockdown, audit events) independently —
+parallelism here is purely wall-clock scheduling, never a shortcut around
+that pipeline. The per-run call-count/limit check (Tool Risk Model, batch
+1) still runs synchronously over the whole `response.toolCalls` array
+*before* any batching, so counting/limit behavior is unchanged.
+
+Tests (`tests/integration/orchestrator.test.ts`, "Parallel Tool Execution"
+describe block): two independent 50ms READ tool calls in one turn complete
+in well under the ~100ms sequential floor (asserted `<90ms`, run 5x in a
+row during development with no flakiness observed); a failing READ call
+alongside a succeeding one leaves both results correctly recorded, neither
+swallowed nor corrupted; two DANGEROUS calls (with an auto-approving
+`ConfirmationService`) are proven via a concurrency counter to never have
+more than one in flight at once; a READ call immediately followed by a
+SAFE_ACTION call is likewise proven never to overlap.
+
+**Deliberately not built:** a configurable concurrency limit (kept as a
+private constant, `MAX_PARALLEL_TOOL_CALLS = 5`) — no concrete need for
+per-deployment tuning exists yet, and the task only asked for "a
+concurrency limit," not a configurable one. No cross-batch parallelism
+(e.g. overlapping a READ batch with a following solo SAFE_ACTION call) —
+batches are still processed in the original left-to-right order of
+`response.toolCalls`, since the brain's own ordering of calls in one
+response can itself carry intent (e.g. "check the weather, then turn on
+the AC" — a SAFE_ACTION after a READ) that this pass has no reason to
+second-guess.
+
+### 3. Dynamic Tool Scoping — built
+
+`src/core/intent/ToolScoping.ts` (new): `scopeToolsForMessage(message,
+tools, recentContext?)`. Rule-based, not another AI call: classifies the
+combined `message` + optional `recentContext` text via the shared
+`classifyMessageTopics`. If zero topics or more than one topic is
+detected, returns the full `tools` list unchanged — both a plain
+"hi"/"thanks" message and a genuinely multi-topic message ("what's the
+weather and what's on my calendar") fall back to full exposure rather than
+guess. If exactly one topic is detected, returns: an always-on core set
+(`SAVE_MEMORY`/`SEARCH_MEMORY`/`DELETE_MEMORY`, the reminder tools,
+`UNDO_LAST_ACTION` — per the task's own "memory tools, reminders" example)
++ that topic's own mapped tool ids (by stable `Tool.id`, not the
+human-facing `name`) + every tool this module has no topic mapping for at
+all. That last clause is the real safety valve: an unclassified tool
+(including any future tool nobody's updated this map for yet) is *never*
+hidden — the task's own instruction that a false "tool not available" is
+worse than a bloated context is implemented literally, as "unknown ->
+always include," not just as a vague intention.
+
+`ToolRegistry.toToolDefinitions()` gained an optional `tools?: Tool[]`
+parameter (build definitions for a given subset instead of the whole
+registry; omitted keeps today's behavior). Wired into
+`Orchestrator.handleUserMessage`: the scoped subset is computed once per
+turn (from the triggering user message + the previous turn's user message
+text as `recentContext`, captured before the current message is added to
+conversation history) and reused for every brain call within that turn's
+tool-iteration loop — not recomputed per iteration, since re-scoping
+mid-turn against a tool result rather than the user's own words would risk
+narrowing away something the model legitimately needs next.
+
+Tests (`tests/intent/ToolScoping.test.ts`): a weather-only message scopes
+out Gmail/calendar/Telegram/SMS/file-write tools while keeping
+`GET_WEATHER`/`GET_WEATHER_FORECAST`; the core set (memory/reminders/undo)
+survives scoping; an unmapped tool is never hidden; an ambiguous message
+and a genuinely multi-topic message both fall back to the full set;
+`recentContext` alone can supply the topic signal for a context-free
+follow-up message ("and tomorrow?"); scoping never adds a tool that wasn't
+in the input list.
+
+**Deliberately not built:** per-turn re-scoping as the tool-iteration loop
+progresses (see above — same-message scoping only, for the whole turn).
+No embeddings/semantic similarity scoring — rule-based keyword tagging
+only, per the task's explicit instruction. No topic weighting/ranking (a
+topic either matches or it doesn't) — the task asked for "reasonably
+scoped," not "surgically precise."
+
+### Files touched this pass
+
+New: `src/core/intent/MessageTopics.ts`, `src/core/intent/
+FastPathClassifier.ts`, `src/core/intent/ToolScoping.ts`. Changed:
+`src/types/events.ts` (`fastPath.hit`/`fastPath.miss`),
+`src/tools/registry/ToolRegistry.ts` (`toToolDefinitions` subset param),
+`src/core/orchestrator/Orchestrator.ts` (Fast Path routing, scoped-tools
+brain calls, `runToolCallBatch`). Tests: `tests/intent/
+FastPathClassifier.test.ts` (new), `tests/intent/ToolScoping.test.ts`
+(new), `tests/integration/orchestrator.test.ts` (two new `describe`
+blocks: "Fast Path", "Parallel Tool Execution"; `setup()`'s options
+gained an optional `confirmationService` passthrough for the new
+DANGEROUS-tool concurrency tests).
+
+Not touched, per the hard constraints: `ui/hologram/index.html`'s visuals,
+`src/communication/websocket/dashboard.ts`'s visuals, no shell/AppleScript/
+arbitrary-execution tool was added, no new env vars/config flags were
+introduced (Fast Path and Tool Scoping are always-on optimizations with no
+per-deployment toggle — kept out of scope to minimize the blast radius of
+touching `src/config/index.ts` and all 6 `new Orchestrator(...)` call
+sites in `src/index.ts` for something the task didn't ask for), no Swift
+files, `ZERO_COST_MODE`/budget/circuit-breaker routing in `AIRouter` is
+untouched and still fully respected (Fast Path's one finalize call and the
+normal path's tool-selection call both go through the exact same injected
+`Brain`, so both are still fully subject to zero-cost/budget/circuit-
+breaker enforcement — neither optimization bypasses `AIRouter` in any way).

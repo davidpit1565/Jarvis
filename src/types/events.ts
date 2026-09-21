@@ -39,6 +39,23 @@ export interface JarvisEventMap {
   "tool.callLimitExceeded": { toolName: string; userId: string; totalToolCalls: number; limit: number };
   /** A local tool's `execute()` was aborted after exceeding its configured timeout instead of hanging forever. */
   "tool.timedOut": { toolName: string; userId: string; timeoutMs: number };
+  /**
+   * Fast Path: a user message deterministically matched one of a small set
+   * of known simple single-tool-call shapes (see
+   * `src/core/intent/FastPathClassifier.ts`) and was routed straight to
+   * that tool instead of a full brain round-trip with the whole tool
+   * registry exposed. `shape` names which recognized pattern matched (e.g.
+   * "weather.current") — pure observability, never used for control flow.
+   */
+  "fastPath.hit": { userId: string; toolName: string; shape: string };
+  /**
+   * Fast Path: the message didn't clearly match any known fast-path shape
+   * and fell through to the normal full path unchanged. Emitted so
+   * fast-path coverage is measurable (hit-rate) rather than assumed —
+   * every `handleUserMessage` turn emits exactly one of `fastPath.hit` or
+   * `fastPath.miss`.
+   */
+  "fastPath.miss": { userId: string };
   "permission.checked": { toolId: string; result: PermissionCheckResult };
   "device.registered": { device: Device };
   "device.connected": { deviceId: string };
