@@ -23,6 +23,8 @@ export interface JarvisEventMap {
   "device.disconnected": { deviceId: string; reason: string };
   "device.roleGranted": { deviceId: string; role: DeviceRole };
   "device.revoked": { deviceId: string };
+  /** AIRouter switched away from its primary provider for this call — either because it failed, or a budget cap blocked a paid provider. */
+  "ai.providerFallback": { from: string; to: string; reason: "call-failed" | "budget-exceeded" };
 }
 
 export type JarvisEventName = keyof JarvisEventMap;
