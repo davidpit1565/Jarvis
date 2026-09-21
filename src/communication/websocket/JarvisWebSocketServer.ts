@@ -28,6 +28,9 @@ import type { TwilioSmsGateway } from "@/communication/phone/TwilioSmsGateway";
 import type { TelegramGateway } from "@/communication/telegram/TelegramGateway";
 import type { DeviceVoiceGateway } from "@/communication/voice/DeviceVoiceGateway";
 import type { LockdownService } from "@/core/lockdown/LockdownService";
+import type { AutomationRuleStore } from "@/automation/AutomationRuleStore";
+import type { CostTracker } from "@/core/cost/CostTracker";
+import type { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 import { verifyTwilioSignature } from "@/communication/phone/twilioSignature";
 import { DASHBOARD_HTML, LOCK_HTML } from "./dashboard";
 import type { WebAuthnService } from "@/auth/WebAuthnService";
@@ -283,6 +286,34 @@ export interface JarvisWebSocketServerDependencies {
    * (Config Center). Without it, the route 404s.
    */
   jarvisConfig?: JarvisConfig;
+  /**
+   * Optional: enables the admin-gated `GET /automations` read-only
+   * endpoint, listing every stored automation rule (id, schedule,
+   * instruction, enabled state) — the Automation Explorer
+   * (JARVIS_ROADMAP_AUDIT.md #190). Previously the rules themselves were
+   * only reachable through the chat-invoked `LIST_AUTOMATION_RULES` tool;
+   * this is a dedicated UI-facing view on top of the same store. Without
+   * it, the route 404s.
+   */
+  automationRuleStoreForAdmin?: AutomationRuleStore;
+  /**
+   * Optional: enables the admin-gated `GET /cost-analytics` read-only
+   * endpoint — today/month spend, a per-provider breakdown, and recent
+   * call records from `CostTracker` — the Cost Analytics panel
+   * (JARVIS_ROADMAP_AUDIT.md #192). Without it, the route 404s.
+   */
+  costTrackerForAdmin?: CostTracker;
+  /**
+   * Optional: enables the admin-gated `GET /agent-status` read-only
+   * endpoint (every live session's current JarvisLiveState snapshot —
+   * the Live Agent Monitor / "what are you doing?" status,
+   * JARVIS_ROADMAP_AUDIT.md #187/#195) and `POST /agent/stop` (calls
+   * `webChatOrchestrator.requestStop(userId)` — the Stop button,
+   * JARVIS_ROADMAP_AUDIT.md #196). Both require `webChatOrchestrator` to
+   * also be set for `/agent/stop` to do anything; `/agent-status` only
+   * needs this tracker. Without this, both routes 404.
+   */
+  liveStateTracker?: JarvisLiveStateTracker;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -312,6 +343,16 @@ const HOLOGRAM_UI_DIR = join(import.meta.dir, "..", "..", "..", "ui", "hologram"
 // endpoints it calls (GET /pairing/pending, /permissions, /config, etc.),
 // exactly like the hologram UI's own /status polling.
 const ADMIN_UI_DIR = join(import.meta.dir, "..", "..", "..", "ui", "admin");
+
+// The Command Center (JARVIS_ROADMAP_AUDIT.md #186) — a second, separate
+// static page distinct from both ui/admin/ (device/security/config
+// operations) and ui/hologram/ (the always-off-limits hologram visual):
+// this one aggregates the *data* views (live agent status, memory,
+// automations, provider health, cost analytics) an operator actually
+// checks day to day. Same additive pattern as ADMIN_UI_DIR — a static
+// shell with no secrets of its own, every real check happening on the
+// admin-token-gated data endpoints it calls.
+const COMMAND_CENTER_UI_DIR = join(import.meta.dir, "..", "..", "..", "ui", "command-center");
 
 function readCookie(req: Request, name: string): string | null {
   const header = req.headers.get("cookie");
@@ -610,7 +651,7 @@ export class JarvisWebSocketServer {
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/memory") {
-            return this.handleMemoryHttp(req, server);
+            return this.handleMemoryHttp(req, url, server);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/audit-log") {
@@ -635,6 +676,32 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/config") {
             return this.handleConfigHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/automations") {
+            return this.handleAutomationsHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/cost-analytics") {
+            return this.handleCostAnalyticsHttp(req, url, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/agent-status") {
+            return this.handleAgentStatusHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "POST" && url.pathname === "/agent/stop") {
+            return await this.handleAgentStopHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/command-center") {
+            return new Response(null, { status: 302, headers: { Location: "/command-center/" } });
+          }
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/command-center/") {
+            return new Response(Bun.file(join(COMMAND_CENTER_UI_DIR, "index.html")));
+          }
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname.startsWith("/command-center/")) {
+            return await this.serveCommandCenterAsset(url.pathname.slice("/command-center/".length));
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/admin") {
@@ -1452,10 +1519,14 @@ export class JarvisWebSocketServer {
   }
 
   /**
-   * GET /memory — read-only admin view of every saved memory fact. Same
-   * admin-token gating rationale as GET /reminders above.
+   * GET /memory — read-only admin view of saved memory facts, and the
+   * Memory Explorer's data source (JARVIS_ROADMAP_AUDIT.md #189). Optional
+   * `?q=fragment` filters via `MemoryStore.search()` (matches key or
+   * value); omitted or empty returns every record, same as before this
+   * query param existed. Same admin-token gating rationale as GET
+   * /reminders above.
    */
-  private handleMemoryHttp(req: Request, server: BunServer): Response {
+  private handleMemoryHttp(req: Request, url: URL, server: BunServer): Response {
     const { adminToken, memoryStore } = this.deps;
     if (!memoryStore) {
       return new Response("Not found", { status: 404 });
@@ -1466,7 +1537,121 @@ export class JarvisWebSocketServer {
     if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
     }
-    return Response.json({ memory: memoryStore.search("") });
+    const query = url.searchParams.get("q") ?? "";
+    return Response.json({ memory: memoryStore.search(query) });
+  }
+
+  /**
+   * GET /automations — read-only admin view of every stored automation
+   * rule, the Automation Explorer's data source (JARVIS_ROADMAP_AUDIT.md
+   * #190). 404s when no `automationRuleStoreForAdmin` is configured. Same
+   * admin-token gating rationale as GET /reminders above.
+   */
+  private handleAutomationsHttp(req: Request, server: BunServer): Response {
+    const { adminToken, automationRuleStoreForAdmin } = this.deps;
+    if (!automationRuleStoreForAdmin) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "automations"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ rules: automationRuleStoreForAdmin.list() });
+  }
+
+  /**
+   * GET /cost-analytics — read-only admin view of `CostTracker` data: today
+   * and month-to-date spend, a per-provider breakdown, and the most recent
+   * recorded calls — the Cost Analytics panel (JARVIS_ROADMAP_AUDIT.md
+   * #192). 404s when no `costTrackerForAdmin` is configured. Optional
+   * `?limit=N` for the recent-calls list (default 50). Same admin-token
+   * gating rationale as GET /reminders above.
+   */
+  private handleCostAnalyticsHttp(req: Request, url: URL, server: BunServer): Response {
+    const { adminToken, costTrackerForAdmin } = this.deps;
+    if (!costTrackerForAdmin) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "cost-analytics"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? Number(limitParam) : undefined;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+      return Response.json({ error: "limit must be a positive integer" }, { status: 400 });
+    }
+    return Response.json({
+      todaySpendUsd: costTrackerForAdmin.getTodaySpend(),
+      monthSpendUsd: costTrackerForAdmin.getMonthSpend(),
+      byProvider: costTrackerForAdmin.getBreakdownByProvider(),
+      recent: costTrackerForAdmin.listRecent(limit ?? 50),
+    });
+  }
+
+  /**
+   * GET /agent-status — read-only admin view of every live session's
+   * current `JarvisLiveState` snapshot (state, language, stopRequested,
+   * updatedAt) — the Live Agent Monitor / "what are you doing right now?"
+   * status (JARVIS_ROADMAP_AUDIT.md #187/#195). 404s when no
+   * `liveStateTracker` is configured. Same admin-token gating rationale
+   * as GET /reminders above.
+   */
+  private handleAgentStatusHttp(req: Request, server: BunServer): Response {
+    const { adminToken, liveStateTracker } = this.deps;
+    if (!liveStateTracker) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "agent-status"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ sessions: liveStateTracker.listSessions() });
+  }
+
+  /**
+   * POST /agent/stop — the Stop button's backend (JARVIS_ROADMAP_AUDIT.md
+   * #196), a thin HTTP wrapper over `Orchestrator.requestStop(userId)`
+   * (already real and tested — `tests/core/JarvisLiveState.test.ts`,
+   * `tests/integration/liveState.integration.test.ts`). Body:
+   * `{ "userId": "..." }`. Only ever targets the primary web-chat
+   * Orchestrator (`webChatOrchestrator`) — the one stable, always-present
+   * Orchestrator instance this server holds a reference to; the phone/SMS/
+   * Telegram/device-voice Orchestrators are created per-call/session
+   * inside src/index.ts closures this server has no handle on, so
+   * stopping those isn't reachable from here yet. 404s when no
+   * `webChatOrchestrator` is configured. Same admin-token gating rationale
+   * as GET /reminders above (this is a control action, not read-only, so
+   * the admin token matters even more here).
+   */
+  private async handleAgentStopHttp(req: Request, server: BunServer): Promise<Response> {
+    const { adminToken, webChatOrchestrator } = this.deps;
+    if (!webChatOrchestrator) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "agent-stop"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    let body: { userId?: unknown };
+    try {
+      body = (await req.json()) as { userId?: unknown };
+    } catch {
+      return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+    if (typeof body.userId !== "string" || body.userId.length === 0) {
+      return Response.json({ error: "userId is required" }, { status: 400 });
+    }
+    const stopped = webChatOrchestrator.requestStop(body.userId);
+    return Response.json({ stopped });
   }
 
   /**
@@ -1778,6 +1963,16 @@ export class JarvisWebSocketServer {
     if (relPath.includes("..")) return new Response("Not found", { status: 404 });
     const filePath = join(ADMIN_UI_DIR, relPath);
     if (!filePath.startsWith(ADMIN_UI_DIR)) return new Response("Not found", { status: 404 });
+    const file = Bun.file(filePath);
+    if (!(await file.exists())) return new Response("Not found", { status: 404 });
+    return new Response(file);
+  }
+
+  /** Same path-traversal defense as serveAdminAsset, for ui/command-center/ instead. */
+  private async serveCommandCenterAsset(relPath: string): Promise<Response> {
+    if (relPath.includes("..")) return new Response("Not found", { status: 404 });
+    const filePath = join(COMMAND_CENTER_UI_DIR, relPath);
+    if (!filePath.startsWith(COMMAND_CENTER_UI_DIR)) return new Response("Not found", { status: 404 });
     const file = Bun.file(filePath);
     if (!(await file.exists())) return new Response("Not found", { status: 404 });
     return new Response(file);

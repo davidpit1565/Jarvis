@@ -2,6 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { dirname } from "node:path";
 import { loadConfig } from "@/config";
 import { EventBus } from "@/core/events/EventBus";
+import { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 import { ConversationManager } from "@/core/conversation/ConversationManager";
 import { ClaudeBrain, DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { GroqBrain } from "@/core/brain/GroqBrain";
@@ -192,6 +193,15 @@ function main() {
   const config = loadConfig();
 
   const eventBus = new EventBus();
+  // JARVIS's user-facing "what am I doing right now" state machine — the
+  // class itself and its observer-broadcast wiring (OBSERVABLE_EVENTS in
+  // JarvisWebSocketServer) already existed, but nothing in production
+  // ever actually built one until now. Shared across every channel's
+  // Orchestrator below (each passes its own `liveStateChannel` so their
+  // sessions never collide), and handed to JarvisWebSocketServer for
+  // GET /agent-status / POST /agent/stop — JARVIS_ROADMAP_AUDIT.md
+  // #187/#195/#196 (Live Agent Monitor / live status / Stop button).
+  const liveStateTracker = new JarvisLiveStateTracker(eventBus);
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
   const reminderStore = new ReminderStore(config.remindersDbPath, config.timezone);
@@ -528,6 +538,10 @@ function main() {
     contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
     lockdownService,
     toolResultCache,
+    liveState: liveStateTracker,
+    // Default liveStateChannel ("chat") — this is the primary web-chat/
+    // terminal Orchestrator (see webChatOrchestrator below), so its
+    // sessions use the plain "chat:${userId}" key.
   });
 
   // Autonomous Agent Core — Goal Engine + persistent/priority task queue +
@@ -549,6 +563,7 @@ function main() {
     taskStore: agentTaskStore,
     auditLog: toolAuditLog,
     eventBus,
+    liveState: liveStateTracker,
   });
   const resumedTasks = agentCore.resumeIncompleteTasks();
   if (resumedTasks.length > 0) {
@@ -582,6 +597,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      liveState: liveStateTracker,
+      liveStateChannel: "phone",
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -623,6 +640,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      liveState: liveStateTracker,
+      liveStateChannel: "wakeup-call",
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -690,6 +709,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      liveState: liveStateTracker,
+      liveStateChannel: "sms",
     });
     return { orchestrator: smsOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -718,6 +739,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      liveState: liveStateTracker,
+      liveStateChannel: "telegram",
     });
     return { orchestrator: telegramOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -797,6 +820,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      liveState: liveStateTracker,
+      liveStateChannel: "device-voice",
     });
     return { orchestrator: voiceOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -1268,6 +1293,13 @@ function main() {
     // `permissionService`/`config` above is unaffected.
     permissionServiceForAdmin: permissionService,
     jarvisConfig: config,
+    // Command Center (ui/command-center/) read endpoints — see
+    // JARVIS_ROADMAP_AUDIT.md #186/#187/#189/#190/#192/#195/#196. Purely
+    // additive, same pattern as the admin-panel deps just above: every
+    // route these enable 404s without them, so nothing existing changes.
+    automationRuleStoreForAdmin: automationRuleStore,
+    costTrackerForAdmin: costTracker,
+    liveStateTracker,
     dataDirectory: config.memoryDbPath === ":memory:" ? undefined : dirname(config.memoryDbPath),
     backupDbPaths: [
       config.memoryDbPath,
