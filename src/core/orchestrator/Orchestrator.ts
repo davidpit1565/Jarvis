@@ -13,6 +13,7 @@ import { PermissionLevel, type PermissionCheckResult } from "@/types/permissions
 import { JARVIS_SYSTEM_PROMPT } from "@/core/brain/systemPrompt";
 import type { LockdownService } from "@/core/lockdown/LockdownService";
 import type { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
+import type { ToolResultCache } from "@/core/cache/ToolResultCache";
 
 export interface OrchestratorDependencies {
   brain: Brain;
@@ -68,6 +69,17 @@ export interface OrchestratorDependencies {
    * session key is `${liveStateChannel}:${userId}`. Defaults to "chat".
    */
   liveStateChannel?: string;
+  /**
+   * Optional TTL-based cache for READ-level local tool results (see
+   * `ToolResultCache`'s own doc comment) — e.g. a repeated GET_WEATHER
+   * for the same location within the cache's TTL is served from memory
+   * instead of re-running the tool. Only ever consulted for
+   * `LocalTool`s whose `requiredPermission` is `PermissionLevel.READ`:
+   * anything that mutates state or has a side effect is never cached,
+   * cache or no cache. Omitted means no caching happens at all — every
+   * call always re-runs the tool, today's behavior.
+   */
+  toolResultCache?: ToolResultCache;
 }
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -317,7 +329,7 @@ export class Orchestrator {
   }
 
   private async runLocalTool(userId: string, tool: LocalTool, toolCall: ToolCallRequest): Promise<ToolResult> {
-    const { permissionService, eventBus } = this.deps;
+    const { permissionService, eventBus, toolResultCache } = this.deps;
 
     const permissionResult = permissionService.check({
       subject: { userId },
@@ -330,8 +342,25 @@ export class Orchestrator {
     const denied = await this.authorize(userId, tool, toolCall, undefined, permissionResult);
     if (denied) return denied;
 
+    // Only READ-level tools are ever cache candidates — anything above
+    // READ mutates state or has a real-world side effect (sending an
+    // email, placing a call), and must always actually run. See
+    // `ToolResultCache`'s own doc comment.
+    const cacheable = tool.requiredPermission === PermissionLevel.READ;
+    if (cacheable && toolResultCache) {
+      const cached = toolResultCache.get(tool.name, toolCall.input);
+      if (cached) {
+        eventBus.emit("tool.cacheHit", { toolName: tool.name, input: toolCall.input });
+        return cached;
+      }
+    }
+
     const requestId = randomUUID();
     const result = await tool.execute(toolCall.input, { userId, requestId });
+
+    if (cacheable && toolResultCache) {
+      toolResultCache.set(tool.name, toolCall.input, result);
+    }
 
     eventBus.emit("tool.executed", { toolName: tool.name, requestId, result, userId, input: toolCall.input });
     return result;

@@ -1,6 +1,6 @@
 import type { Brain } from "@/types/brain";
 
-export type ProviderName = "anthropic" | "groq";
+export type ProviderName = "anthropic" | "groq" | "openrouter";
 export type CostTier = "free" | "paid";
 
 export interface ProviderMeta {

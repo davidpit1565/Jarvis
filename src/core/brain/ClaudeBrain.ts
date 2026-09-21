@@ -54,6 +54,23 @@ export interface ClaudeBrainOptions {
    * (JARVIS_FALLBACK_MODEL unset means no fallback, ever).
    */
   fallbackModel?: string;
+  /**
+   * Enables Anthropic's native prompt caching (`cache_control: {type:
+   * "ephemeral"}`) on the system prompt and on the last tool definition.
+   * JARVIS's system prompt and tool list are large and re-sent, byte for
+   * byte, on almost every single call in a conversation — caching them
+   * means every call after the first one in a cache window (5 minutes)
+   * only pays the steeply discounted cache-read rate for that prefix
+   * instead of the full input-token price, with zero change to what
+   * Claude actually sees. This is a pure cost optimization: it changes
+   * nothing about behavior or correctness, so it defaults to on. Only a
+   * request that ends up with neither a system prompt nor any tools has
+   * nothing to mark — cache_control is simply omitted then. See
+   * `estimateCostUsd`/`CostTracker`, which already read back
+   * `cache_creation_input_tokens`/`cache_read_input_tokens` from every
+   * response regardless of whether this is on.
+   */
+  promptCachingEnabled?: boolean;
 }
 
 /**
@@ -70,6 +87,7 @@ export class ClaudeBrain implements Brain {
   private readonly webFetchEnabled: boolean;
   private readonly webFetchMaxUses: number;
   private readonly fallbackModel?: string;
+  private readonly promptCachingEnabled: boolean;
 
   constructor(apiKey: string, options: ClaudeBrainOptions = {}) {
     this.model = options.model ?? DEFAULT_MODEL;
@@ -79,6 +97,7 @@ export class ClaudeBrain implements Brain {
     this.webFetchEnabled = options.webFetchEnabled ?? false;
     this.webFetchMaxUses = options.webFetchMaxUses ?? 5;
     this.fallbackModel = options.fallbackModel;
+    this.promptCachingEnabled = options.promptCachingEnabled ?? true;
     // baseURL defaults to the real Anthropic API and is pinned there
     // unless `options.baseUrl` is explicitly given: the Anthropic SDK
     // otherwise honors an ambient ANTHROPIC_BASE_URL environment variable,
@@ -111,8 +130,9 @@ export class ClaudeBrain implements Brain {
 
   async chat(request: BrainRequest): Promise<BrainResponse> {
     const messages = toAnthropicMessages(request.messages);
-    const system = request.context ? request.context : undefined;
     const tools = this.buildTools(request.tools);
+    const system = this.buildSystem(request.context);
+    if (this.promptCachingEnabled) markLastToolCacheable(tools);
 
     const params = {
       max_tokens: this.maxTokens,
@@ -141,6 +161,37 @@ export class ClaudeBrain implements Brain {
       this.webFetchEnabled,
       this.webFetchMaxUses
     );
+  }
+
+  /**
+   * The system prompt (JARVIS_SYSTEM_PROMPT + any per-turn context note)
+   * is identical, byte for byte, across almost every call in a
+   * conversation — a textbook prompt-caching candidate. When enabled,
+   * it's sent as a single text block with an ephemeral cache breakpoint
+   * instead of a plain string; Anthropic requires the array form to
+   * attach `cache_control` at all. Disabled (or no context at all)
+   * falls back to exactly the previous plain-string/undefined shape.
+   */
+  private buildSystem(context: string | undefined): string | Anthropic.TextBlockParam[] | undefined {
+    if (!context) return undefined;
+    if (!this.promptCachingEnabled) return context;
+    return [{ type: "text", text: context, cache_control: { type: "ephemeral" } }];
+  }
+}
+
+/**
+ * Marks the last tool definition with an ephemeral cache breakpoint.
+ * Anthropic's prompt cache works on a prefix: marking the last tool
+ * caches every tool definition before and including it (the whole tools
+ * array, since it's always sent in the same order), same idea as the
+ * system-prompt breakpoint above. A no-op when there are no tools —
+ * there's nothing to mark, and an empty array is never sent as `tools`
+ * anyway (see `params.tools` above).
+ */
+export function markLastToolCacheable(tools: Anthropic.ToolUnion[]): void {
+  const last = tools[tools.length - 1];
+  if (last) {
+    (last as { cache_control?: Anthropic.CacheControlEphemeral | null }).cache_control = { type: "ephemeral" };
   }
 }
 

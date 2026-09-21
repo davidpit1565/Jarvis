@@ -57,6 +57,15 @@ describe("AIProviderRegistry", () => {
     expect(registry.findByCostTier("paid")).toEqual(["anthropic"]);
   });
 
+  test("supports registering openrouter as a third free-tier provider", () => {
+    const registry = new AIProviderRegistry();
+    registry.register("openrouter", stubBrain("or"), "free");
+
+    expect(registry.has("openrouter")).toBe(true);
+    expect(registry.getMeta("openrouter")).toEqual({ name: "openrouter", costTier: "free", isConfigured: true });
+    expect(registry.findByCostTier("free")).toEqual(["openrouter"]);
+  });
+
   test("re-registering the same name overwrites its brain and metadata", () => {
     const registry = new AIProviderRegistry();
     const first = stubBrain("first");

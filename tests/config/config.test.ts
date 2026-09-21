@@ -6,6 +6,10 @@ const ENV_KEYS = [
   "JARVIS_BRAIN_PROVIDER",
   "GROQ_API_KEY",
   "JARVIS_GROQ_MODEL",
+  "OPENROUTER_API_KEY",
+  "JARVIS_OPENROUTER_MODEL",
+  "JARVIS_PROMPT_CACHING",
+  "JARVIS_TOOL_RESULT_CACHE_TTL_MS",
   "JARVIS_PORT",
   "JARVIS_MEMORY_DB_PATH",
   "TWILIO_AUTH_TOKEN",
@@ -133,6 +137,49 @@ describe("loadConfig", () => {
     process.env.JARVIS_GROQ_MODEL = "llama-3.1-8b-instant";
     const config = loadConfig();
     expect(config.groqModel).toBe("llama-3.1-8b-instant");
+  });
+
+  test("leaves openrouterApiKey/openrouterModel undefined by default", () => {
+    const config = loadConfig();
+    expect(config.openrouterApiKey).toBeUndefined();
+    expect(config.openrouterModel).toBeUndefined();
+  });
+
+  test("reads OPENROUTER_API_KEY and JARVIS_OPENROUTER_MODEL when set", () => {
+    process.env.OPENROUTER_API_KEY = "or-test-key";
+    process.env.JARVIS_OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+    const config = loadConfig();
+    expect(config.openrouterApiKey).toBe("or-test-key");
+    expect(config.openrouterModel).toBe("meta-llama/llama-3.3-70b-instruct:free");
+  });
+
+  test("promptCachingEnabled defaults to true", () => {
+    const config = loadConfig();
+    expect(config.promptCachingEnabled).toBe(true);
+  });
+
+  test("JARVIS_PROMPT_CACHING=false disables prompt caching", () => {
+    process.env.JARVIS_PROMPT_CACHING = "false";
+    const config = loadConfig();
+    expect(config.promptCachingEnabled).toBe(false);
+  });
+
+  test("toolResultCacheTtlMs defaults to 60000", () => {
+    const config = loadConfig();
+    expect(config.toolResultCacheTtlMs).toBe(60_000);
+  });
+
+  test("reads an explicit JARVIS_TOOL_RESULT_CACHE_TTL_MS override, including 0 (disabled)", () => {
+    process.env.JARVIS_TOOL_RESULT_CACHE_TTL_MS = "0";
+    const config = loadConfig();
+    expect(config.toolResultCacheTtlMs).toBe(0);
+  });
+
+  test("rejects a negative or non-integer JARVIS_TOOL_RESULT_CACHE_TTL_MS", () => {
+    process.env.JARVIS_TOOL_RESULT_CACHE_TTL_MS = "-5";
+    expect(() => loadConfig()).toThrow(ConfigError);
+    process.env.JARVIS_TOOL_RESULT_CACHE_TTL_MS = "1.5";
+    expect(() => loadConfig()).toThrow(ConfigError);
   });
 
   test("loads with defaults when only the API key is set", () => {
@@ -854,6 +901,7 @@ describe("redactConfigForDisplay", () => {
   test("never includes the real value of any secret field, anywhere in the serialized output", () => {
     process.env.ANTHROPIC_API_KEY = "sk-ant-REAL-SECRET-VALUE";
     process.env.GROQ_API_KEY = "gsk-REAL-SECRET-VALUE";
+    process.env.OPENROUTER_API_KEY = "or-REAL-SECRET-VALUE";
     process.env.TWILIO_AUTH_TOKEN = "twilio-REAL-SECRET-VALUE";
     process.env.TWILIO_PUBLIC_BASE_URL = "https://example.com";
     process.env.JARVIS_PUBLIC_BASE_URL = "https://example.com";
@@ -874,6 +922,7 @@ describe("redactConfigForDisplay", () => {
     expect(serialized).not.toContain("REAL-SECRET-VALUE");
     expect(redacted.anthropicApiKey).toEqual({ configured: true });
     expect(redacted.groqApiKey).toEqual({ configured: true });
+    expect(redacted.openrouterApiKey).toEqual({ configured: true });
     expect(redacted.twilioAuthToken).toEqual({ configured: true });
     expect(redacted.adminToken).toEqual({ configured: true });
     expect(redacted.telegramBotToken).toEqual({ configured: true });

@@ -11,6 +11,7 @@ import { parseDeviceToCoreMessage, type ToolResultMessage } from "@/communicatio
 import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { DeviceTool, LocalTool } from "@/types/tools";
 import { LockdownService } from "@/core/lockdown/LockdownService";
+import { ToolResultCache } from "@/core/cache/ToolResultCache";
 
 /** Scripted mock brain: returns queued responses in order, one per call. */
 class ScriptedBrain implements Brain {
@@ -61,6 +62,7 @@ function setup(
     deviceRegistry?: DeviceRegistry;
     deviceConnectionManager?: DeviceConnectionManager;
     lockdownService?: LockdownService;
+    toolResultCache?: ToolResultCache;
   } = {}
 ) {
   const eventBus = new EventBus();
@@ -78,6 +80,7 @@ function setup(
     deviceRegistry: options.deviceRegistry,
     deviceConnectionManager: options.deviceConnectionManager,
     lockdownService: options.lockdownService,
+    toolResultCache: options.toolResultCache,
   });
   return { orchestrator, conversation, eventBus, toolRegistry, permissionService };
 }
@@ -710,5 +713,114 @@ describe("Orchestrator remote tool execution", () => {
     });
 
     await expect(resultPromise).rejects.toThrow(/timed out/i);
+  });
+});
+
+describe("Orchestrator READ-tool result caching", () => {
+  function makeCountingTool(
+    id: string,
+    requiredPermission: LocalTool["requiredPermission"] = PermissionLevel.READ
+  ): { tool: LocalTool; calls: () => number } {
+    let calls = 0;
+    const tool: LocalTool = {
+      id,
+      name: id.toLowerCase(),
+      description: "Counts how many times it actually ran",
+      inputSchema: { type: "object", properties: { city: { type: "string" } } },
+      requiredPermission,
+      target: "local",
+      execute: async (input) => {
+        calls++;
+        return { success: true, data: { ...input, callNumber: calls } };
+      },
+    };
+    return { tool, calls: () => calls };
+  }
+
+  test("a repeated identical READ tool call is served from cache, not re-executed", async () => {
+    const { tool, calls } = makeCountingTool("GET_WEATHER");
+    const cache = new ToolResultCache(60_000);
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "get_weather", input: { city: "Tel Aviv" } }], stopReason: "tool_use" },
+      { text: "sunny", toolCalls: [], stopReason: "end_turn" },
+      { text: "", toolCalls: [{ id: "call-2", toolName: "get_weather", input: { city: "Tel Aviv" } }], stopReason: "tool_use" },
+      { text: "still sunny", toolCalls: [], stopReason: "end_turn" },
+    ]);
+    const { orchestrator } = setup(brain, [tool], { toolResultCache: cache });
+
+    await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv?");
+    await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv again?");
+
+    expect(calls()).toBe(1); // the tool itself only actually ran once
+  });
+
+  test("emits tool.cacheHit on a served-from-cache call", async () => {
+    const { tool } = makeCountingTool("GET_WEATHER");
+    const cache = new ToolResultCache(60_000);
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "get_weather", input: { city: "Tel Aviv" } }], stopReason: "tool_use" },
+      { text: "sunny", toolCalls: [], stopReason: "end_turn" },
+      { text: "", toolCalls: [{ id: "call-2", toolName: "get_weather", input: { city: "Tel Aviv" } }], stopReason: "tool_use" },
+      { text: "still sunny", toolCalls: [], stopReason: "end_turn" },
+    ]);
+    const { orchestrator, eventBus } = setup(brain, [tool], { toolResultCache: cache });
+    const cacheHits: unknown[] = [];
+    eventBus.on("tool.cacheHit", (payload) => cacheHits.push(payload));
+
+    await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv?");
+    await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv again?");
+
+    expect(cacheHits).toEqual([{ toolName: "get_weather", input: { city: "Tel Aviv" } }]);
+  });
+
+  test("a different input is not served from cache", async () => {
+    const { tool, calls } = makeCountingTool("GET_WEATHER");
+    const cache = new ToolResultCache(60_000);
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "get_weather", input: { city: "Tel Aviv" } }], stopReason: "tool_use" },
+      { text: "sunny", toolCalls: [], stopReason: "end_turn" },
+      { text: "", toolCalls: [{ id: "call-2", toolName: "get_weather", input: { city: "Jerusalem" } }], stopReason: "tool_use" },
+      { text: "rainy", toolCalls: [], stopReason: "end_turn" },
+    ]);
+    const { orchestrator } = setup(brain, [tool], { toolResultCache: cache });
+
+    await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv?");
+    await orchestrator.handleUserMessage("user-1", "weather in Jerusalem?");
+
+    expect(calls()).toBe(2);
+  });
+
+  test("a SAFE_ACTION (mutating) tool is never cached, even with a cache configured", async () => {
+    const { tool, calls } = makeCountingTool("CREATE_REMINDER", PermissionLevel.SAFE_ACTION);
+    const cache = new ToolResultCache(60_000);
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "create_reminder", input: { city: "Tel Aviv" } }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+      { text: "", toolCalls: [{ id: "call-2", toolName: "create_reminder", input: { city: "Tel Aviv" } }], stopReason: "tool_use" },
+      { text: "done again", toolCalls: [], stopReason: "end_turn" },
+    ]);
+    const { orchestrator, permissionService } = setup(brain, [tool], { toolResultCache: cache });
+    permissionService.grant("user-1", tool.id);
+
+    await orchestrator.handleUserMessage("user-1", "remind me");
+    await orchestrator.handleUserMessage("user-1", "remind me again");
+
+    expect(calls()).toBe(2); // ran both times — a SAFE_ACTION tool is never served from cache
+  });
+
+  test("with no toolResultCache configured, every call re-runs the tool (today's default behavior)", async () => {
+    const { tool, calls } = makeCountingTool("GET_WEATHER");
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "get_weather", input: { city: "Tel Aviv" } }], stopReason: "tool_use" },
+      { text: "sunny", toolCalls: [], stopReason: "end_turn" },
+      { text: "", toolCalls: [{ id: "call-2", toolName: "get_weather", input: { city: "Tel Aviv" } }], stopReason: "tool_use" },
+      { text: "still sunny", toolCalls: [], stopReason: "end_turn" },
+    ]);
+    const { orchestrator } = setup(brain, [tool]); // no toolResultCache
+
+    await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv?");
+    await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv again?");
+
+    expect(calls()).toBe(2);
   });
 });
