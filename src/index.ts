@@ -82,6 +82,7 @@ import { createUpdateAlarmTool } from "@/tools/alarms/UpdateAlarmTool";
 import { TwilioSmsSender } from "@/communication/phone/TwilioSmsSender";
 import { createSendSmsTool } from "@/tools/phone/SendSmsTool";
 import { TwilioOutboundCaller } from "@/communication/phone/TwilioOutboundCaller";
+import { TwilioCostGuard } from "@/communication/phone/TwilioCostGuard";
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { createListCalendarEventsTool } from "@/tools/calendar/ListCalendarEventsTool";
@@ -188,7 +189,7 @@ function main() {
   const eventBus = new EventBus();
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
-  const reminderStore = new ReminderStore(config.remindersDbPath);
+  const reminderStore = new ReminderStore(config.remindersDbPath, config.timezone);
   const automationRuleStore = new AutomationRuleStore(config.automationRulesDbPath);
   const automationFailureStore = new AutomationFailureStore(config.automationFailuresDbPath);
   // Tracks "is this setInterval loop actually still ticking" for each
@@ -774,6 +775,11 @@ function main() {
     // gap: a call id is tracked as soon as placeCall() starts, not only
     // once it resolves.
     const inFlightWakeUpCallIds = new Set<string>();
+    // Twilio Cost Guard: bounds how many real, billed outbound calls JARVIS
+    // will place in a day, independent of how many wake-up call rules
+    // exist or how the scheduler's own idempotency logic behaves — see
+    // TwilioCostGuard's own doc comment.
+    const outboundCallCostGuard = new TwilioCostGuard(config.maxOutboundCallsPerDay);
 
     wakeUpInterval = setInterval(() => {
       schedulerHealthTracker.tick("wakeUpCalls");
@@ -783,6 +789,21 @@ function main() {
       const due = getDueWakeUpCalls(wakeUpCallStore.list(), nowTimeOfDay, todayDateStr, inFlightWakeUpCallIds);
 
       for (const call of due) {
+        if (!outboundCallCostGuard.tryConsume(todayDateStr)) {
+          // Marked triggered (not left due) even though no call went out —
+          // otherwise this would just hit the same cap again every tick
+          // for the rest of the day, spamming the log/activity feed for a
+          // call that was never going to be allowed through anyway.
+          wakeUpCallStore.markTriggered(call.id, todayDateStr);
+          const message = `JARVIS skipped your wake-up call${call.label ? ` (${call.label})` : ""}: today's outbound call limit (${config.maxOutboundCallsPerDay}) was already reached.`;
+          console.error(`[jarvis] ${message}`);
+          activityLog.record(message);
+          if (telegramGateway && config.telegramOwnerChatId) {
+            telegramGateway.sendMessage(config.telegramOwnerChatId, message).catch(() => {});
+          }
+          continue;
+        }
+
         inFlightWakeUpCallIds.add(call.id);
         outboundCaller
           .placeCall(config.ownerPhoneNumber!, wakeUpTwimlUrl)

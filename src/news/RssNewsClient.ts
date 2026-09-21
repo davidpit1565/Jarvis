@@ -1,3 +1,5 @@
+import { fetchWithRetry } from "@/core/net/fetchWithRetry";
+
 export interface NewsHeadline {
   title: string;
   link: string;
@@ -51,13 +53,26 @@ export class RssNewsClient {
       return this.cachedItems.value;
     }
 
-    const response = await fetch(this.feedUrl);
+    // Bounded fetch (timeout + retry-with-backoff on 429/5xx or a
+    // network-level failure), same reasoning/helper as GmailClient and
+    // TelegramGateway — an RSS host can be just as flaky as any other
+    // external API, and a stuck request here would otherwise hang the
+    // whole GET_NEWS/SEARCH_NEWS tool call.
+    const response = await fetchWithRetry(this.feedUrl, {}, { baseDelayMs: 50 });
     if (!response.ok) {
       throw new Error(`RSS feed request failed (${response.status}): ${await response.text().catch(() => "")}`);
     }
 
     const xml = await response.text();
     const headlines: NewsHeadline[] = [];
+    // A feed can legitimately (or by publisher error) list the same story
+    // twice — e.g. an updated item re-published with the same link, or two
+    // <item> blocks that only differ by tracking params already stripped
+    // by decodeXmlText. Dedup by link first (the stronger identity), then
+    // by title for the rare case of the same story at two different
+    // links (a canonical URL and a syndicated redirect).
+    const seenLinks = new Set<string>();
+    const seenTitles = new Set<string>();
 
     for (const match of xml.matchAll(ITEM_PATTERN)) {
       const itemXml = match[1] ?? "";
@@ -67,7 +82,15 @@ export class RssNewsClient {
 
       const title = decodeXmlText(titleMatch[1] ?? "");
       const link = decodeXmlText(linkMatch[1] ?? "");
-      if (title && link) headlines.push({ title, link });
+      if (!title || !link) continue;
+
+      const linkKey = link.toLowerCase();
+      const titleKey = title.trim().toLowerCase();
+      if (seenLinks.has(linkKey) || seenTitles.has(titleKey)) continue;
+
+      seenLinks.add(linkKey);
+      seenTitles.add(titleKey);
+      headlines.push({ title, link });
     }
 
     this.cachedItems = { value: headlines, fetchedAt: Date.now() };

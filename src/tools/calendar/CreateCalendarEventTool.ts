@@ -14,6 +14,17 @@ function isValidIsoDate(value: string): boolean {
   return !Number.isNaN(Date.parse(value));
 }
 
+// How close two events' start times have to be, alongside a matching
+// title, to call the new one a likely duplicate of an existing one rather
+// than just two different events that happen to overlap. Wider than an
+// exact-match window on purpose — "same meeting, someone fat-fingered the
+// minute" is still worth flagging.
+const DUPLICATE_START_WINDOW_MS = 5 * 60_000;
+
+function normalizeTitle(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 /**
  * Lets the user actually get something added to their real Google
  * Calendar by asking JARVIS, not just ask what's already on it.
@@ -33,7 +44,10 @@ export function createCreateCalendarEventTool(
       "Creates a new event on the user's Google Calendar. Resolve any relative time the user gave " +
       '("tomorrow at 3pm", "next Monday morning") into actual ISO 8601 timestamps yourself before calling ' +
       "this. Always creates the event even if it overlaps an existing one — a non-empty `conflicts` field " +
-      "in the result means it does, so mention that to the user rather than silently double-booking them.",
+      "in the result means it does, so mention that to the user rather than silently double-booking them. " +
+      "A non-null `duplicate` field means an existing event with the same title and a start time within a " +
+      "few minutes was already found — the new event was still created (this never blocks), but tell the " +
+      "user in case they didn't mean to add it twice.",
     inputSchema: {
       type: "object",
       properties: {
@@ -69,6 +83,20 @@ export function createCreateCalendarEventTool(
         // blocks the actual create — this is a nice-to-have warning, not
         // a gate on the action itself.
         const conflicts = await calendarClient.listEventsInRange(input.start, input.end).catch(() => []);
+        // Same reasoning as conflicts above: a near-identical existing
+        // event is a warning, never a gate — SAFE_ACTION tools shouldn't
+        // second-guess the user by refusing to create what they asked
+        // for. Checked against `conflicts` (already fetched for the
+        // overlap check) rather than a second API call — a same-title
+        // duplicate within a few minutes of this start time necessarily
+        // overlaps this event's own [start, end) range too.
+        const inputStartMs = Date.parse(input.start);
+        const duplicate =
+          conflicts.find(
+            (existing) =>
+              normalizeTitle(existing.summary) === normalizeTitle(input.summary) &&
+              Math.abs(Date.parse(existing.start) - inputStartMs) <= DUPLICATE_START_WINDOW_MS
+          ) ?? null;
 
         const event = await calendarClient.createEvent({
           summary: input.summary,
@@ -77,7 +105,7 @@ export function createCreateCalendarEventTool(
           location: input.location ?? null,
         });
         undoStore?.record({ type: "calendar_event_created", eventId: event.id, summary: event.summary });
-        return { success: true, data: { event, conflicts } };
+        return { success: true, data: { event, conflicts, duplicate } };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }

@@ -121,6 +121,50 @@ describe("ReminderStore", () => {
     store.close();
   });
 
+  test("advances a daily reminder by a calendar day, not a fixed 24h, across a spring-forward DST transition (America/New_York)", () => {
+    // 2026-03-08 is the US spring-forward date: clocks jump from 2:00am to
+    // 3:00am EST->EDT. A reminder due 9:00am local on Saturday the 7th
+    // (still EST, UTC-5, so 14:00 UTC) should recur to 9:00am local on
+    // Sunday the 8th (now EDT, UTC-4, so 13:00 UTC) — a naive
+    // +24h-in-UTC would instead land it at 14:00 UTC, which is 10:00am
+    // local, one hour late.
+    const store = new ReminderStore(":memory:", "America/New_York");
+    const record = store.create({ text: "Take medication", dueAt: "2026-03-07T14:00:00.000Z", recurrence: "daily" });
+
+    store.complete(record.id);
+
+    const [next] = store.list();
+    expect(next?.dueAt).toBe("2026-03-08T13:00:00.000Z");
+    store.close();
+  });
+
+  test("advances a weekly reminder by calendar days, not a fixed 168h, across a fall-back DST transition (America/New_York)", () => {
+    // 2026-11-01 is the US fall-back date: clocks fall from 2:00am back to
+    // 1:00am EDT->EST. A reminder due 9:00am local on 2026-10-25 (EDT,
+    // UTC-4, so 13:00 UTC) should recur to 9:00am local on 2026-11-01 (now
+    // EST, UTC-5, so 14:00 UTC) — a naive +168h-in-UTC would instead land
+    // it at 13:00 UTC, which is 8:00am local, one hour early.
+    const store = new ReminderStore(":memory:", "America/New_York");
+    const record = store.create({ text: "Water the plants", dueAt: "2026-10-25T13:00:00.000Z", recurrence: "weekly" });
+
+    store.complete(record.id);
+
+    const [next] = store.list();
+    expect(next?.dueAt).toBe("2026-11-01T14:00:00.000Z");
+    store.close();
+  });
+
+  test("advancing by a calendar day for a UTC-configured store still adds exactly 24 hours (no DST in UTC)", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Take medication", dueAt: "2026-03-08T14:00:00.000Z", recurrence: "daily" });
+
+    store.complete(record.id);
+
+    const [next] = store.list();
+    expect(next?.dueAt).toBe("2026-03-09T14:00:00.000Z");
+    store.close();
+  });
+
   test("the original occurrence stays marked completed after recurring", () => {
     const store = new ReminderStore(":memory:");
     const record = store.create({ text: "Take medication", dueAt: "2026-01-15T08:00:00.000Z", recurrence: "daily" });

@@ -122,6 +122,87 @@ describe("CREATE_CALENDAR_EVENT tool", () => {
     expect((result.data as { conflicts: unknown[] }).conflicts).toEqual([]);
   });
 
+  test("flags a duplicate when an existing event has the same title and a start time within a few minutes", async () => {
+    global.fetch = (async (url: string) => {
+      if (url.includes("timeMin") && url.includes("timeMax")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "existing",
+                summary: "Standup",
+                start: { dateTime: "2026-01-15T09:02:00Z" },
+                end: { dateTime: "2026-01-15T09:17:00Z" },
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({ id: "e1", summary: "Standup", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:15:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const tool = createCreateCalendarEventTool(makeClient());
+    const result = await tool.execute({ summary: "Standup", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:15:00Z" }, context);
+
+    expect(result.success).toBe(true);
+    const data = result.data as { duplicate: unknown; event: { id: string } };
+    expect(data.duplicate).not.toBeNull();
+    // Still creates the event — a warning, never a gate.
+    expect(data.event.id).toBe("e1");
+  });
+
+  test("does not flag a duplicate when the title differs, even at the exact same time", async () => {
+    global.fetch = (async (url: string) => {
+      if (url.includes("timeMin") && url.includes("timeMax")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: "existing", summary: "Something else", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:15:00Z" } },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({ id: "e1", summary: "Standup", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:15:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const tool = createCreateCalendarEventTool(makeClient());
+    const result = await tool.execute({ summary: "Standup", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:15:00Z" }, context);
+
+    expect((result.data as { duplicate: unknown }).duplicate).toBeNull();
+  });
+
+  test("does not flag a duplicate when the title matches but the start time is far off", async () => {
+    global.fetch = (async (url: string) => {
+      if (url.includes("timeMin") && url.includes("timeMax")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: "existing", summary: "Standup", start: { dateTime: "2026-01-15T15:00:00Z" }, end: { dateTime: "2026-01-15T15:15:00Z" } },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({ id: "e1", summary: "Standup", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:15:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const tool = createCreateCalendarEventTool(makeClient());
+    const result = await tool.execute({ summary: "Standup", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:15:00Z" }, context);
+
+    expect((result.data as { duplicate: unknown }).duplicate).toBeNull();
+  });
+
   test("does not record anything in the undo store on failure", async () => {
     global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
 

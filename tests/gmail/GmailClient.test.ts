@@ -259,4 +259,48 @@ describe("GmailClient.getMessageCount", () => {
     const { client } = makeClient(makeLinkedTokenStore());
     await expect(client.getMessageCount("is:unread")).rejects.toThrow(/400/);
   });
+
+  test("retries a transient 429 and succeeds once Gmail's rate limit clears", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      if (fetchCalls < 2) return new Response("rate limited", { status: 429 });
+      return new Response(JSON.stringify({ resultSizeEstimate: 3 }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const count = await client.getMessageCount("is:unread");
+
+    expect(count).toBe(3);
+    expect(fetchCalls).toBe(2);
+  });
+});
+
+describe("GmailClient.sendMessage rate handling", () => {
+  test("retries a 429 (Gmail rejected the send outright, safe to retry) and succeeds", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      if (fetchCalls < 2) return new Response("rate limited", { status: 429 });
+      return new Response(JSON.stringify({ id: "sent-1" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const result = await client.sendMessage("to@example.com", "Subject", "Body");
+
+    expect(result).toEqual({ id: "sent-1" });
+    expect(fetchCalls).toBe(2);
+  });
+
+  test("does not retry a network-level failure on send (ambiguous whether Gmail already received it)", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      throw new Error("connection reset");
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.sendMessage("to@example.com", "Subject", "Body")).rejects.toThrow("connection reset");
+    expect(fetchCalls).toBe(1);
+  });
 });

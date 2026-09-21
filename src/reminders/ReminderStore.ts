@@ -4,11 +4,73 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { CreateReminderInput, ReminderRecord, ReminderRecurrence } from "@/types/reminders";
 
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const RECURRENCE_INTERVAL_MS: Record<ReminderRecurrence, number> = {
-  daily: ONE_DAY_MS,
-  weekly: 7 * ONE_DAY_MS,
+const RECURRENCE_DAYS: Record<ReminderRecurrence, number> = {
+  daily: 1,
+  weekly: 7,
 };
+
+/** y/m/d/h/m/s as displayed in `timeZone` for a given instant. */
+function getZonedParts(
+  date: Date,
+  timeZone: string
+): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+  // Some environments report midnight as hour 24 under h23 — normalize it.
+  const hour = get("hour") % 24;
+  return { year: get("year"), month: get("month"), day: get("day"), hour, minute: get("minute"), second: get("second") };
+}
+
+/**
+ * Adds `days` calendar days to `isoDate`'s wall-clock time *as displayed in
+ * `timeZone`*, keeping the same local hour/minute/second, and returns the
+ * resulting UTC instant. Plain `new Date(x).getTime() + N * 86_400_000` is
+ * wrong across a DST transition: adding exactly 24 (or 168) hours in UTC
+ * doesn't land on the same local wall-clock time once the zone's offset has
+ * shifted, so a daily/weekly reminder due at "9am" would silently drift to
+ * 8am or 10am local the day it crosses a transition. This instead:
+ *  1. reads the local y/m/d/h/m/s of `isoDate` in `timeZone`,
+ *  2. adds `days` to the day field (JS's own Date normalizes month/year
+ *     rollover for us — no calendar math needed here),
+ *  3. finds the actual UTC instant whose local time in `timeZone` matches
+ *     that target wall-clock time, via a short fixed-point iteration (the
+ *     zone's UTC offset can only depend on which side of a transition the
+ *     final answer falls on, so this converges in at most a couple of
+ *     passes — no external timezone library needed for that).
+ */
+function addCalendarDaysInTimezone(isoDate: string, days: number, timeZone: string): string {
+  const parts = getZonedParts(new Date(isoDate), timeZone);
+  // A "neutral" UTC timestamp that merely encodes the target wall-clock
+  // date/time — not the real answer yet, just a value to iterate from.
+  const targetWallAsUtcMs = Date.UTC(parts.year, parts.month - 1, parts.day + days, parts.hour, parts.minute, parts.second);
+
+  let guessMs = targetWallAsUtcMs;
+  for (let i = 0; i < 3; i++) {
+    const guessedParts = getZonedParts(new Date(guessMs), timeZone);
+    const guessedWallAsUtcMs = Date.UTC(
+      guessedParts.year,
+      guessedParts.month - 1,
+      guessedParts.day,
+      guessedParts.hour,
+      guessedParts.minute,
+      guessedParts.second
+    );
+    const errorMs = targetWallAsUtcMs - guessedWallAsUtcMs;
+    if (errorMs === 0) break;
+    guessMs += errorMs;
+  }
+
+  return new Date(guessMs).toISOString();
+}
 
 /**
  * Local reminders/tasks store backed by SQLite, alongside (not merged
@@ -19,8 +81,18 @@ const RECURRENCE_INTERVAL_MS: Record<ReminderRecurrence, number> = {
  */
 export class ReminderStore {
   private db: Database;
+  private readonly timezone: string;
 
-  constructor(dbPath: string = ":memory:") {
+  /**
+   * `timezone` (an IANA zone name, same as `JARVIS_TIMEZONE`) is what
+   * `complete()` uses to advance a recurring reminder's next `dueAt` by
+   * calendar days rather than fixed milliseconds — see
+   * `addCalendarDaysInTimezone` above. Defaults to UTC, which has no DST
+   * transitions, so existing callers that never pass it keep the exact
+   * same (already-correct-for-UTC) behavior as before.
+   */
+  constructor(dbPath: string = ":memory:", timezone: string = "UTC") {
+    this.timezone = timezone;
     if (dbPath !== ":memory:") {
       mkdirSync(dirname(dbPath), { recursive: true });
     }
@@ -112,8 +184,8 @@ export class ReminderStore {
     if (result.changes === 0) return false;
 
     if (existing?.recurrence && existing.dueAt) {
-      const nextDueAt = new Date(new Date(existing.dueAt).getTime() + RECURRENCE_INTERVAL_MS[existing.recurrence]);
-      this.create({ text: existing.text, dueAt: nextDueAt.toISOString(), recurrence: existing.recurrence });
+      const nextDueAt = addCalendarDaysInTimezone(existing.dueAt, RECURRENCE_DAYS[existing.recurrence], this.timezone);
+      this.create({ text: existing.text, dueAt: nextDueAt, recurrence: existing.recurrence });
     }
 
     return true;
