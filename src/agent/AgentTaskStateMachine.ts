@@ -76,3 +76,60 @@ export function assertValidTransition(from: AgentTaskState, to: AgentTaskState):
 export function isTerminalState(state: AgentTaskState): boolean {
   return AGENT_TASK_TERMINAL_STATES.has(state);
 }
+
+/**
+ * Safe, user-facing "phase" vocabulary for a structured execution timeline
+ * (a UI rendering "Checking calendar… ✓ 7 events found" needs a stable
+ * phase name per event, not JARVIS's more granular internal AgentTaskState).
+ * Mirrored onto `agent.task.transition`'s `phase` field (see
+ * src/types/events.ts) so a consumer never has to hardcode AgentTaskState's
+ * exact spelling/set to render a sane timeline. RECEIVING/UNDERSTANDING
+ * exist in the vocabulary for a plain chat turn (see
+ * src/core/state/liveStatusFormatter.ts) but no AgentTaskState maps to
+ * UNDERSTANDING — an agent task always starts already past that point.
+ */
+export const AGENT_TASK_PHASES = [
+  "RECEIVING",
+  "UNDERSTANDING",
+  "PLANNING",
+  "EXECUTING",
+  "VERIFYING",
+  "RECOVERING",
+  "WAITING",
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+] as const;
+
+export type AgentTaskPhase = (typeof AGENT_TASK_PHASES)[number];
+
+/** Maps an `AgentTaskState` onto the safe `AgentTaskPhase` vocabulary above. */
+export function phaseForAgentTaskState(state: AgentTaskState): AgentTaskPhase {
+  switch (state) {
+    case "PENDING":
+      // A task that exists but hasn't started planning yet — "received but
+      // not yet understood/planned", same spirit as PENDING having no
+      // JarvisLiveState equivalent (see liveStateForAgentTaskState).
+      return "RECEIVING";
+    case "PLANNING":
+      return "PLANNING";
+    case "EXECUTING":
+      return "EXECUTING";
+    // RETRYING is still "doing the work" from a UI timeline's point of
+    // view — same collapsing liveStateForAgentTaskState already does.
+    case "RETRYING":
+      return "EXECUTING";
+    case "VERIFYING":
+      return "VERIFYING";
+    case "RECOVERING":
+      return "RECOVERING";
+    case "WAITING":
+      return "WAITING";
+    case "COMPLETED":
+      return "COMPLETED";
+    case "FAILED":
+      return "FAILED";
+    case "CANCELLED":
+      return "CANCELLED";
+  }
+}

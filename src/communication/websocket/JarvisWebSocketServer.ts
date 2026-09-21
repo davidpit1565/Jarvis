@@ -88,6 +88,12 @@ const OBSERVABLE_EVENTS = [
   // comment says was intentionally deferred, now wired so the hologram UI
   // can show a real state indicator instead of a fake one.
   "jarvis.liveState.changed",
+  // Forwards AgentCore task state transitions (with their safe `phase`
+  // field — see src/agent/AgentTaskStateMachine.ts's phaseForAgentTaskState
+  // and the doc comment on "agent.task.transition" in src/types/events.ts)
+  // so an observer client can render a real, truthful execution timeline
+  // for an autonomous task, not just the collapsed live-state indicator.
+  "agent.task.transition",
 ] as const;
 
 export interface JarvisWebSocketServerDependencies {
@@ -692,6 +698,10 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "POST" && url.pathname === "/agent/stop") {
             return await this.handleAgentStopHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/agent-recent-activity") {
+            return this.handleAgentRecentActivityHttp(req, url, server);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/command-center") {
@@ -1652,6 +1662,42 @@ export class JarvisWebSocketServer {
     }
     const stopped = webChatOrchestrator.requestStop(body.userId);
     return Response.json({ stopped });
+  }
+
+  /**
+   * GET /agent-recent-activity?sessionId=...&limit=... — read-only admin
+   * view of one live session's recent JarvisLiveState transition history
+   * (ToolAuditLog.listRecentTransitions), most recent first. Answers "what
+   * was JARVIS doing a few minutes ago", complementing GET /agent-status's
+   * "what is it doing right now". Required `sessionId` (the same opaque
+   * key `GET /agent-status` rows carry as `sessionId`). 404s when no
+   * `toolAuditLog` is configured. Same admin-token gating rationale as
+   * GET /agent-status.
+   */
+  private handleAgentRecentActivityHttp(req: Request, url: URL, server: BunServer): Response {
+    const { adminToken, toolAuditLog } = this.deps;
+    if (!toolAuditLog) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "agent-recent-activity"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    const sessionId = url.searchParams.get("sessionId");
+    if (!sessionId) {
+      return Response.json({ error: "sessionId is required" }, { status: 400 });
+    }
+    const limitParam = url.searchParams.get("limit");
+    let limit: number | undefined;
+    if (limitParam !== null) {
+      limit = Number(limitParam);
+      if (!Number.isInteger(limit) || limit <= 0) {
+        return Response.json({ error: "limit must be a positive integer" }, { status: 400 });
+      }
+    }
+    return Response.json({ transitions: toolAuditLog.listRecentTransitions(sessionId, limit) });
   }
 
   /**

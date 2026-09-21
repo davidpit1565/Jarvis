@@ -15,6 +15,16 @@ export interface JarvisEventMap {
     result: ToolResult;
     userId: string;
     input: Record<string, unknown>;
+    /**
+     * A short, safe, human-readable summary of `result`, derived only from
+     * real data (e.g. "3 results" from an actual array length) — never a
+     * fabricated or estimated count. Omitted whenever there's no cheap,
+     * safe way to summarize the result (see `summarizeToolResult` in
+     * `@/core/orchestrator/toolResultSummary`), so a UI rendering a live
+     * timeline ("Checking calendar… ✓ 7 events found") must fall back to a
+     * generic "done"/"failed" label rather than ever inventing a number.
+     */
+    resultSummary?: string;
   };
   "tool.dispatched": { toolName: string; deviceId: string; requestId: string };
   /** A READ-level local tool call was served from `ToolResultCache` instead of actually re-running the tool. */
@@ -38,7 +48,20 @@ export interface JarvisEventMap {
     reason: "call-failed" | "budget-exceeded" | "zero-cost-mode" | "circuit-open";
   };
   /** An AgentCore task moved from one state to another — see src/agent/AgentTaskStateMachine.ts for the legal transitions. */
-  "agent.task.transition": { taskId: string; userId: string; from: string; to: string; reason: string };
+  "agent.task.transition": {
+    taskId: string;
+    userId: string;
+    from: string;
+    to: string;
+    reason: string;
+    /**
+     * Safe, user-facing phase name for a UI timeline, mapped from `to` via
+     * `phaseForAgentTaskState` (src/agent/AgentTaskStateMachine.ts).
+     * Optional only for backward compatibility with any old event shape;
+     * every real emission includes it.
+     */
+    phase?: "RECEIVING" | "UNDERSTANDING" | "PLANNING" | "EXECUTING" | "VERIFYING" | "RECOVERING" | "WAITING" | "COMPLETED" | "FAILED" | "CANCELLED";
+  };
   /**
    * JARVIS's user-facing live state (see src/core/state/JarvisLiveState.ts)
    * moved from one value to another for a given session — roadmap items

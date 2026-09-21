@@ -9,7 +9,7 @@ import { AgentTaskStore, type AgentTaskProgress, type GoalProgress } from "./Age
 import type { AgentPlanner, AgentTaskRecord } from "./types";
 import { classifyError } from "./errorClassification";
 import { AgentTimeoutError, withTimeout } from "./timeout";
-import { isTerminalState, type AgentTaskState } from "./AgentTaskStateMachine";
+import { isTerminalState, phaseForAgentTaskState, type AgentTaskState } from "./AgentTaskStateMachine";
 import { liveStateForAgentTaskState, type JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 
 function readEnvInt(name: string, fallback: number): number {
@@ -231,6 +231,22 @@ export class AgentCore {
     this.cancelled.add(taskId);
   }
 
+  /**
+   * Marks every currently non-terminal task belonging to `userId` as
+   * cancelled — the seam `Orchestrator.requestStop(userId)` calls (see its
+   * `agentTaskCanceller` dependency) so a user-initiated Stop actually
+   * reaches an in-flight AgentCore task, not just a plain chat turn.
+   * Cooperative, same as `cancel()` itself: each affected task's own
+   * `runTaskLoop` still settles into CANCELLED at its own next checkpoint
+   * (before its next step), never mid-tool-call. Returns the ids of every
+   * task this call marked — empty if the user had no active task.
+   */
+  cancelActiveTasksForUser(userId: string): string[] {
+    const active = this.deps.taskStore.listActive(userId);
+    for (const task of active) this.cancel(task.id);
+    return active.map((task) => task.id);
+  }
+
   private isCancelled(taskId: string): boolean {
     return this.cancelled.has(taskId);
   }
@@ -244,7 +260,14 @@ export class AgentCore {
     const from = task.state;
     const updated = this.deps.taskStore.setState(task.id, to);
     this.deps.auditLog.recordAgentEvent(task.id, task.userId, "state.transition", { from, to, reason });
-    this.deps.eventBus?.emit("agent.task.transition", { taskId: task.id, userId: task.userId, from, to, reason });
+    this.deps.eventBus?.emit("agent.task.transition", {
+      taskId: task.id,
+      userId: task.userId,
+      from,
+      to,
+      reason,
+      phase: phaseForAgentTaskState(to),
+    });
 
     const { liveState } = this.deps;
     const mappedState = liveStateForAgentTaskState(to);

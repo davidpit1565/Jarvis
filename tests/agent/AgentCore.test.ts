@@ -10,6 +10,7 @@ import { PermissionService } from "@/permissions/PermissionService";
 import { PermissionLevel } from "@/types/permissions";
 import { ToolAuditLog } from "@/audit/ToolAuditLog";
 import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
+import { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { LocalTool, ToolResult } from "@/types/tools";
 
@@ -140,6 +141,30 @@ describe("AgentCore", () => {
     expect(events).toContain("step.executed");
     expect(events).toContain("step.verification");
     expect(events.filter((e) => e === "state.transition").length).toBeGreaterThan(3);
+  });
+
+  test("agent.task.transition events carry a safe, user-facing phase alongside the raw from/to states", async () => {
+    const tool = makeTool({
+      name: "read_tool",
+      requiredPermission: PermissionLevel.READ,
+      execute: async () => ({ success: true, data: {} }),
+    });
+    const planner = new ScriptedPlanner([[{ toolName: "read_tool", input: {}, description: "a step" }]]);
+    const { agentCore, eventBus } = setup({ tools: [tool], planner });
+
+    const seenPhases: Array<{ to: string; phase?: string }> = [];
+    eventBus.on("agent.task.transition", ({ to, phase }) => seenPhases.push({ to, phase }));
+
+    const result = await agentCore.runTask("user-1", "a goal to watch phases for");
+
+    expect(result.state).toBe("COMPLETED");
+    expect(seenPhases.length).toBeGreaterThan(0);
+    for (const { to, phase } of seenPhases) {
+      expect(phase).toBeDefined();
+      if (to === "PLANNING") expect(phase).toBe("PLANNING");
+      if (to === "EXECUTING") expect(phase).toBe("EXECUTING");
+      if (to === "COMPLETED") expect(phase).toBe("COMPLETED");
+    }
   });
 
   test("fails the task cleanly when the planner returns an empty plan", async () => {
@@ -348,6 +373,95 @@ describe("AgentCore", () => {
     expect(result.state).toBe("CANCELLED");
     expect(firstStepRan).toBe(false);
     expect(secondStepRan).toBe(false);
+  });
+
+  test("Orchestrator.requestStop cancels an in-flight multi-step agent task, leaving it cleanly CANCELLED with no further tool calls", async () => {
+    let step2Ran = false;
+    const eventBus = new EventBus();
+    const toolRegistry = new ToolRegistry();
+    const permissionService = new PermissionService();
+    const conversation = new ConversationManager(eventBus);
+    const liveState = new JarvisLiveStateTracker(eventBus);
+    const taskStore = new AgentTaskStore(":memory:");
+    const auditLog = new ToolAuditLog(":memory:");
+
+    // Mirrors the real production wiring in src/index.ts: `orchestrator`
+    // needs the cancel hook at construction time, but the hook needs
+    // `agentCore`, which itself needs `orchestrator` — the forward-ref box
+    // breaks that ordering cycle in the test the same way it does in
+    // src/index.ts.
+    let agentCoreRef: AgentCore | undefined;
+    const orchestrator = new Orchestrator({
+      brain: unusedBrain,
+      conversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      liveState,
+      agentTaskCanceller: {
+        cancelActiveTasksForUser: (userId) => agentCoreRef?.cancelActiveTasksForUser(userId) ?? [],
+      },
+    });
+
+    const step1 = makeTool({
+      name: "step_one",
+      requiredPermission: PermissionLevel.READ,
+      execute: async () => {
+        // Simulates a Stop button click arriving while this step is
+        // actually in flight — the exact race item 4 needs verified safe.
+        const stopped = orchestrator.requestStop("user-1");
+        expect(stopped).toBe(true);
+        return { success: true, data: {} };
+      },
+    });
+    const step2 = makeTool({
+      name: "step_two",
+      requiredPermission: PermissionLevel.READ,
+      execute: async () => {
+        step2Ran = true;
+        return { success: true, data: {} };
+      },
+    });
+    toolRegistry.registerTool(step1);
+    toolRegistry.registerTool(step2);
+
+    const planner = new ScriptedPlanner([
+      [
+        { toolName: "step_one", input: {}, description: "first step" },
+        { toolName: "step_two", input: {}, description: "second step" },
+      ],
+    ]);
+
+    const agentCore = new AgentCore({ orchestrator, planner, toolRegistry, taskStore, auditLog, eventBus, liveState });
+    agentCoreRef = agentCore;
+
+    const result = await agentCore.runTask("user-1", "a multi-step goal interrupted mid-flight");
+
+    expect(result.state).toBe("CANCELLED");
+    expect(step2Ran).toBe(false);
+    // No corruption / no silent completion: the persisted store agrees
+    // exactly with what runTask returned.
+    expect(taskStore.get(result.id)?.state).toBe("CANCELLED");
+    expect(taskStore.get(result.id)?.completedAt).not.toBeNull();
+  });
+
+  test("Orchestrator.requestStop is a no-op (returns false) when the user has no active chat turn or agent task", () => {
+    const eventBus = new EventBus();
+    const toolRegistry = new ToolRegistry();
+    const permissionService = new PermissionService();
+    const conversation = new ConversationManager(eventBus);
+    const liveState = new JarvisLiveStateTracker(eventBus);
+    const orchestrator = new Orchestrator({
+      brain: unusedBrain,
+      conversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      liveState,
+      agentTaskCanceller: { cancelActiveTasksForUser: () => [] },
+    });
+
+    expect(orchestrator.requestStop("nobody-doing-anything")).toBe(false);
   });
 
   test("a CONFIRM-level step actually pauses for a real human confirmation before running", async () => {
