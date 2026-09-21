@@ -22,6 +22,7 @@ describe("EventBus", () => {
       status: "unknown" as const,
       capabilities: [],
       lastSeen: null,
+      permissions: null,
     };
 
     bus.emit("device.registered", { device });

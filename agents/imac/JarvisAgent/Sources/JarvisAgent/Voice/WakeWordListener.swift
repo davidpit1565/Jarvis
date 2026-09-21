@@ -63,6 +63,13 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     /// language directive sent to Core in `onTranscriptReady`.
     private var pendingCommandLanguage = "en"
     private var silenceCheckTimer: Timer?
+    /// Diagnostics only (roadmap #71): true once the wake phrase has been
+    /// announced via `print()` for the current recognition-task cycle, so
+    /// the terminal gets one clear "wake phrase heard" line instead of one
+    /// per partial-transcript update (which fires many times a second
+    /// while the recognizer keeps refining the same match). Reset every
+    /// time `beginRecognitionTask()` starts a fresh cycle.
+    private var hasAnnouncedWakePhraseThisCycle = false
 
     /// Spoken when the wake phrase is heard with no command following it —
     /// "Hey JARVIS" alone should always get an answer, not silence.
@@ -88,14 +95,28 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     private static let silenceThresholdSeconds: TimeInterval = 1.5
 
     func start() {
+        // print() here is deliberate, not a duplicate of the os_log call
+        // below it (roadmap #71 — wake diagnostics): `os_log`/`Logger`
+        // output only shows up in Console.app/`log stream`, invisible in a
+        // plain terminal session running this executable directly —
+        // exactly the gap JARVIS_ROADMAP_AUDIT.md's Phase 11 notes
+        // identifies as the single most likely cause of "Hey JARVIS
+        // producing zero log output" reports. `main.swift`'s own
+        // connection logging already does this (`print(...)` next to
+        // `Logger.shared.log(...)`); this listener didn't, until now.
+        print("[JarvisAgent] WakeWordListener: requesting Speech + microphone authorization...")
         SFSpeechRecognizer.requestAuthorization { [weak self] authStatus in
             guard authStatus == .authorized else {
-                Logger.shared.log("Speech recognition not authorized (\(authStatus.rawValue)) — wake-word listening disabled.")
+                let message = "Speech recognition not authorized (\(authStatus.rawValue)) — wake-word listening disabled."
+                print("[JarvisAgent] \(message)")
+                Logger.shared.log(message)
                 return
             }
             AVCaptureDevice.requestAccess(for: .audio) { granted in
                 guard granted else {
-                    Logger.shared.log("Microphone access not granted — wake-word listening disabled.")
+                    let message = "Microphone access not granted — wake-word listening disabled."
+                    print("[JarvisAgent] \(message)")
+                    Logger.shared.log(message)
                     return
                 }
                 DispatchQueue.main.async {
@@ -124,6 +145,7 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     /// voice from the reply's own script instead (same idea as the phone
     /// gateway's and the browser voice mode's per-language selection).
     func speak(_ text: String) {
+        print("[JarvisAgent] Speaking: \"\(text)\"")
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         let isHebrew = text.unicodeScalars.contains { (0x0590...0x05FF).contains($0.value) }
@@ -135,13 +157,16 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
 
     private func startListening() {
         guard let speechRecognizer, speechRecognizer.isAvailable else {
-            Logger.shared.log("Speech recognizer unavailable — wake-word listening disabled.")
+            let message = "Speech recognizer unavailable — wake-word listening disabled."
+            print("[JarvisAgent] \(message)")
+            Logger.shared.log(message)
             return
         }
         speechRecognizer.delegate = self
 
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+        print("[JarvisAgent] WakeWordListener: input format \(recordingFormat)")
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
             if self?.clapDetector.process(buffer) == true {
@@ -155,7 +180,9 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
         do {
             try audioEngine.start()
         } catch {
-            Logger.shared.log("Failed to start audio engine: \(error.localizedDescription)")
+            let message = "Failed to start audio engine: \(error.localizedDescription)"
+            print("[JarvisAgent] \(message)")
+            Logger.shared.log(message)
             return
         }
 
@@ -164,6 +191,7 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
         silenceCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.checkForSilence()
         }
+        print("[JarvisAgent] Wake-word listening started — say \"Hey JARVIS\" or clap.")
         Logger.shared.log("Wake-word listening started.")
     }
 
@@ -174,6 +202,7 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     private func beginRecognitionTask() {
         recognitionTask?.cancel()
         recognitionTask = nil
+        hasAnnouncedWakePhraseThisCycle = false
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -207,6 +236,7 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     /// listening window.
     private func handleClapDetected() {
         guard !clapCommandModeActive else { return }
+        print("[JarvisAgent] Clap detected — listening for a command.")
         clapCommandModeActive = true
         clapCommandModeStartedAt = Date()
         lastTranscriptUpdate = Date()
@@ -233,6 +263,11 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
             return
         }
 
+        if !hasAnnouncedWakePhraseThisCycle {
+            hasAnnouncedWakePhraseThisCycle = true
+            print("[JarvisAgent] Wake phrase heard: \"\(matchedPhrase)\" — listening for a command.")
+        }
+
         let afterWakePhrase = String(transcript[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         pendingCommandText = afterWakePhrase.isEmpty ? nil : afterWakePhrase
         pendingCommandLanguage = Self.hebrewWakePhrases.contains(matchedPhrase) ? "he" : "en"
@@ -254,6 +289,7 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
         if let pendingCommandText, !pendingCommandText.isEmpty {
             self.pendingCommandText = nil
             let wasClapTriggered = clapCommandModeActive
+            print("[JarvisAgent] Command captured (\(wasClapTriggered ? "clap" : "wake phrase")-triggered), sending to Core: \"\(pendingCommandText)\"")
             awaitingCommandAfterWake = false
             clapCommandModeActive = false
             // A clap has no wake phrase to signal a language from — pass

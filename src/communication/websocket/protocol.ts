@@ -98,12 +98,42 @@ export interface VoiceTranscriptPayload {
   [key: string]: unknown;
 }
 
+/**
+ * One capability's live permission/availability state, as the device
+ * itself observes it right now — not what Core hopes is true. Kept as an
+ * open string union (not a boolean) because macOS permission APIs
+ * themselves aren't binary: `AVCaptureDevice.authorizationStatus` has
+ * four states (notDetermined/restricted/denied/authorized), not two.
+ * "granted" | "denied" | "not_determined" | "restricted" | "unsupported"
+ * covers every capability this codebase reports; a device may send a
+ * capability name Core doesn't recognize yet (forward-compatible), which
+ * `DeviceRegistry.updateCapabilities` stores as-is without interpreting it.
+ */
+export type CapabilityStatus = "granted" | "denied" | "not_determined" | "restricted" | "unsupported";
+
+/**
+ * Reports which capabilities/permissions this device actually has
+ * available right now — e.g. Accessibility (needed for CLICK_ELEMENT/
+ * TYPE_TEXT), microphone (needed for wake-word listening), notifications.
+ * Sent once on successful registration and again whenever a permission's
+ * status changes (e.g. the user grants Accessibility mid-session). This
+ * is capability *discovery*, distinct from `capabilities: string[]` in
+ * `DeviceRegisterPayload` (which only ever lists tool names, not their
+ * live permission state) — Core previously had no way to know a
+ * registered device's tools would actually work until a tool call failed.
+ */
+export interface DeviceCapabilitiesPayload {
+  permissions: Record<string, CapabilityStatus>;
+  [key: string]: unknown;
+}
+
 export type DeviceRegisterMessage = Envelope<"device.register", DeviceRegisterPayload>;
 export type DeviceStatusMessage = Envelope<"device.status", DeviceStatusPayload>;
 export type ToolResultMessage = Envelope<"tool.result", ToolResultPayload>;
 export type DeviceEventMessage = Envelope<"event", DeviceEventPayload>;
 export type PongMessage = Envelope<"pong", PongPayload>;
 export type VoiceTranscriptMessage = Envelope<"voice.transcript", VoiceTranscriptPayload>;
+export type DeviceCapabilitiesMessage = Envelope<"device.capabilities", DeviceCapabilitiesPayload>;
 
 export type DeviceToCoreMessage =
   | DeviceRegisterMessage
@@ -111,7 +141,8 @@ export type DeviceToCoreMessage =
   | ToolResultMessage
   | DeviceEventMessage
   | PongMessage
-  | VoiceTranscriptMessage;
+  | VoiceTranscriptMessage
+  | DeviceCapabilitiesMessage;
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -223,6 +254,21 @@ function isVoiceTranscriptPayload(payload: Record<string, unknown>): payload is 
   );
 }
 
+const VALID_CAPABILITY_STATUSES = new Set<CapabilityStatus>([
+  "granted",
+  "denied",
+  "not_determined",
+  "restricted",
+  "unsupported",
+]);
+
+function isDeviceCapabilitiesPayload(payload: Record<string, unknown>): payload is DeviceCapabilitiesPayload {
+  if (!isPlainObject(payload.permissions)) return false;
+  return Object.entries(payload.permissions).every(
+    ([key, value]) => typeof key === "string" && typeof value === "string" && VALID_CAPABILITY_STATUSES.has(value as CapabilityStatus)
+  );
+}
+
 /** Parses and validates a message sent by a device to Core. */
 export function parseDeviceToCoreMessage(raw: string): ParseResult<DeviceToCoreMessage> {
   const envelopeResult = parseEnvelopeShape(raw);
@@ -288,6 +334,17 @@ export function parseDeviceToCoreMessage(raw: string): ParseResult<DeviceToCoreM
       return {
         ok: true,
         message: { ...envelope, deviceId: deviceIdResult.message, type: "voice.transcript", payload: envelope.payload },
+      };
+    }
+    case "device.capabilities": {
+      const deviceIdResult = requireDeviceId(envelope);
+      if (!deviceIdResult.ok) return deviceIdResult;
+      if (!isDeviceCapabilitiesPayload(envelope.payload)) {
+        return { ok: false, reason: "Malformed device.capabilities payload" };
+      }
+      return {
+        ok: true,
+        message: { ...envelope, deviceId: deviceIdResult.message, type: "device.capabilities", payload: envelope.payload },
       };
     }
     default:

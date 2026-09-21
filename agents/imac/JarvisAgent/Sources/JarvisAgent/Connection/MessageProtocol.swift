@@ -66,6 +66,15 @@ struct VoiceTranscriptPayload: Codable {
     let wakeWord: String?
 }
 
+/// This Agent's live, self-reported permission status per capability —
+/// see `CapabilityReporter.swift` for how each value is determined and
+/// `src/communication/websocket/protocol.ts`'s `DeviceCapabilitiesPayload`
+/// for the Core-side mirror this must stay in sync with. Each value is one
+/// of "granted" | "denied" | "not_determined" | "restricted" | "unsupported".
+struct DeviceCapabilitiesPayload: Codable {
+    let permissions: [String: String]
+}
+
 // MARK: - Core -> Device payloads
 
 struct ToolRequestPayload: Codable {
