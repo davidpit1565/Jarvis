@@ -117,6 +117,15 @@
     </table>
     <div id="agentStatusEmpty" class="empty">No live sessions yet — nothing has talked to JARVIS since this process started.</div>
     <div id="agentStatusError" class="error-banner"></div>
+    <div id="agentHistoryPanel" style="display:none;margin-top:12px;">
+      <h3 style="font-size:13px;margin:8px 0 4px;color:var(--dim);">Recent activity — <code id="agentHistorySession"></code></h3>
+      <div class="desc">What this session actually did, most recent first (<code>GET /agent-recent-activity</code>).</div>
+      <table>
+        <thead><tr><th>Time</th><th>From</th><th>To</th><th>Reason</th></tr></thead>
+        <tbody id="agentHistoryBody"></tbody>
+      </table>
+      <div id="agentHistoryEmpty" class="empty">No recorded transitions for this session yet.</div>
+    </div>
   </section>
 
   <section id="provider-section">
@@ -286,7 +295,10 @@
           "<td><span class='pill " + pillClass + "'>" + esc(s.state) + "</span></td>" +
           "<td>" + esc(s.language || "—") + "</td>" +
           "<td>" + esc(new Date(s.updatedAt).toLocaleTimeString()) + "</td>" +
-          "<td>" + (active ? "<button data-stop='" + esc(s.userId) + "' class='danger'>Stop</button>" : "") + "</td>";
+          "<td class='row-actions'>" +
+          (active ? "<button data-stop='" + esc(s.userId) + "' class='danger'>Stop</button>" : "") +
+          "<button data-history='" + esc(s.sessionId) + "'>History</button>" +
+          "</td>";
         body.appendChild(tr);
       }
       body.querySelectorAll("[data-stop]").forEach((btn) => {
@@ -299,8 +311,38 @@
           }
         });
       });
+      body.querySelectorAll("[data-history]").forEach((btn) => {
+        btn.addEventListener("click", () => loadAgentHistory(btn.getAttribute("data-history")));
+      });
     } catch (e) {
       errEl.textContent = "Could not load agent status: " + e.message;
+    }
+  }
+
+  // "What did it do a few minutes ago" — GET /agent-recent-activity, a real
+  // persisted history, not anything simulated/timed.
+  async function loadAgentHistory(sessionId) {
+    const errEl = $("agentStatusError");
+    errEl.textContent = "";
+    try {
+      const data = await api("/agent-recent-activity?sessionId=" + encodeURIComponent(sessionId) + "&limit=30");
+      const transitions = data.transitions || [];
+      $("agentHistorySession").textContent = sessionId;
+      $("agentHistoryPanel").style.display = "block";
+      const body = $("agentHistoryBody");
+      body.innerHTML = "";
+      $("agentHistoryEmpty").style.display = transitions.length ? "none" : "block";
+      for (const t of transitions) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + esc(new Date(t.timestamp).toLocaleTimeString()) + "</td>" +
+          "<td><span class='pill idle'>" + esc(t.fromState) + "</span></td>" +
+          "<td><span class='pill idle'>" + esc(t.toState) + "</span></td>" +
+          "<td>" + esc(t.reason || "—") + "</td>";
+        body.appendChild(tr);
+      }
+    } catch (e) {
+      errEl.textContent = "Could not load session history: " + e.message;
     }
   }
 

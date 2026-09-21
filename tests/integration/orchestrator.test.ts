@@ -12,6 +12,7 @@ import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { DeviceTool, LocalTool } from "@/types/tools";
 import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ToolResultCache } from "@/core/cache/ToolResultCache";
+import { parseQuarantinedToolResult } from "@/core/orchestrator/toolResultQuarantine";
 
 /** Scripted mock brain: returns queued responses in order, one per call. */
 class ScriptedBrain implements Brain {
@@ -181,7 +182,7 @@ describe("Orchestrator integration", () => {
     const messages = conversation.getMessages();
     const toolResult = messages.find((m) => m.role === "tool");
     expect(toolResult).toBeDefined();
-    expect(JSON.parse((toolResult as { content: string }).content)).toEqual({
+    expect(parseQuarantinedToolResult((toolResult as { content: string }).content)).toEqual({
       success: true,
       data: { hello: "world" },
     });
@@ -211,6 +212,40 @@ describe("Orchestrator integration", () => {
     expect(captured?.input).toEqual({ hello: "world" });
   });
 
+  test("tool.executed carries a real resultSummary derived from an actual array length, and omits it when there's nothing safe to summarize", async () => {
+    const listTool: LocalTool = {
+      id: "LIST_EVENTS",
+      name: "list_events",
+      description: "Lists events",
+      inputSchema: { type: "object", properties: {} },
+      requiredPermission: PermissionLevel.READ,
+      target: "local",
+      execute: async () => ({ success: true, data: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }, { id: 6 }, { id: 7 }] }),
+    };
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "list_events", input: {} }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+      { text: "", toolCalls: [{ id: "call-2", toolName: "echo_tool", input: { hello: "world" } }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+    const echoTool = makeEchoTool("ECHO_TOOL");
+
+    const { orchestrator, eventBus } = setup(brain, [listTool, echoTool]);
+    const captured: Array<{ toolName: string; resultSummary?: string }> = [];
+    eventBus.on("tool.executed", (payload) => captured.push(payload));
+
+    await orchestrator.handleUserMessage("user-1", "list today's calendar events");
+    await orchestrator.handleUserMessage("user-1", "echo something");
+
+    const listEvent = captured.find((c) => c.toolName === "list_events");
+    expect(listEvent?.resultSummary).toBe("7 results");
+
+    // echo_tool's result is a plain object, not an array — no fabricated
+    // summary, the field is simply absent.
+    const echoEvent = captured.find((c) => c.toolName === "echo_tool");
+    expect(echoEvent?.resultSummary).toBeUndefined();
+  });
+
   test("returns Claude's text directly when no tool call is requested", async () => {
     const brain = new ScriptedBrain([{ text: "Just chatting, no tools needed.", toolCalls: [], stopReason: "end_turn" }]);
     const { orchestrator } = setup(brain);
@@ -236,7 +271,11 @@ describe("Orchestrator integration", () => {
     expect(finalResponse).toBe("I was not able to perform that action.");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/Permission denied/);
   });
@@ -256,7 +295,11 @@ describe("Orchestrator integration", () => {
     await orchestrator.handleUserMessage("user-1", "do the safe thing");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/lockdown/i);
   });
@@ -275,7 +318,11 @@ describe("Orchestrator integration", () => {
     await orchestrator.handleUserMessage("user-1", "just read something");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(true);
   });
 
@@ -295,7 +342,11 @@ describe("Orchestrator integration", () => {
     await orchestrator.handleUserMessage("user-1", "do the safe thing");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(true);
   });
 
@@ -404,7 +455,11 @@ describe("Orchestrator integration", () => {
 
     expect(finalResponse).toBe("That tool is not available.");
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/Unknown tool/);
   });
@@ -461,7 +516,11 @@ describe("Orchestrator remote tool execution", () => {
 
     expect(response).toBe("You're using Google Chrome.");
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed).toEqual({ success: true, data: { application: "Google Chrome", bundleId: "com.google.Chrome" } });
   });
 
@@ -500,7 +559,11 @@ describe("Orchestrator remote tool execution", () => {
 
     expect(sent).toBe(false);
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/invalid input.*bad scheme/i);
   });
@@ -521,7 +584,11 @@ describe("Orchestrator remote tool execution", () => {
     await orchestrator.handleUserMessage("user-1", "run the slow tool");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/timed out/i);
   });
@@ -546,7 +613,11 @@ describe("Orchestrator remote tool execution", () => {
     await orchestrator.handleUserMessage("user-1", "run the tool");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/disconnected/i);
   });
@@ -565,7 +636,11 @@ describe("Orchestrator remote tool execution", () => {
     await orchestrator.handleUserMessage("user-1", "run the tool");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/no primary device/i);
   });
@@ -587,7 +662,11 @@ describe("Orchestrator remote tool execution", () => {
     await orchestrator.handleUserMessage("user-1", "run on macbook-99");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/Unknown device: macbook-99/);
   });
@@ -606,7 +685,11 @@ describe("Orchestrator remote tool execution", () => {
     await orchestrator.handleUserMessage("user-1", "do the safe action");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/Permission denied/);
   });
@@ -654,7 +737,11 @@ describe("Orchestrator remote tool execution", () => {
     await orchestrator.handleUserMessage("user-1", "run on the macbook");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/Permission denied/);
   });

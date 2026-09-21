@@ -14,6 +14,8 @@ import { JARVIS_SYSTEM_PROMPT } from "@/core/brain/systemPrompt";
 import type { LockdownService } from "@/core/lockdown/LockdownService";
 import type { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 import type { ToolResultCache } from "@/core/cache/ToolResultCache";
+import { quarantineToolResult } from "@/core/orchestrator/toolResultQuarantine";
+import { summarizeToolResult } from "./toolResultSummary";
 
 export interface OrchestratorDependencies {
   brain: Brain;
@@ -80,9 +82,75 @@ export interface OrchestratorDependencies {
    * call always re-runs the tool, today's behavior.
    */
   toolResultCache?: ToolResultCache;
+  /**
+   * Tool Risk Model: hard cap on the total number of tool calls this
+   * Orchestrator will actually execute within a single `handleUserMessage`
+   * turn. Without this, a single malicious or malfunctioning brain
+   * response could in principle request an unbounded number of tool calls
+   * in one iteration — `MAX_TOOL_ITERATIONS` only bounds how many times we
+   * go back to the brain, not how many tool calls one of those round-trips
+   * can contain. Once exceeded, further tool calls in that turn are
+   * refused (a `ToolResult` error, never even reaching permission checks)
+   * rather than executed — the turn itself still completes normally.
+   * Configurable via `JARVIS_MAX_TOOL_CALLS_PER_RUN` in `src/index.ts`;
+   * defaults to `DEFAULT_MAX_TOOL_CALLS_PER_RUN` when unset, so every
+   * existing Orchestrator construction site keeps working unchanged.
+   */
+  maxToolCallsPerRun?: number;
+  /**
+   * Tool Risk Model: default timeout (ms) for a LOCAL tool's `execute()`
+   * call — see `Tool.timeoutMs` for the per-tool override. `0` disables
+   * timeout enforcement entirely (the previous, unbounded behavior).
+   * Device tools are unaffected: they already have their own network-level
+   * timeout in `DeviceConnectionManager`. Defaults to
+   * `DEFAULT_LOCAL_TOOL_TIMEOUT_MS` when unset.
+   */
+  localToolTimeoutMs?: number;
+  /**
+   * Optional hook letting `requestStop` also cancel any in-flight
+   * Autonomous Agent Core task(s) for the same user — see the doc comment
+   * on `requestStop` below. A plain duck-typed interface rather than an
+   * import of `AgentCore` itself: `AgentCore` already depends on
+   * `Orchestrator` (to run its plan steps through `executeToolCall`), so
+   * importing it back here would create a circular module dependency for
+   * no real benefit. `src/index.ts` wires the real `AgentCore` in via a
+   * small adapter. Omitted means `requestStop` only ever affects this
+   * Orchestrator's own plain-chat turn loop, exactly as before this hook
+   * existed.
+   */
+  agentTaskCanceller?: { cancelActiveTasksForUser(userId: string): string[] };
 }
 
 const MAX_TOOL_ITERATIONS = 5;
+/** See `OrchestratorDependencies.maxToolCallsPerRun`. Generous for any real turn — a normal turn makes a handful of tool calls at most. */
+const DEFAULT_MAX_TOOL_CALLS_PER_RUN = 30;
+/** See `OrchestratorDependencies.localToolTimeoutMs`. Generous for any real network call (Gmail/Calendar/weather/etc.) while still bounding an otherwise-infinite hang. */
+const DEFAULT_LOCAL_TOOL_TIMEOUT_MS = 30_000;
+
+class LocalToolTimeoutError extends Error {
+  constructor(toolName: string, timeoutMs: number) {
+    super(`Tool "${toolName}" timed out after ${timeoutMs}ms`);
+    this.name = "LocalToolTimeoutError";
+  }
+}
+
+/** Races `promise` against a timer; `timeoutMs <= 0` disables the race entirely (the promise is returned as-is). */
+function withLocalToolTimeout<T>(promise: Promise<T>, toolName: string, timeoutMs: number): Promise<T> {
+  if (timeoutMs <= 0) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new LocalToolTimeoutError(toolName, timeoutMs)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
 /**
  * Generous for any real message (a long paste, a rambling phone
  * transcript) but bounded — without this, a single oversized message
@@ -148,6 +216,13 @@ export class Orchestrator {
 
     conversation.addUserMessage(content, images);
 
+    // Tool Risk Model per-run call counter — scoped to this one turn (this
+    // call to handleUserMessage), reset every time. See
+    // OrchestratorDependencies.maxToolCallsPerRun's doc comment for why
+    // this exists on top of MAX_TOOL_ITERATIONS.
+    let totalToolCallsThisRun = 0;
+    const toolCallCountsThisRun = new Map<string, number>();
+
     try {
       liveState?.transition(sessionId, userId, "THINKING", { reason: "awaiting brain response" });
 
@@ -197,6 +272,23 @@ export class Orchestrator {
           if (liveState?.isStopRequested(sessionId)) {
             return "Stopped.";
           }
+
+          totalToolCallsThisRun++;
+          const perToolCount = (toolCallCountsThisRun.get(toolCall.toolName) ?? 0) + 1;
+          toolCallCountsThisRun.set(toolCall.toolName, perToolCount);
+
+          const limitError = this.toolCallLimitError(toolCall.toolName, totalToolCallsThisRun, perToolCount);
+          if (limitError) {
+            eventBus.emit("tool.callLimitExceeded", {
+              toolName: toolCall.toolName,
+              userId,
+              totalToolCalls: totalToolCallsThisRun,
+              limit: this.deps.maxToolCallsPerRun ?? DEFAULT_MAX_TOOL_CALLS_PER_RUN,
+            });
+            this.completeToolCall(toolCall, { success: false, error: limitError });
+            continue;
+          }
+
           await this.runToolCall(userId, toolCall);
         }
 
@@ -221,14 +313,41 @@ export class Orchestrator {
    * `JarvisLiveStateTracker.requestStop`'s doc comment for exactly what
    * this can and can't interrupt (it stops the tool-call loop at its next
    * checkpoint; it can never abort a `Brain.chat()` call already in
-   * flight, since `Brain` has no cancellation signal today). Returns
-   * `false` if there was nothing active to stop (no `liveState` configured,
-   * or the session was already idle).
+   * flight, since `Brain` has no cancellation signal today). Also cancels
+   * any in-flight Autonomous Agent Core task(s) for this user, via the
+   * optional `agentTaskCanceller` hook — a plain chat turn and an agent
+   * task are otherwise two entirely separate systems (a plain turn never
+   * runs through AgentCore, and vice versa), so without this a Stop button
+   * on the Command Center would silently do nothing for a user whose only
+   * active work is an agent task, not a live chat turn. Returns `false`
+   * only if neither had anything active to stop (no `liveState` configured
+   * or the session was already idle, AND no agent task was cancelled).
    */
   requestStop(userId: string): boolean {
-    const { liveState } = this.deps;
-    if (!liveState) return false;
-    return liveState.requestStop(this.liveSessionId(userId), userId) !== undefined;
+    const { liveState, agentTaskCanceller } = this.deps;
+    const liveStateStopped = liveState ? liveState.requestStop(this.liveSessionId(userId), userId) !== undefined : false;
+    const cancelledTaskIds = agentTaskCanceller?.cancelActiveTasksForUser(userId) ?? [];
+    return liveStateStopped || cancelledTaskIds.length > 0;
+  }
+
+  /**
+   * Returns an error message if executing `toolName` right now would
+   * exceed the global per-run cap or (if set) that tool's own
+   * `maxCallsPerRun`, or `null` if the call may proceed. See
+   * OrchestratorDependencies.maxToolCallsPerRun's doc comment.
+   */
+  private toolCallLimitError(toolName: string, totalToolCalls: number, perToolCount: number): string | null {
+    const globalMax = this.deps.maxToolCallsPerRun ?? DEFAULT_MAX_TOOL_CALLS_PER_RUN;
+    if (totalToolCalls > globalMax) {
+      return `Exceeded the maximum of ${globalMax} tool calls for this turn — refusing further tool calls to prevent a runaway loop.`;
+    }
+
+    const tool = this.deps.toolRegistry.listTools().find((t) => t.name === toolName);
+    if (tool?.maxCallsPerRun !== undefined && perToolCount > tool.maxCallsPerRun) {
+      return `Exceeded the maximum of ${tool.maxCallsPerRun} call(s) to "${toolName}" allowed in a single turn.`;
+    }
+
+    return null;
   }
 
   private async runToolCall(userId: string, toolCall: ToolCallRequest): Promise<void> {
@@ -356,13 +475,31 @@ export class Orchestrator {
     }
 
     const requestId = randomUUID();
-    const result = await tool.execute(toolCall.input, { userId, requestId });
+    const timeoutMs = tool.timeoutMs ?? this.deps.localToolTimeoutMs ?? DEFAULT_LOCAL_TOOL_TIMEOUT_MS;
+    let result: ToolResult;
+    try {
+      result = await withLocalToolTimeout(tool.execute(toolCall.input, { userId, requestId }), tool.name, timeoutMs);
+    } catch (error) {
+      if (error instanceof LocalToolTimeoutError) {
+        eventBus.emit("tool.timedOut", { toolName: tool.name, userId, timeoutMs });
+        result = { success: false, error: error.message };
+      } else {
+        throw error;
+      }
+    }
 
     if (cacheable && toolResultCache) {
       toolResultCache.set(tool.name, toolCall.input, result);
     }
 
-    eventBus.emit("tool.executed", { toolName: tool.name, requestId, result, userId, input: toolCall.input });
+    eventBus.emit("tool.executed", {
+      toolName: tool.name,
+      requestId,
+      result,
+      userId,
+      input: toolCall.input,
+      resultSummary: summarizeToolResult(result),
+    });
     return result;
   }
 
@@ -415,6 +552,7 @@ export class Orchestrator {
         result,
         userId,
         input: toolCall.input,
+        resultSummary: summarizeToolResult(result),
       });
       return result;
     } catch (error) {
@@ -423,7 +561,15 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * Feeds a tool's result back into conversation history as the message
+   * the Brain will see. External Content Quarantine: the raw JSON is
+   * wrapped in a structural, unambiguous delimiter marking it as
+   * untrusted data before it ever reaches the model — see
+   * `quarantineToolResult`'s own doc comment for the full reasoning.
+   */
   private completeToolCall(toolCall: ToolCallRequest, result: ToolResult): void {
-    this.deps.conversation.addToolResult(toolCall.id, toolCall.toolName, JSON.stringify(result));
+    const quarantined = quarantineToolResult(toolCall.toolName, JSON.stringify(result));
+    this.deps.conversation.addToolResult(toolCall.id, toolCall.toolName, quarantined);
   }
 }

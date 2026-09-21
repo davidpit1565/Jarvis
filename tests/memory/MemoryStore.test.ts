@@ -253,4 +253,135 @@ describe("MemoryStore", () => {
       store.close();
     });
   });
+
+  describe("Memory Trust System", () => {
+    test("defaults source to USER_STATED when omitted", () => {
+      const store = new MemoryStore(":memory:");
+      const record = store.save({ key: "user.name", value: "David" });
+      expect(record.source).toBe("USER_STATED");
+      store.close();
+    });
+
+    test("round-trips an explicit source", () => {
+      const store = new MemoryStore(":memory:");
+      const record = store.save({ key: "user.mood", value: "seems stressed lately", source: "MODEL_INFERRED" });
+      expect(record.source).toBe("MODEL_INFERRED");
+      expect(store.getByKey("user.mood")?.source).toBe("MODEL_INFERRED");
+      store.close();
+    });
+
+    test("a pre-existing row with no source column defaults to USER_STATED when read back", () => {
+      const store = new MemoryStore(":memory:");
+      (store as unknown as { db: { query: (sql: string) => { run: (...args: unknown[]) => void } } }).db
+        .query(`INSERT INTO memory_records (id, key, value, created_at) VALUES (?, ?, ?, ?)`)
+        .run("legacy-id-2", "legacy.key2", "legacy value", new Date().toISOString());
+
+      expect(store.get("legacy-id-2")?.source).toBe("USER_STATED");
+      store.close();
+    });
+
+    test("an equal-trust write (USER_STATED replacing USER_STATED) still overwrites, unchanged from before", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.timezone", value: "America/New_York", source: "USER_STATED" });
+      const second = store.save({ key: "user.timezone", value: "Asia/Jerusalem", source: "USER_STATED" });
+
+      expect(second.conflict).toBeFalsy();
+      expect(store.getByKey("user.timezone")?.value).toBe("Asia/Jerusalem");
+      store.close();
+    });
+
+    test("a higher-trust write overwrites a lower-trust existing value", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.job", value: "guessing: works in tech", source: "MODEL_INFERRED" });
+      const correction = store.save({ key: "user.job", value: "Software Engineer at Acme", source: "USER_STATED" });
+
+      expect(correction.conflict).toBeFalsy();
+      expect(store.getByKey("user.job")?.value).toBe("Software Engineer at Acme");
+      expect(store.getByKey("user.job")?.source).toBe("USER_STATED");
+      store.close();
+    });
+  });
+
+  describe("Memory Poisoning Defense", () => {
+    test("a MODEL_INFERRED write conflicting with an existing USER_STATED value is rejected, not applied", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.address", value: "123 Real St", source: "USER_STATED" });
+
+      const attempt = store.save({ key: "user.address", value: "456 Fake Ave", source: "MODEL_INFERRED" });
+
+      expect(attempt.conflict).toBe(true);
+      // The returned record is the EXISTING, unchanged value.
+      expect(attempt.value).toBe("123 Real St");
+      expect(store.getByKey("user.address")?.value).toBe("123 Real St");
+      store.close();
+    });
+
+    test("an EXTERNAL_CONTENT write (e.g. derived from an email body) cannot overwrite a USER_STATED fact", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.bank_account", value: "the account the user actually told JARVIS", source: "USER_STATED" });
+
+      const attempt = store.save({
+        key: "user.bank_account",
+        value: "a different account mentioned in a scam email",
+        source: "EXTERNAL_CONTENT",
+      });
+
+      expect(attempt.conflict).toBe(true);
+      expect(store.getByKey("user.bank_account")?.value).toBe("the account the user actually told JARVIS");
+      store.close();
+    });
+
+    test("a rejected write is logged to memory_history as a flagged conflict", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.pin", value: "1111", source: "USER_STATED" });
+      store.save({ key: "user.pin", value: "9999", source: "MODEL_INFERRED" });
+
+      const history = store.getHistory("user.pin");
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({
+        oldValue: "1111",
+        newValue: "9999",
+        oldTrust: "USER_STATED",
+        newTrust: "MODEL_INFERRED",
+        flaggedConflict: true,
+      });
+      store.close();
+    });
+
+    test("getConflicts returns only flagged (rejected) writes, not ordinary accepted changes", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.timezone", value: "EST", source: "USER_STATED" });
+      store.save({ key: "user.timezone", value: "PST", source: "USER_STATED" }); // accepted, equal trust
+      store.save({ key: "user.name", value: "David", source: "USER_STATED" });
+      store.save({ key: "user.name", value: "Dave (a guess)", source: "MODEL_INFERRED" }); // rejected
+
+      const conflicts = store.getConflicts();
+      expect(conflicts).toHaveLength(1);
+      expect(conflicts[0]?.memoryKey).toBe("user.name");
+      store.close();
+    });
+
+    test("getConflicts can be scoped to a single key", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "a", value: "1", source: "USER_STATED" });
+      store.save({ key: "a", value: "2", source: "MODEL_INFERRED" }); // rejected
+      store.save({ key: "b", value: "1", source: "USER_STATED" });
+      store.save({ key: "b", value: "2", source: "EXTERNAL_CONTENT" }); // rejected
+
+      expect(store.getConflicts("a")).toHaveLength(1);
+      expect(store.getConflicts("b")).toHaveLength(1);
+      expect(store.getConflicts("a")[0]?.memoryKey).toBe("a");
+      store.close();
+    });
+
+    test("saving the exact same value again is never a conflict, even at lower trust", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.name", value: "David", source: "USER_STATED" });
+      const resave = store.save({ key: "user.name", value: "David", source: "MODEL_INFERRED" });
+
+      expect(resave.conflict).toBeFalsy();
+      expect(store.getHistory("user.name")).toHaveLength(0);
+      store.close();
+    });
+  });
 });

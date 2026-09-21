@@ -526,6 +526,14 @@ function main() {
   // ToolResultCache's own doc comment.
   const toolResultCache = new ToolResultCache(config.toolResultCacheTtlMs);
 
+  // Set once `agentCore` exists below — `orchestrator` needs this hook at
+  // construction time, but `agentCore` itself needs `orchestrator` as one
+  // of its own dependencies, so a plain forward-reference box breaks the
+  // ordering cycle without restructuring either constructor. Until it's
+  // set, `requestStop` simply has no agent task to cancel (same as the
+  // hook being entirely absent).
+  let agentCoreForCancel: AgentCore | undefined;
+
   const orchestrator = new Orchestrator({
     brain,
     conversation,
@@ -538,10 +546,15 @@ function main() {
     contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
     lockdownService,
     toolResultCache,
+    maxToolCallsPerRun: config.maxToolCallsPerRun,
+    localToolTimeoutMs: config.localToolTimeoutMs,
     liveState: liveStateTracker,
     // Default liveStateChannel ("chat") — this is the primary web-chat/
     // terminal Orchestrator (see webChatOrchestrator below), so its
     // sessions use the plain "chat:${userId}" key.
+    agentTaskCanceller: {
+      cancelActiveTasksForUser: (userId) => agentCoreForCancel?.cancelActiveTasksForUser(userId) ?? [],
+    },
   });
 
   // Autonomous Agent Core — Goal Engine + persistent/priority task queue +
@@ -565,6 +578,7 @@ function main() {
     eventBus,
     liveState: liveStateTracker,
   });
+  agentCoreForCancel = agentCore;
   const resumedTasks = agentCore.resumeIncompleteTasks();
   if (resumedTasks.length > 0) {
     console.warn(
@@ -597,6 +611,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      maxToolCallsPerRun: config.maxToolCallsPerRun,
+      localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
       liveStateChannel: "phone",
     });
@@ -640,6 +656,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      maxToolCallsPerRun: config.maxToolCallsPerRun,
+      localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
       liveStateChannel: "wakeup-call",
     });
@@ -709,6 +727,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      maxToolCallsPerRun: config.maxToolCallsPerRun,
+      localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
       liveStateChannel: "sms",
     });
@@ -739,6 +759,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      maxToolCallsPerRun: config.maxToolCallsPerRun,
+      localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
       liveStateChannel: "telegram",
     });
@@ -820,6 +842,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      maxToolCallsPerRun: config.maxToolCallsPerRun,
+      localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
       liveStateChannel: "device-voice",
     });
@@ -1403,6 +1427,14 @@ function main() {
   eventBus.on("tool.executed", ({ toolName, result, userId, input }) => {
     toolAuditLog.record(toolName, userId, input, result);
     activityLog.record(`${toolName} → ${result.success ? "ok" : `failed: ${result.error}`}`);
+  });
+
+  // Persists every JarvisLiveState transition (see
+  // src/core/state/JarvisLiveState.ts) so "what was JARVIS doing a few
+  // minutes ago" is answerable per-session, not just "what is it doing
+  // right now" — GET /agent-recent-activity reads this back.
+  eventBus.on("jarvis.liveState.changed", ({ sessionId, userId, from, to, reason, language, timestamp }) => {
+    toolAuditLog.recordLiveStateTransition({ sessionId, userId, from, to, reason, language, timestamp });
   });
 
   console.log(`JARVIS Core listening on port ${config.port}`);

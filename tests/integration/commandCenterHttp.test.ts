@@ -8,6 +8,7 @@ import { MemoryStore } from "@/memory/MemoryStore";
 import { AutomationRuleStore } from "@/automation/AutomationRuleStore";
 import { CostTracker } from "@/core/cost/CostTracker";
 import { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
+import { ToolAuditLog } from "@/audit/ToolAuditLog";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { ConversationManager } from "@/core/conversation/ConversationManager";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
@@ -245,6 +246,95 @@ describe("GET /agent-status and POST /agent/stop", () => {
 
     const response = await fetch(`http://localhost:${port}/agent/stop`, { method: "POST", body: JSON.stringify({}) });
     expect(response.status).toBe(400);
+  });
+});
+
+describe("GET /agent-recent-activity", () => {
+  let activeHandle: { stop: () => void } | undefined;
+  afterEach(() => {
+    activeHandle?.stop();
+    activeHandle = undefined;
+  });
+
+  test("404s when no toolAuditLog is configured", async () => {
+    const { handle, port } = setupServer();
+    activeHandle = handle;
+    const response = await fetch(`http://localhost:${port}/agent-recent-activity?sessionId=chat:alice`);
+    expect(response.status).toBe(404);
+  });
+
+  test("requires sessionId", async () => {
+    const toolAuditLog = new ToolAuditLog(":memory:");
+    const { handle, port } = setupServer({ toolAuditLog });
+    activeHandle = handle;
+    const response = await fetch(`http://localhost:${port}/agent-recent-activity`);
+    expect(response.status).toBe(400);
+  });
+
+  test("returns a session's persisted transition history, most recent first", async () => {
+    const toolAuditLog = new ToolAuditLog(":memory:");
+    toolAuditLog.recordLiveStateTransition({ sessionId: "chat:alice", userId: "alice", from: "IDLE", to: "LISTENING", reason: "user message received" });
+    toolAuditLog.recordLiveStateTransition({ sessionId: "chat:alice", userId: "alice", from: "LISTENING", to: "THINKING" });
+    const { handle, port } = setupServer({ toolAuditLog });
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${port}/agent-recent-activity?sessionId=chat:alice`);
+    const body = (await response.json()) as { transitions: Array<{ toState: string; fromState: string }> };
+    expect(response.status).toBe(200);
+    expect(body.transitions).toHaveLength(2);
+    expect(body.transitions[0]?.toState).toBe("THINKING");
+  });
+
+  test("requires the admin token when one is configured", async () => {
+    const toolAuditLog = new ToolAuditLog(":memory:");
+    const { handle, port } = setupServer({ toolAuditLog, adminToken: "correct-token" });
+    activeHandle = handle;
+    const response = await fetch(`http://localhost:${port}/agent-recent-activity?sessionId=chat:alice`);
+    expect(response.status).toBe(401);
+  });
+});
+
+describe("POST /agent/stop also cancels an in-flight agent task via agentTaskCanceller", () => {
+  let activeHandle: { stop: () => void } | undefined;
+  afterEach(() => {
+    activeHandle?.stop();
+    activeHandle = undefined;
+  });
+
+  test("returns stopped: true when only an agent task (no live chat turn) was active", async () => {
+    const liveStateTracker = new JarvisLiveStateTracker();
+    const eventBus = new EventBus();
+    const toolRegistry = new ToolRegistry();
+    const permissionService = new PermissionService();
+    const conversation = new ConversationManager(eventBus);
+    let cancelledFor: string | undefined;
+    const orchestrator = new Orchestrator({
+      brain: new ScriptedBrain([]),
+      conversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      liveState: liveStateTracker,
+      agentTaskCanceller: {
+        cancelActiveTasksForUser: (userId) => {
+          cancelledFor = userId;
+          return ["task-1"];
+        },
+      },
+    });
+    const { handle, port } = setupServer({ liveStateTracker, webChatOrchestrator: orchestrator });
+    activeHandle = handle;
+
+    // No live chat turn at all — the session is still IDLE, so
+    // `liveState.requestStop` alone would report nothing to stop.
+    const response = await fetch(`http://localhost:${port}/agent/stop`, {
+      method: "POST",
+      body: JSON.stringify({ userId: "carol" }),
+    });
+    const body = (await response.json()) as { stopped: boolean };
+    expect(response.status).toBe(200);
+    expect(body.stopped).toBe(true);
+    expect(cancelledFor).toBe("carol");
   });
 });
 
