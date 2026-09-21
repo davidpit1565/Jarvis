@@ -106,4 +106,94 @@ describe("ConversationManager", () => {
     const [message] = conversation.getMessages();
     expect((message as { images?: unknown }).images).toBeUndefined();
   });
+
+  describe("getMessagesForBrain (Context Relevance + Compression)", () => {
+    test("below the compression threshold, matches getMessages() exactly", () => {
+      // maxTurns 20, compressionThreshold 12, verbatim 6 — 5 turns stays under threshold.
+      const conversation = new ConversationManager(undefined, 20, 12, 6);
+      for (let i = 0; i < 5; i++) {
+        conversation.addUserMessage(`small talk ${i}`);
+        conversation.addAssistantMessage(`reply ${i}`);
+      }
+
+      expect(conversation.getMessagesForBrain()).toEqual(conversation.getMessages());
+    });
+
+    test("above the threshold, keeps the last N turns verbatim and drops older small-talk turns with no tool activity", () => {
+      const conversation = new ConversationManager(undefined, 50, /*threshold*/ 4, /*verbatim*/ 2);
+
+      // Turn 1: small talk, no tool activity — should be dropped once past the verbatim window.
+      conversation.addUserMessage("how's the weather");
+      conversation.addAssistantMessage("sunny");
+
+      // Turn 2: used a tool — should survive compression even though it's older.
+      conversation.addUserMessage("remember my timezone is EST");
+      conversation.addAssistantMessage("", [{ id: "call-1", toolName: "save_memory", input: {} }]);
+      conversation.addToolResult("call-1", "save_memory", '{"success":true}');
+      conversation.addAssistantMessage("got it");
+
+      // Turn 3: small talk again, older than the verbatim window — dropped.
+      conversation.addUserMessage("tell me a joke");
+      conversation.addAssistantMessage("why did the chicken...");
+
+      // Turns 4 and 5: within the verbatim window (last 2 turns) — always kept, tool or not.
+      conversation.addUserMessage("what's 2+2");
+      conversation.addAssistantMessage("4");
+      conversation.addUserMessage("thanks");
+      conversation.addAssistantMessage("you're welcome");
+
+      const compressed = conversation.getMessagesForBrain();
+      const full = conversation.getMessages();
+
+      // Compression actually did something.
+      expect(compressed.length).toBeLessThan(full.length);
+
+      // Small-talk turns 1 and 3 are gone.
+      expect(compressed.some((m) => m.role === "user" && m.content === "how's the weather")).toBe(false);
+      expect(compressed.some((m) => m.role === "user" && m.content === "tell me a joke")).toBe(false);
+
+      // The tool-using turn survived despite being older than the verbatim window.
+      expect(compressed.some((m) => m.role === "user" && m.content === "remember my timezone is EST")).toBe(true);
+      expect(compressed.some((m) => m.role === "tool" && m.toolCallId === "call-1")).toBe(true);
+
+      // The last 2 turns (verbatim window) are present in full, in order, at the end.
+      expect(compressed.slice(-4)).toEqual([
+        { role: "user", content: "what's 2+2" },
+        { role: "assistant", content: "4", toolCalls: undefined },
+        { role: "user", content: "thanks" },
+        { role: "assistant", content: "you're welcome", toolCalls: undefined },
+      ]);
+    });
+
+    test("compression never orphans a tool_result from its tool_use — whole turns only", () => {
+      const conversation = new ConversationManager(undefined, 50, 2, 1);
+
+      conversation.addUserMessage("turn 1 chit chat");
+      conversation.addAssistantMessage("ok");
+
+      conversation.addUserMessage("turn 2 uses a tool");
+      conversation.addAssistantMessage("", [{ id: "call-a", toolName: "some_tool", input: {} }]);
+      conversation.addToolResult("call-a", "some_tool", '{"success":true}');
+
+      conversation.addUserMessage("turn 3 chit chat, most recent");
+      conversation.addAssistantMessage("sure");
+
+      const compressed = conversation.getMessagesForBrain();
+      expect(compressed.every((m) => m.role !== "tool" || m.toolCallId === "call-a")).toBe(true);
+    });
+
+    test("defaults to a reasonable threshold/verbatim window when none is specified", () => {
+      const conversation = new ConversationManager();
+      for (let i = 0; i < 30; i++) {
+        conversation.addUserMessage(`small talk ${i}`);
+        conversation.addAssistantMessage(`reply ${i}`);
+      }
+
+      const compressed = conversation.getMessagesForBrain();
+      const full = conversation.getMessages();
+      expect(compressed.length).toBeLessThan(full.length);
+      // The very last turn is always present.
+      expect(compressed.some((m) => m.role === "user" && m.content === "small talk 29")).toBe(true);
+    });
+  });
 });
