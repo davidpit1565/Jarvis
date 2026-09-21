@@ -60,6 +60,7 @@ const ENV_KEYS = [
   "MAX_DAILY_COST_USD",
   "MAX_MONTHLY_COST_USD",
   "ZERO_COST_MODE",
+  "JARVIS_SOFT_BUDGET_CAP_RATIO",
   "AI_CIRCUIT_BREAKER_THRESHOLD",
   "AI_CIRCUIT_BREAKER_COOLDOWN_MS",
   "JARVIS_AI_COST_DB_PATH",
@@ -801,6 +802,22 @@ describe("loadConfig", () => {
     process.env.ZERO_COST_MODE = "1";
     const config = loadConfig();
     expect(config.zeroCostMode).toBe(false);
+  });
+
+  test("defaults softBudgetCapRatio to 0.8", () => {
+    const config = loadConfig();
+    expect(config.softBudgetCapRatio).toBe(0.8);
+  });
+
+  test("reads JARVIS_SOFT_BUDGET_CAP_RATIO when set", () => {
+    process.env.JARVIS_SOFT_BUDGET_CAP_RATIO = "0.5";
+    const config = loadConfig();
+    expect(config.softBudgetCapRatio).toBe(0.5);
+  });
+
+  test("rejects a negative JARVIS_SOFT_BUDGET_CAP_RATIO", () => {
+    process.env.JARVIS_SOFT_BUDGET_CAP_RATIO = "-1";
+    expect(() => loadConfig()).toThrow();
   });
 
   test("defaults aiCircuitBreakerThreshold and aiCircuitBreakerCooldownMs", () => {

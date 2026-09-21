@@ -179,6 +179,19 @@ describe("BrainAgentPlanner.plan — Model Escalation", () => {
     expect(brain.requests[0]?.runId).toBe("task-42");
   });
 
+  test("tags the plan request with taskType 'agent-plan', for CostTracker's per-task-type breakdown", async () => {
+    const toolRegistry = new ToolRegistry();
+    const brain = new EscalatingScriptedBrain(
+      { text: "[]", toolCalls: [], stopReason: "end_turn" },
+      { text: "[]", toolCalls: [], stopReason: "end_turn" }
+    );
+
+    const planner = new BrainAgentPlanner(brain, toolRegistry);
+    await planner.plan({ goal: "goal", userId: "user-1", completedSteps: [], taskId: "task-42" });
+
+    expect(brain.requests[0]?.taskType).toBe("agent-plan");
+  });
+
   test("a plain Brain without chatWithEscalation still works exactly as before (no escalation attempted)", async () => {
     const toolRegistry = new ToolRegistry();
     const brain = new ScriptedBrain([{ text: "not valid json at all", toolCalls: [], stopReason: "end_turn" }]);

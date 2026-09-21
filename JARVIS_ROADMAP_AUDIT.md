@@ -1032,3 +1032,329 @@ untouched and still fully respected (Fast Path's one finalize call and the
 normal path's tool-selection call both go through the exact same injected
 `Brain`, so both are still fully subject to zero-cost/budget/circuit-
 breaker enforcement — neither optimization bypasses `AIRouter` in any way).
+
+## Premium Agent Intelligence/Security/Cost Upgrade — batch 3 (2026-09-21)
+
+Scope: measure prompt-cache and tool-result-cache effectiveness instead of
+assuming it; extend `CostTracker` into a real unified AI Cost Ledger;
+surface real (labeled) cache savings in the Command Center; wire the
+existing staged budget-alert signal into an actual routing action
+(budget-constrained degradation), not just an alert.
+
+### 1. Measure cache effectiveness — NEEDS_UPGRADE (extended, not rebuilt)
+
+Before this pass: `ClaudeBrain.fromAnthropicResponse` already read back
+`cache_creation_input_tokens`/`cache_read_input_tokens` from every
+Anthropic response into `TokenUsage`, and `TokenUsageStore` already
+persisted those fields per call (all-time totals only, used by the weekly
+digest and `CostAlertMonitor`). But `CostTracker` — the store `AIRouter`
+actually routes budget decisions against, and what `/cost-analytics`
+serves — only ever persisted `(provider, estimatedCostUsd, timestamp)`.
+`AIRouter.recordCost` computed a cost from `response.usage` and then threw
+the token/cache numbers away. So the one place able to answer "is prompt
+caching actually saving money" never saw cache data at all — confirming
+the task's suspicion. Separately, `Orchestrator.runLocalTool` already
+emitted a real `tool.cacheHit` EventBus event on a `ToolResultCache` hit,
+but nothing in `src/index.ts` (or anywhere else) listened for it — it was
+purely ephemeral, exactly as the task suspected.
+
+Fixed both:
+
+- `CostTracker.record()` now accepts an optional `CostCallDetails` (model,
+  full `TokenUsage`, runId, latencyMs, toolCallCount, fallback flag,
+  taskType), persisted as new nullable columns on the existing `ai_costs`
+  table (migrated in place via `PRAGMA table_info` + `ALTER TABLE ADD
+  COLUMN` for a pre-existing database — no new table). `AIRouter.timedCall`
+  /`recordCost` now pass all of this through on every call.
+- New `CostTracker.getCacheStats(sinceIso?)`: real measured prompt-cache
+  hit rate (fraction of usage-bearing calls that read ≥1 cached token),
+  cache-read/-creation token totals, and an `estimatedSavingsUsd` field —
+  named and documented as an estimate (priced at Anthropic's standard 90%-
+  off cache-read discount), never presented as a real invoice number.
+- `estimateCostUsd` itself had a real bug fixed as part of this: it
+  computed cost from `inputTokens`/`outputTokens` only, silently ignoring
+  `cacheCreationInputTokens`/`cacheReadInputTokens` — which Anthropic bills
+  *separately* from `input_tokens`, not folded into it. That undercounted
+  real spend on every call with any cache activity. Now applies the
+  documented 1.25x (cache write) / 0.1x (cache read) multipliers on the
+  base input rate.
+- `ToolResultCache` now tracks real `hits`/`misses` counters in-memory
+  (`getStats()`/`resetStats()`) — same in-memory, resets-on-restart
+  lifetime as `AIRouter`'s own rolling provider stats, which is the
+  existing, deliberate house style for this kind of operational telemetry
+  (`ToolResultCache`'s own doc comment already says it's not a durable
+  store). This is the "simple persisted hit/miss counter" the task asked
+  for if the ephemeral-event problem was confirmed, which it was.
+- `BrainResponse.model` is new (populated from Anthropic's
+  `response.model`, and from the OpenAI-compatible `response.model` field
+  for Groq/OpenRouter) so the ledger can actually attribute cost to a
+  model, not just a provider.
+- `BrainRequest.taskType` is new, set to `"chat"` by `Orchestrator` (both
+  the normal loop and the Fast-Path finalize call) and `"agent-plan"`/
+  `"agent-verify"` by `BrainAgentPlanner` — the two real call sites that
+  exist today. Nothing else invents a task-type taxonomy beyond what's
+  actually there to tag.
+
+### 2. Unified AI Cost Ledger — NEEDS_UPGRADE (extended CostTracker, no second system)
+
+Confirmed what the roadmap's ledger spec (provider, model, input/cached/
+output tokens, tool calls, retries, fallbacks, latency, estimated cost,
+actual cost — viewable by today/week/month/provider/model/task-type) was
+missing on top of what batch 1/2 already built
+(`getBreakdownByProvider`/`listRecent`/per-run accumulator): a week
+rollup, model/task-type breakdowns, and a single-run full-dimension
+rollup. Added exactly those, as more `CostTracker` methods over the same
+`ai_costs` table — no parallel cost-tracking table or class:
+
+- `getWeekSpend()` — rolling 7-day window (not a calendar week; there's no
+  single correct "week start" across timezones).
+- `getBreakdownByModel()` / `getBreakdownByTaskType()` — same shape as the
+  existing `getBreakdownByProvider`, with an `"unknown"` bucket for calls
+  recorded before/without that dimension so totals still reconcile.
+- `getRunLedger(runId)` — the actual "every dimension in one place for one
+  run" view: providers, models, task types, calls, input/cache-creation/
+  cache-read/output tokens, tool calls, fallback count, total latency,
+  summed estimated cost, first/last call timestamps. `actualCostUsd` is
+  always `undefined`, deliberately — JARVIS has no billing-API
+  integration, so there is no real "actual cost" to report; the field
+  exists in the shape so a caller can tell "genuinely unavailable" from
+  "silently omitted," never a fabricated number. This is durable (reads
+  the persisted `run_id` column), unlike the existing in-memory
+  `runSpend`/`getRunSpend` accumulator used for the per-run cost ceiling,
+  which stays exactly as it was (still ephemeral, still eviction-bounded
+  — a different, narrower concern).
+- "Retries" specifically: the Anthropic SDK's own `maxRetries` (transparent
+  retry/backoff inside `ClaudeBrain`) isn't introspectable from outside the
+  SDK, so it's not in the ledger — only `AIRouter`'s own, actually-visible
+  fallback/escalation attempts are captured, via the new `fallback: boolean`
+  column. Documented as a real limitation, not silently glossed over.
+- `GET /cost-analytics` (existing admin-token-gated route, same pattern —
+  not a new endpoint) now returns `weekSpendUsd`, `byModel`, `byTaskType`,
+  `promptCache` (from `getCacheStats`), and `toolCache` (from
+  `ToolResultCache.getStats()`, only when `toolResultCacheForAdmin` is
+  configured) alongside the existing fields; `listRecent` rows now include
+  the new ledger columns. A new `?runId=` query param switches the same
+  route to returning `{ runLedger: ... }` instead (404s with a body for an
+  unknown runId) rather than adding a second route, per "extend, don't
+  duplicate."
+
+### 3. Cache savings in the Command Center — MISSING, now built (extends the existing panel)
+
+`ui/command-center/index.html`'s existing Cost Analytics section (not a
+new panel) gained: a "This week" stat tile, By-model and By-task-type
+breakdown tables, richer Recent-calls rows (model, input/cached/output
+tokens, fallback flag), and a new "Cache Effectiveness" section directly
+under it showing prompt-cache hit rate, cache-read tokens, tool-result-
+cache hit rate/hits/misses, and dollar-saved — with the dollar figure's
+label ("Est. $ saved") making clear it's computed from a per-token rate,
+not a measured invoice line, per the hard constraint against presenting
+an estimate as fact. Cards only render when there's real activity to show
+(`promptCache.calls > 0` / `toolCache.hits + misses > 0`) rather than
+always showing a misleading 0%.
+
+### 4. Budget-constrained degradation — MISSING, now built (one well-scoped link)
+
+Confirmed the staged budget-alert system (`CostAlertMonitor`, 75/90/100%
+stages) only ever *alerts* (a console/log callback) — nothing consumed
+that signal to change routing behavior. `AIRouter.applyBudget` only
+reacted at the hard 100% cap (swap to free provider or throw). Built the
+smallest genuinely-useful link in the graceful-degradation ladder: a soft
+budget cap. New `AIRouterOptions.softBudgetCapRatio` (default 0.8,
+`config.softBudgetCapRatio`/`JARVIS_SOFT_BUDGET_CAP_RATIO`, same default):
+once today's or this month's spend crosses this fraction of a *configured*
+`maxDailyCostUsd`/`maxMonthlyCostUsd`, a paid candidate is proactively
+swapped for an untried free provider — before the hard cap is hit, not
+just at it — emitting `ai.providerFallback` with a new `"soft-budget-cap"`
+reason. Below the threshold, or with no free provider to swap to, nothing
+changes (paid candidate used exactly as before) — this is a bias, not a
+new hard boundary, and it never throws. A ratio ≥ 1 disables it entirely.
+
+Deliberately not built (too much for this pass, and not the highest-value/
+lowest-risk piece): context compression, more-aggressive cache use as a
+distinct lever from the soft-cap swap above, reducing retry counts, or
+stopping non-critical background work. Those are real ladder rungs the
+task named as acceptable to skip in favor of the one piece that's
+"genuinely missing and wire it for real."
+
+### Files touched this pass
+
+Changed: `src/core/cost/CostTracker.ts` (ledger columns + migration,
+`getWeekSpend`/`getBreakdownByModel`/`getBreakdownByTaskType`/
+`getCacheStats`/`getRunLedger`, cache-aware `estimateCostUsd`),
+`src/core/cache/ToolResultCache.ts` (`getStats`/`resetStats`),
+`src/core/brain/AIRouter.ts` (`softBudgetCapRatio` + `softCapFreeProvider`,
+full ledger details passed to `CostTracker.record`, `fallback` flag
+threaded through `timedCall`), `src/types/brain.ts` (`BrainRequest.taskType`,
+`BrainResponse.model`), `src/types/events.ts` (`"soft-budget-cap"` reason),
+`src/core/brain/ClaudeBrain.ts`/`GroqBrain.ts`/`OpenRouterBrain.ts` (model
+passthrough), `src/core/orchestrator/Orchestrator.ts` (`taskType: "chat"`
+on both brain.chat call sites), `src/agent/BrainAgentPlanner.ts`
+(`taskType: "agent-plan"`/`"agent-verify"`), `src/config/index.ts`
+(`softBudgetCapRatio`/`JARVIS_SOFT_BUDGET_CAP_RATIO`), `src/index.ts`
+(wires `softBudgetCapRatio` into `AIRouter`, `toolResultCacheForAdmin`
+into the WebSocket server deps), `src/communication/websocket/
+JarvisWebSocketServer.ts` (`toolResultCacheForAdmin` dep, extended
+`/cost-analytics` handler incl. `?runId=`), `ui/command-center/index.html`
+(Cost Analytics panel extended, new Cache Effectiveness section — within
+the explicitly allowed extension point).
+
+New tests: extended `tests/cost/CostTracker.test.ts` (cache-aware pricing,
+`getWeekSpend`, ledger persistence/migration, `getBreakdownByModel`/
+`getBreakdownByTaskType`, `getCacheStats`, `getRunLedger`), extended
+`tests/cache/ToolResultCache.test.ts` (`getStats`/`resetStats`), extended
+`tests/brain/AIRouter.test.ts` (soft-budget-cap behavior, ledger detail
+passthrough, fallback flag), extended `tests/integration/
+commandCenterHttp.test.ts` (new `/cost-analytics` fields, `?runId=`),
+extended `tests/brain/ClaudeBrain.test.ts`/`GroqBrain.test.ts`/
+`OpenRouterBrain.test.ts` (model passthrough), extended `tests/agent/
+BrainAgentPlanner.test.ts` (`taskType`), extended `tests/config/
+config.test.ts` (`softBudgetCapRatio`).
+
+Not touched, per the hard constraints: `ui/hologram/index.html`'s visuals,
+`src/communication/websocket/dashboard.ts`'s visuals, no shell/AppleScript
+tool, no raw prompt/message content added to any cost/ledger record (only
+counts and dollar figures — token counts and boolean/string tags, never
+message bodies). `CostTracker`/`ToolResultCache`/`AIRouter` were extended
+in place; no second/parallel cost or cache system was created.
+
+Result: 1794 tests passing (baseline 1761 + 33 new), 0 failing, 0
+typecheck errors.
+## Premium Agent Intelligence/Security Upgrade — batch 3 (UI/UX: status query, live timeline, i18n, honest error surfacing)
+
+Batch 3 of the multi-batch Premium Agent Intelligence, Security, Cost &
+Live Execution Upgrade, run in parallel with a separate cache/cost-ledger
+backend pass. Scope: wire the already-built `liveStatusFormatter` into a
+real request path, extend the Command Center's existing Live Agent
+Monitor panel into a truthful phase-by-phase timeline, add a small
+EN/HE string table for that new UI, and surface real tool-failure/
+provider-fallback events that previously reached only raw JSON/console
+output.
+
+### 1. "What are you doing?" — wired for real
+
+`Orchestrator.handleUserMessage` now recognizes the literal status-query
+phrases `isLikelyStatusQuery` (in `src/core/state/liveStatusFormatter.ts`,
+already built in an earlier batch) matches, and answers them directly
+from the session's current `JarvisLiveStateTracker` snapshot via
+`formatLiveStatus` — zero brain calls, not even Fast Path's own
+one-call finalize. Checked deliberately *before* this turn's own
+`liveState.reset()`/`transition()` calls (which happen just below in the
+same method), so the read reflects whatever is genuinely in flight for
+this session right now — including a concurrent AgentCore task driving
+the same session — rather than a value this turn's own bookkeeping would
+otherwise have just overwritten. An IDLE session gets `formatLiveStatus`'s
+own honest "I'm not doing anything right now" line, never a fabricated
+status. New event `fastPath.statusQuery` (`userId`, `sessionId`, `state`)
+— a separate event from `fastPath.hit`/`fastPath.miss` (the tool-shape
+classifier's own events) since this shortcut never runs a tool and never
+calls the brain, so neither of those accurately describes it.
+
+Tests (`tests/integration/liveState.integration.test.ts`, new
+`describe("status-query fast path...")` block): a mid-turn THINKING
+snapshot is answered correctly and left completely unperturbed by the
+read; Hebrew phrasing gets a Hebrew reply; an IDLE session gets the honest
+"not doing anything" line; a session with no `liveState` tracker
+configured at all still answers honestly instead of erroring; the
+exchange is recorded into conversation history; and a session reading a
+*different*, concurrently-active live session (simulating an agent task
+mid-flight) reports that real in-flight state, not a stale/default one.
+
+### 2. Truthful live timeline UI — built in the Command Center
+
+`ui/command-center/index.html`'s existing Live Agent Monitor panel gained
+a "Timeline" button per session row (alongside the existing History
+button, which is untouched) opening a new "Live execution timeline"
+panel. Two real data sources feed it, never a simulated one:
+
+- **Seed**: the same persisted data the existing History button already
+  reads (`GET /agent-recent-activity`, i.e. `JarvisLiveStateTracker`'s
+  real transition history) — every entry but the last renders as done
+  (✓), the last as current (●). No new backend storage was added for
+  this: the seed is exactly what was already there.
+- **Live extension**: a lazily-opened `/observer` WebSocket connection
+  (same origin/token pattern the hologram UI's own `/observer` client
+  already uses) that appends real `agent.task.transition` (its own safe
+  `phase` field), `tool.executed` (its `resultSummary`, or a sanitized
+  first-line-only, length-capped `result.error` on failure — never a raw
+  stack trace), and `jarvis.liveState.changed` events for the open
+  session's `userId` as they actually happen. `ai.providerFallback` was
+  added to `JarvisWebSocketServer`'s `OBSERVABLE_EVENTS` list (it wasn't
+  forwarded to observers before this pass) so a real fallback shows up
+  live as "Switched providers: X → Y (previous one unavailable)" in a
+  small separate "Provider fallbacks (live)" list — only ever rendered
+  when a real `ai.providerFallback` event fires, never speculatively.
+
+No backend persistence exists for `agent.task.transition`/`tool.executed`
+history today (only live-state transitions and the raw tool-audit log are
+queryable via HTTP), so the live-extension half of the timeline is real
+but session-scoped to however long this browser tab has had the panel
+open — documented plainly in the panel's own description text rather than
+silently pretending it's a full persisted history. Extending that to a
+real persisted, replayable event store was judged out of scope for a
+UI-focused batch and is a natural follow-up for whichever batch owns the
+audit/cache backend work.
+
+### 3. Hebrew + English UI strings — minimal, scoped to the new timeline UI
+
+A small `STRINGS` table (`en`/`he`) was added to
+`ui/command-center/index.html`'s script, covering only the new Timeline
+button label, timeline panel title/empty state, live-connection status
+line, and the provider-fallback/tool-failure/tool-success templates —
+selected per session via the `language` field `GET /agent-status` rows
+and the observer events both already carry, defaulting to English when
+absent (the same default `liveStatusFormatter` itself uses). This is
+deliberately not a full-app i18n pass: every other existing Command
+Center panel (Overview, Provider Monitor, Cost Analytics, Memory
+Explorer, Automation Explorer, Audit Explorer, and the History table
+itself) is untouched and still English-only, per the task's own explicit
+scoping instruction.
+
+### 4. Error/recovery UX — real events, not fabricated ones
+
+Before this pass, a tool failure or an `ai.providerFallback` reached the
+Command Center only as an opaque row in the Audit Explorer or not at all
+(`ai.providerFallback` wasn't forwarded to `/observer` clients at all).
+Now, within the new live timeline: a real `tool.executed` failure renders
+as "⚠ <ToolName> failed" with a sanitized, single-line, length-capped
+detail from the real `result.error` (never a raw stack trace, per the
+hard constraint); a real `ai.providerFallback` event renders as "Switched
+providers: X → Y (previous one unavailable)" in its own small list —
+exactly the wording the task specified, shown only when a real event
+fired. No generic "trying alternate approach" placeholder was added
+anywhere. This is additive UI over existing events only — no new backend
+failure-detection system was built.
+
+### Hologram-visual constraint
+
+Nothing in this batch required touching `ui/hologram/index.html`. Every
+deliverable that needed a visual home (the timeline, the fallback list,
+the i18n strings) went into `ui/command-center/index.html`'s existing
+Live Agent Monitor panel per option (b) in this batch's own instructions
+— the hologram's separate `jarvis.liveState.changed`-driven extension
+point (`#jx-live-badge`, added in an earlier batch, distinct from
+`#jarvis-state`) was confirmed present but deliberately left untouched,
+since nothing here called for extending it. No scoping-down under option
+(c) was needed.
+
+### Files touched this pass
+
+Changed: `src/core/orchestrator/Orchestrator.ts` (status-query fast path),
+`src/core/state/liveStatusFormatter.ts` (doc comments updated to reflect
+real wiring — no behavior change), `src/types/events.ts`
+(`fastPath.statusQuery`), `src/communication/websocket/
+JarvisWebSocketServer.ts` (`ai.providerFallback` added to
+`OBSERVABLE_EVENTS`), `ui/command-center/index.html` (Timeline
+button/panel, live `/observer` client, EN/HE string table, provider-
+fallback list). Tests: `tests/integration/liveState.integration.test.ts`
+(new `describe` block, 6 tests). `ui/command-center/index.html`'s own
+changes have no automated tests (a static HTML/JS page with no build/test
+harness in this repo) — its JS was verified to at least parse correctly
+(`new Function()` over the extracted `<script>` body) and was manually
+traced against the real event/endpoint shapes it consumes, but this is
+explicitly not the same as an automated test and is called out as such
+rather than silently skipped.
+
+Baseline was 1761 passing / 0 failing / 0 typecheck errors; this batch
+added 6 tests, bringing the suite to 1767 passing / 0 failing / 0
+typecheck errors (`bun run typecheck` and `bun test` both re-run clean
+after this pass, including every test from batches 1 and 2).

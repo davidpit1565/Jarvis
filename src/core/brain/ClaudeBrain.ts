@@ -320,5 +320,6 @@ export function fromAnthropicResponse(response: Anthropic.Message): BrainRespons
       cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? 0,
       cacheReadInputTokens: response.usage.cache_read_input_tokens ?? 0,
     },
+    model: response.model,
   };
 }

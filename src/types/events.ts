@@ -56,6 +56,20 @@ export interface JarvisEventMap {
    * `fastPath.miss`.
    */
   "fastPath.miss": { userId: string };
+  /**
+   * Fast Path: the message deterministically matched one of a small set of
+   * known "what are you doing?" status-query phrases (English/Hebrew — see
+   * `isLikelyStatusQuery` in `src/core/state/liveStatusFormatter.ts`) and
+   * was answered directly from the current `JarvisLiveState` snapshot, with
+   * no brain call at all — not even Fast Path's own one-call finalize.
+   * `state` is the live state actually read to produce the reply, for
+   * observability. A separate event from `fastPath.hit`/`fastPath.miss`
+   * (which are about the tool-shape classifier) since this shortcut never
+   * runs a tool and never calls the brain, so neither of those two
+   * accurately describes it — a turn that takes this path emits this event
+   * instead of either of those.
+   */
+  "fastPath.statusQuery": { userId: string; sessionId: string; state: string };
   "permission.checked": { toolId: string; result: PermissionCheckResult };
   "device.registered": { device: Device };
   "device.connected": { deviceId: string };
@@ -68,13 +82,17 @@ export interface JarvisEventMap {
    * daily/monthly cost cap blocked a paid provider), "run-budget-exceeded"
    * (this run's own `maxCostPerRunUsd` ceiling — Denial-of-wallet
    * protection — blocked a paid provider), "zero-cost-mode"
-   * (ZERO_COST_MODE forbade a paid provider outright), or "circuit-open"
-   * (the primary's circuit breaker is open after repeated failures).
+   * (ZERO_COST_MODE forbade a paid provider outright), "circuit-open"
+   * (the primary's circuit breaker is open after repeated failures), or
+   * "soft-budget-cap" (budget-constrained degradation — spend is close to,
+   * but not yet at, a configured daily/monthly cap, so a paid candidate
+   * was proactively swapped for a free one; see
+   * `AIRouterOptions.softBudgetCapRatio`).
    */
   "ai.providerFallback": {
     from: string;
     to: string;
-    reason: "call-failed" | "budget-exceeded" | "run-budget-exceeded" | "zero-cost-mode" | "circuit-open";
+    reason: "call-failed" | "budget-exceeded" | "run-budget-exceeded" | "zero-cost-mode" | "circuit-open" | "soft-budget-cap";
   };
   /**
    * Model Escalation: `AIRouter.chatWithEscalation` retried a call

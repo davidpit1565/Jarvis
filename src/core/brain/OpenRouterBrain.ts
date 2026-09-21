@@ -190,6 +190,8 @@ interface OpenAIChatCompletionResponse {
     finish_reason: string;
   }>;
   usage?: { prompt_tokens: number; completion_tokens: number };
+  /** The model that actually served this call, per the OpenAI-compatible response shape — echoed back for CostTracker's per-model ledger. */
+  model?: string;
 }
 
 /** Exported for unit testing without a network call — pure response-shaping logic. */
@@ -225,5 +227,6 @@ export function fromOpenAIResponse(response: OpenAIChatCompletionResponse): Brai
           cacheReadInputTokens: 0,
         }
       : undefined,
+    model: response.model,
   };
 }

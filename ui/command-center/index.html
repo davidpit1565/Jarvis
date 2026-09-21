@@ -76,6 +76,28 @@
   .nav-links { font-size: 12px; color: var(--dim); margin-bottom: 16px; }
   .nav-links a { color: var(--accent); text-decoration: none; margin-right: 12px; }
   .nav-links a:hover { text-decoration: underline; }
+
+  /* Live execution timeline (Live Agent Monitor extension) */
+  .timeline { list-style: none; margin: 0; padding: 0; }
+  .timeline li {
+    display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; font-size: 12.5px;
+    border-bottom: 1px solid #1a1e26;
+  }
+  .timeline li:last-child { border-bottom: none; }
+  .timeline .step-icon { flex: 0 0 16px; text-align: center; font-size: 12px; line-height: 18px; }
+  .timeline li.done .step-icon { color: var(--ok); }
+  .timeline li.current .step-icon { color: var(--accent); }
+  .timeline li.pending .step-icon { color: var(--dim); }
+  .timeline li.failed .step-icon { color: var(--danger); }
+  .timeline li.fallback .step-icon { color: var(--warn); }
+  .timeline .step-label { flex: 1; }
+  .timeline li.done .step-label { color: var(--text); }
+  .timeline li.current .step-label { color: var(--accent); font-weight: 600; }
+  .timeline li.pending .step-label { color: var(--dim); }
+  .timeline li.failed .step-label { color: var(--danger); }
+  .timeline .step-detail { color: var(--dim); font-size: 11.5px; display: block; }
+  .timeline-wrap[dir="rtl"] { text-align: right; }
+  .timeline-empty { color: var(--dim); font-size: 12.5px; padding: 4px 0; }
 </style>
 </head>
 <body>
@@ -126,6 +148,22 @@
       </table>
       <div id="agentHistoryEmpty" class="empty">No recorded transitions for this session yet.</div>
     </div>
+    <div id="agentTimelinePanel" style="display:none;margin-top:12px;" class="timeline-wrap">
+      <h3 style="font-size:13px;margin:8px 0 4px;color:var(--dim);" id="timelineTitle">Live execution timeline</h3>
+      <div class="desc" id="timelineDesc">
+        Real phase-by-phase progress for <code id="timelineSession"></code>, seeded from its persisted state history
+        (<code>GET /agent-recent-activity</code>) and extended live as real <code>agent.task.transition</code> /
+        <code>tool.executed</code> / <code>ai.providerFallback</code> events arrive over <code>/observer</code>. Every
+        step shown here really happened — nothing on this list is simulated or guessed.
+      </div>
+      <ul class="timeline" id="timelineList"></ul>
+      <div id="timelineEmpty" class="timeline-empty">No activity recorded for this session yet.</div>
+      <div id="timelineLiveStatus" style="font-size:11px;color:var(--dim);margin-top:6px;"></div>
+    </div>
+    <div id="providerFallbackPanel" style="display:none;margin-top:12px;">
+      <h3 style="font-size:13px;margin:8px 0 4px;color:var(--dim);" id="fallbackTitle">Provider fallbacks (live)</h3>
+      <ul class="timeline" id="fallbackList"></ul>
+    </div>
   </section>
 
   <section id="provider-section">
@@ -141,20 +179,42 @@
 
   <section id="cost-section">
     <h2>Cost Analytics</h2>
-    <div class="desc">Spend from <code>GET /cost-analytics</code> (backed by <code>CostTracker</code>).</div>
+    <div class="desc">Spend from <code>GET /cost-analytics</code> (backed by <code>CostTracker</code>) — the unified AI Cost Ledger.</div>
     <div class="grid" id="costGrid" style="margin-bottom:12px;"></div>
     <h3 style="font-size:13px;margin:8px 0 4px;color:var(--dim);">By provider</h3>
     <table>
       <thead><tr><th>Provider</th><th>Total spend</th><th>Calls</th></tr></thead>
       <tbody id="costByProviderBody"></tbody>
     </table>
+    <h3 style="font-size:13px;margin:14px 0 4px;color:var(--dim);">By model</h3>
+    <table>
+      <thead><tr><th>Model</th><th>Total spend</th><th>Calls</th></tr></thead>
+      <tbody id="costByModelBody"></tbody>
+    </table>
+    <h3 style="font-size:13px;margin:14px 0 4px;color:var(--dim);">By task type</h3>
+    <table>
+      <thead><tr><th>Task type</th><th>Total spend</th><th>Calls</th></tr></thead>
+      <tbody id="costByTaskTypeBody"></tbody>
+    </table>
     <h3 style="font-size:13px;margin:14px 0 4px;color:var(--dim);">Recent calls</h3>
     <table>
-      <thead><tr><th>Time</th><th>Provider</th><th>Cost (USD)</th></tr></thead>
+      <thead><tr><th>Time</th><th>Provider</th><th>Model</th><th>Cost (USD)</th><th>Tokens (in/cached/out)</th><th>Fallback</th></tr></thead>
       <tbody id="costRecentBody"></tbody>
     </table>
     <div id="costEmpty" class="empty">No cost data recorded yet.</div>
     <div id="costError" class="error-banner"></div>
+  </section>
+
+  <section id="cache-section">
+    <h2>Cache Effectiveness</h2>
+    <div class="desc">
+      Measured (not assumed) cache performance from <code>GET /cost-analytics</code> — Anthropic prompt-cache
+      hit rate (<code>CostTracker.getCacheStats()</code>) and the READ-tool result cache's hit rate
+      (<code>ToolResultCache.getStats()</code>). Dollar figures marked "estimated" are computed from a
+      per-token cost rate, not a real invoice line.
+    </div>
+    <div class="grid" id="cacheGrid"></div>
+    <div id="cacheEmpty" class="empty">No cache activity recorded yet.</div>
   </section>
 
   <section id="memory-section">
@@ -247,6 +307,52 @@
     return "<span class='stat'><span class='label'>" + esc(text) + "</span></span>";
   }
 
+  // ---- Minimal EN/HE string table for the Live Agent Monitor's timeline UI
+  // ---- only (scoped per the task — not a full-app i18n pass). Selected by
+  // the `language` field JarvisLiveState already threads through
+  // GET /agent-status rows and jarvis.liveState.changed/agent-recent-activity
+  // entries; defaults to English whenever it's absent, same default the
+  // backend's own liveStatusFormatter uses.
+  const STRINGS = {
+    en: {
+      timelineButton: "Timeline",
+      timelineTitle: "Live execution timeline",
+      timelineEmpty: "No activity recorded for this session yet.",
+      liveConnected: "Connected — watching for live activity on this session.",
+      liveConnecting: "Connecting to live event stream…",
+      liveDisconnected: "Live stream disconnected — showing history only.",
+      liveUnavailable: "Live updates unavailable in this browser session.",
+      fallbackTitle: "Provider fallbacks (live)",
+      fallbackNone: "No provider fallbacks observed since this page loaded.",
+      fallbackMsg: (from, to) => "Switched providers: " + from + " → " + to + " (previous one unavailable)",
+      toolFailed: (name) => "⚠ " + name + " failed",
+      toolOk: (name, summary) => "✓ " + name + (summary ? " (" + summary + ")" : ""),
+      current: "current",
+    },
+    he: {
+      timelineButton: "ציר זמן",
+      timelineTitle: "ציר זמן חי של הביצוע",
+      timelineEmpty: "לא נרשמה פעילות עבור הסשן הזה עדיין.",
+      liveConnected: "מחובר — עוקב אחרי פעילות חיה בסשן הזה.",
+      liveConnecting: "מתחבר לזרם אירועים חי…",
+      liveDisconnected: "זרם חי מנותק — מוצגת רק ההיסטוריה.",
+      liveUnavailable: "עדכונים חיים אינם זמינים בדפדפן הזה.",
+      fallbackTitle: "מעברי ספק (חי)",
+      fallbackNone: "לא נצפו מעברי ספק מאז טעינת העמוד.",
+      fallbackMsg: (from, to) => "הוחלף ספק: " + from + " ← " + to + " (הספק הקודם לא היה זמין)",
+      toolFailed: (name) => "⚠ " + name + " נכשל",
+      toolOk: (name, summary) => "✓ " + name + (summary ? " (" + summary + ")" : ""),
+      current: "נוכחי",
+    },
+  };
+  function strings(lang) {
+    return STRINGS[lang === "he" ? "he" : "en"];
+  }
+  function t(key, lang) {
+    const v = strings(lang)[key];
+    return typeof v === "function" ? v : v;
+  }
+
   // ---- Overview ----
   async function loadOverview() {
     const errEl = $("overviewError");
@@ -298,6 +404,7 @@
           "<td class='row-actions'>" +
           (active ? "<button data-stop='" + esc(s.userId) + "' class='danger'>Stop</button>" : "") +
           "<button data-history='" + esc(s.sessionId) + "'>History</button>" +
+          "<button data-timeline='" + esc(s.sessionId) + "' data-user='" + esc(s.userId) + "' data-lang='" + esc(s.language || "en") + "'>" + t("timelineButton", s.language) + "</button>" +
           "</td>";
         body.appendChild(tr);
       }
@@ -313,6 +420,13 @@
       });
       body.querySelectorAll("[data-history]").forEach((btn) => {
         btn.addEventListener("click", () => loadAgentHistory(btn.getAttribute("data-history")));
+      });
+      body.querySelectorAll("[data-timeline]").forEach((btn) => {
+        btn.addEventListener("click", () => openTimeline(
+          btn.getAttribute("data-timeline"),
+          btn.getAttribute("data-user"),
+          btn.getAttribute("data-lang") || "en"
+        ));
       });
     } catch (e) {
       errEl.textContent = "Could not load agent status: " + e.message;
@@ -344,6 +458,167 @@
     } catch (e) {
       errEl.textContent = "Could not load session history: " + e.message;
     }
+  }
+
+  // ---- Live execution timeline (extends the Live Agent Monitor panel) ----
+  // Two real data sources, both truthful, never simulated:
+  //  1. Seed: the session's persisted live-state transition history, the
+  //     exact same data the History button above already renders
+  //     (GET /agent-recent-activity) — each row IS a real phase change.
+  //  2. Live extension: real `agent.task.transition` (with its safe
+  //     `phase`), `tool.executed` (with its honest `resultSummary`/error),
+  //     and `ai.providerFallback` events, streamed from the same /observer
+  //     WebSocket the hologram UI already uses, filtered to the session
+  //     currently open here. A step is only ever added to this list when a
+  //     real event says it happened.
+  let observerSocket = null;
+  let observerState = "idle"; // idle | connecting | open | closed
+  let openTimelineUserId = null;
+  let openTimelineLang = "en";
+  const fallbackEvents = []; // { from, to, timestamp } — most recent first, capped
+
+  function timelineStepHtml(cls, icon, label, detail) {
+    return "<li class='" + cls + "'><span class='step-icon'>" + icon + "</span><span class='step-label'>" +
+      esc(label) + (detail ? "<span class='step-detail'>" + esc(detail) + "</span>" : "") + "</span></li>";
+  }
+
+  function renderTimelineSeed(transitions, lang) {
+    // Most-recent-first from the API; render chronologically (oldest
+    // first), marking every entry but the last as "done" and the last as
+    // "current" — the real, already-reached state right now.
+    const chronological = transitions.slice().reverse();
+    const list = $("timelineList");
+    list.innerHTML = "";
+    $("timelineEmpty").style.display = chronological.length ? "none" : "block";
+    chronological.forEach((tr, i) => {
+      const isLast = i === chronological.length - 1;
+      const cls = isLast ? "current" : "done";
+      const icon = isLast ? "●" : "✓";
+      const label = tr.toState + (isLast ? " (" + strings(lang).current + ")" : "");
+      list.insertAdjacentHTML("beforeend", timelineStepHtml(cls, icon, label, tr.reason || null));
+    });
+  }
+
+  function appendTimelineStep(cls, icon, label, detail) {
+    const list = $("timelineList");
+    // A fresh live event means the previously-"current" step is now done —
+    // real progression, not a guess: something else genuinely happened next.
+    const currentLi = list.querySelector("li.current");
+    if (currentLi) {
+      currentLi.className = "done";
+      currentLi.querySelector(".step-icon").textContent = "✓";
+    }
+    $("timelineEmpty").style.display = "none";
+    list.insertAdjacentHTML("beforeend", timelineStepHtml(cls, icon, label, detail));
+  }
+
+  function connectObserver() {
+    if (observerSocket && (observerState === "open" || observerState === "connecting")) return;
+    let ws;
+    try {
+      const token = getToken();
+      const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+      const url = scheme + "//" + location.host + "/observer" + (token ? "?token=" + encodeURIComponent(token) : "");
+      ws = new WebSocket(url);
+    } catch (e) {
+      observerState = "closed";
+      updateLiveStatus();
+      return;
+    }
+    observerSocket = ws;
+    observerState = "connecting";
+    updateLiveStatus();
+    ws.addEventListener("open", () => { observerState = "open"; updateLiveStatus(); });
+    ws.addEventListener("close", () => { observerState = "closed"; updateLiveStatus(); });
+    ws.addEventListener("error", () => { observerState = "closed"; updateLiveStatus(); });
+    ws.addEventListener("message", (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      handleObserverEvent(msg);
+    });
+  }
+
+  function updateLiveStatus() {
+    const el = $("timelineLiveStatus");
+    if (!el) return;
+    const lang = openTimelineLang;
+    if (observerState === "open") el.textContent = t("liveConnected", lang);
+    else if (observerState === "connecting") el.textContent = t("liveConnecting", lang);
+    else el.textContent = t("liveDisconnected", lang);
+  }
+
+  function handleObserverEvent(msg) {
+    if (!msg || !msg.type) return;
+    if (msg.type === "ai.providerFallback") {
+      const payload = msg.payload || {};
+      fallbackEvents.unshift({ from: payload.from, to: payload.to, timestamp: msg.timestamp || new Date().toISOString() });
+      if (fallbackEvents.length > 5) fallbackEvents.length = 5;
+      renderFallbackPanel();
+      return;
+    }
+    if (!openTimelineUserId) return;
+    if (msg.type === "tool.executed") {
+      const payload = msg.payload || {};
+      if (payload.userId !== openTimelineUserId) return;
+      const lang = openTimelineLang;
+      if (payload.result && payload.result.success === false) {
+        // Sanitized: first line only, hard length cap — never a raw
+        // multi-line stack trace, per the task's own hard constraint.
+        const raw = String(payload.result.error || "unknown error");
+        const firstLine = raw.split("\n")[0].slice(0, 160);
+        appendTimelineStep("failed", "⚠", strings(lang).toolFailed(payload.toolName), firstLine);
+      } else {
+        appendTimelineStep("done", "✓", strings(lang).toolOk(payload.toolName, payload.resultSummary));
+      }
+      return;
+    }
+    if (msg.type === "agent.task.transition") {
+      const payload = msg.payload || {};
+      if (payload.userId !== openTimelineUserId) return;
+      appendTimelineStep("current", "●", payload.phase || payload.to, payload.reason || null);
+      return;
+    }
+    if (msg.type === "jarvis.liveState.changed") {
+      const payload = msg.payload || {};
+      if (payload.userId !== openTimelineUserId) return;
+      appendTimelineStep("current", "●", payload.to, payload.reason || null);
+    }
+  }
+
+  function renderFallbackPanel() {
+    const panel = $("providerFallbackPanel");
+    const list = $("fallbackList");
+    const lang = openTimelineLang;
+    $("fallbackTitle").textContent = t("fallbackTitle", lang);
+    if (!fallbackEvents.length) {
+      panel.style.display = "none";
+      return;
+    }
+    panel.style.display = "block";
+    list.innerHTML = fallbackEvents.map((f) =>
+      timelineStepHtml("fallback", "⇄", strings(lang).fallbackMsg(f.from, f.to), new Date(f.timestamp).toLocaleTimeString())
+    ).join("");
+  }
+
+  async function openTimeline(sessionId, userId, lang) {
+    const errEl = $("agentStatusError");
+    errEl.textContent = "";
+    openTimelineUserId = userId;
+    openTimelineLang = lang || "en";
+    $("timelineTitle").textContent = t("timelineTitle", openTimelineLang);
+    $("timelineDesc").setAttribute("dir", openTimelineLang === "he" ? "rtl" : "ltr");
+    $("agentTimelinePanel").setAttribute("dir", openTimelineLang === "he" ? "rtl" : "ltr");
+    $("timelineSession").textContent = sessionId;
+    $("agentTimelinePanel").style.display = "block";
+    try {
+      const data = await api("/agent-recent-activity?sessionId=" + encodeURIComponent(sessionId) + "&limit=30");
+      renderTimelineSeed(data.transitions || [], openTimelineLang);
+    } catch (e) {
+      errEl.textContent = "Could not load timeline seed: " + e.message;
+    }
+    connectObserver();
+    updateLiveStatus();
+    renderFallbackPanel();
   }
 
   // ---- Provider Monitor ----
@@ -385,27 +660,74 @@
       const grid = $("costGrid");
       grid.innerHTML =
         "<div class='stat'><div class='label'>Today</div><div class='value'>" + fmtUsd(data.todaySpendUsd) + "</div></div>" +
+        "<div class='stat'><div class='label'>This week</div><div class='value'>" + fmtUsd(data.weekSpendUsd) + "</div></div>" +
         "<div class='stat'><div class='label'>This month</div><div class='value'>" + fmtUsd(data.monthSpendUsd) + "</div></div>";
-      const byProvider = data.byProvider || [];
-      const byProviderBody = $("costByProviderBody");
-      byProviderBody.innerHTML = "";
-      for (const p of byProvider) {
-        const tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + esc(p.provider) + "</td><td>" + fmtUsd(p.totalUsd) + "</td><td>" + esc(p.calls) + "</td>";
-        byProviderBody.appendChild(tr);
-      }
+
+      fillBreakdownTable("costByProviderBody", data.byProvider, "provider");
+      fillBreakdownTable("costByModelBody", data.byModel, "model");
+      fillBreakdownTable("costByTaskTypeBody", data.byTaskType, "taskType");
+
       const recent = data.recent || [];
       const recentBody = $("costRecentBody");
       recentBody.innerHTML = "";
       $("costEmpty").style.display = recent.length ? "none" : "block";
       for (const r of recent) {
+        const tokens = r.inputTokens != null
+          ? esc(r.inputTokens) + " / " + esc(r.cacheReadInputTokens || 0) + " / " + esc(r.outputTokens || 0)
+          : "—";
         const tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + esc(new Date(r.timestamp).toLocaleString()) + "</td><td>" + esc(r.provider) + "</td><td>" + fmtUsd(r.estimatedCostUsd) + "</td>";
+        tr.innerHTML =
+          "<td>" + esc(new Date(r.timestamp).toLocaleString()) + "</td>" +
+          "<td>" + esc(r.provider) + "</td>" +
+          "<td>" + esc(r.model || "—") + "</td>" +
+          "<td>" + fmtUsd(r.estimatedCostUsd) + "</td>" +
+          "<td>" + tokens + "</td>" +
+          "<td>" + (r.fallback ? "yes" : "—") + "</td>";
         recentBody.appendChild(tr);
       }
+
+      renderCacheStats(data.promptCache, data.toolCache);
     } catch (e) {
       errEl.textContent = "Could not load cost analytics: " + e.message;
     }
+  }
+
+  function fillBreakdownTable(bodyId, rows, keyField) {
+    const body = $(bodyId);
+    body.innerHTML = "";
+    for (const row of rows || []) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + esc(row[keyField]) + "</td><td>" + fmtUsd(row.totalUsd) + "</td><td>" + esc(row.calls) + "</td>";
+      body.appendChild(tr);
+    }
+  }
+
+  // ---- Cache Effectiveness ----
+  function renderCacheStats(promptCache, toolCache) {
+    const grid = $("cacheGrid");
+    const cards = [];
+
+    if (promptCache && promptCache.calls > 0) {
+      cards.push(
+        "<div class='stat'><div class='label'>Prompt cache hit rate</div><div class='value'>" +
+          Math.round(promptCache.cacheHitRate * 100) + "%</div></div>",
+        "<div class='stat'><div class='label'>Cache-read tokens</div><div class='value'>" +
+          esc(promptCache.cacheReadTokens) + "</div></div>",
+        "<div class='stat'><div class='label'>Est. $ saved (prompt cache)</div><div class='value'>" +
+          fmtUsd(promptCache.estimatedSavingsUsd) + "</div></div>"
+      );
+    }
+    if (toolCache && (toolCache.hits + toolCache.misses) > 0) {
+      cards.push(
+        "<div class='stat'><div class='label'>Tool-result cache hit rate</div><div class='value'>" +
+          Math.round(toolCache.hitRate * 100) + "%</div></div>",
+        "<div class='stat'><div class='label'>Tool cache hits / misses</div><div class='value'>" +
+          esc(toolCache.hits) + " / " + esc(toolCache.misses) + "</div></div>"
+      );
+    }
+
+    grid.innerHTML = cards.join("");
+    $("cacheEmpty").style.display = cards.length ? "none" : "block";
   }
 
   // ---- Memory Explorer ----

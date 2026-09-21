@@ -79,6 +79,17 @@ export interface JarvisConfig {
    * outright. Defaults to false.
    */
   zeroCostMode: boolean;
+  /**
+   * Budget-constrained degradation: once today's or this month's spend
+   * reaches this fraction of `maxDailyCostUsd`/`maxMonthlyCostUsd` (e.g.
+   * 0.8 = 80%), AIRouter proactively biases toward a free provider even
+   * though the hard cap hasn't been hit yet — a soft nudge, not a new hard
+   * boundary (see `AIRouterOptions.softBudgetCapRatio`). Defaults to 0.8;
+   * a value >= 1 disables the feature (routing only reacts at the hard
+   * cap, today's original behavior). Ignored entirely when neither cost
+   * cap is configured.
+   */
+  softBudgetCapRatio: number;
   /** Consecutive call failures before AIRouter's per-provider circuit breaker opens (stops routing to it) for `aiCircuitBreakerCooldownMs`. Defaults to 3. */
   aiCircuitBreakerThreshold: number;
   /** How long (ms) an open provider circuit stays open before a single half-open trial call is let through. Defaults to 60000 (60s). */
@@ -458,6 +469,12 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("Invalid JARVIS_MAX_COST_PER_RUN_USD: must be a positive number");
   }
 
+  const softBudgetCapRatioRaw = process.env.JARVIS_SOFT_BUDGET_CAP_RATIO?.trim();
+  const softBudgetCapRatio = softBudgetCapRatioRaw !== undefined && softBudgetCapRatioRaw !== "" ? Number(softBudgetCapRatioRaw) : 0.8;
+  if (softBudgetCapRatioRaw && (Number.isNaN(softBudgetCapRatio) || softBudgetCapRatio < 0)) {
+    throw new ConfigError("Invalid JARVIS_SOFT_BUDGET_CAP_RATIO: must be a non-negative number (>= 1 disables the feature)");
+  }
+
   const aiCircuitBreakerThresholdRaw = process.env.AI_CIRCUIT_BREAKER_THRESHOLD?.trim();
   const aiCircuitBreakerThreshold = aiCircuitBreakerThresholdRaw ? Number(aiCircuitBreakerThresholdRaw) : 3;
   if (
@@ -766,6 +783,7 @@ export function loadConfig(): JarvisConfig {
     maxMonthlyCostUsd,
     maxCostPerRunUsd,
     zeroCostMode,
+    softBudgetCapRatio,
     aiCircuitBreakerThreshold,
     aiCircuitBreakerCooldownMs,
     aiCostDbPath,

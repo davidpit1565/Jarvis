@@ -54,6 +54,42 @@ describe("ToolResultCache", () => {
     expect(cache.size).toBe(0);
   });
 
+  describe("getStats (aggregate hit/miss counters)", () => {
+    test("starts at 0/0 with a 0 hit rate", () => {
+      const cache = new ToolResultCache(60_000);
+      expect(cache.getStats()).toEqual({ hits: 0, misses: 0, hitRate: 0 });
+    });
+
+    test("counts a miss then a hit correctly, with an accurate hit rate", () => {
+      const cache = new ToolResultCache(60_000);
+      cache.get("GET_WEATHER", { city: "Tel Aviv" }); // miss
+      cache.set("GET_WEATHER", { city: "Tel Aviv" }, { success: true, data: {} });
+      cache.get("GET_WEATHER", { city: "Tel Aviv" }); // hit
+      cache.get("GET_WEATHER", { city: "Tel Aviv" }); // hit
+
+      const stats = cache.getStats();
+      expect(stats.hits).toBe(2);
+      expect(stats.misses).toBe(1);
+      expect(stats.hitRate).toBeCloseTo(2 / 3, 5);
+    });
+
+    test("an expired entry counts as a miss, not a hit", async () => {
+      const cache = new ToolResultCache(10);
+      cache.set("GET_WEATHER", { city: "Tel Aviv" }, { success: true, data: {} });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      cache.get("GET_WEATHER", { city: "Tel Aviv" });
+      expect(cache.getStats()).toEqual({ hits: 0, misses: 1, hitRate: 0 });
+    });
+
+    test("resetStats clears the counters back to 0", () => {
+      const cache = new ToolResultCache(60_000);
+      cache.set("A", {}, { success: true, data: 1 });
+      cache.get("A", {});
+      cache.resetStats();
+      expect(cache.getStats()).toEqual({ hits: 0, misses: 0, hitRate: 0 });
+    });
+  });
+
   test("sweep removes only expired entries", async () => {
     const cache = new ToolResultCache(10);
     cache.set("A", {}, { success: true, data: 1 });

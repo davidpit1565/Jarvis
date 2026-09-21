@@ -24,6 +24,19 @@ interface CacheEntry {
  */
 export class ToolResultCache {
   private readonly store = new Map<string, CacheEntry>();
+  /**
+   * Aggregate hit/miss counters (JARVIS_ROADMAP_AUDIT.md batch 3 —
+   * "measure, don't assume" applied to the tool-result cache too). Before
+   * this, the only signal a cache hit produced was the `tool.cacheHit`
+   * EventBus event Orchestrator emits — real, but ephemeral: nothing
+   * persisted it, so there was no way to answer "what's this cache's hit
+   * rate" after the fact. In-memory only, same lifetime as `store` itself
+   * (resets on restart) — this is operational telemetry for a status
+   * endpoint, not a durable record, same reasoning as `AIRouter`'s own
+   * rolling provider stats.
+   */
+  private hits = 0;
+  private misses = 0;
 
   /**
    * @param ttlMs How long an entry stays valid after being set. 0 (or
@@ -42,12 +55,25 @@ export class ToolResultCache {
     if (this.ttlMs <= 0) return undefined;
     const key = ToolResultCache.keyFor(toolName, input);
     const entry = this.store.get(key);
-    if (!entry) return undefined;
-    if (Date.now() >= entry.expiresAt) {
-      this.store.delete(key);
+    if (!entry || Date.now() >= entry.expiresAt) {
+      if (entry) this.store.delete(key);
+      this.misses += 1;
       return undefined;
     }
+    this.hits += 1;
     return entry.result;
+  }
+
+  /** Aggregate hit/miss counts and hit rate since this instance was created (or last `resetStats()`). `hitRate` is 0 when nothing has been looked up yet, not NaN. */
+  getStats(): { hits: number; misses: number; hitRate: number } {
+    const total = this.hits + this.misses;
+    return { hits: this.hits, misses: this.misses, hitRate: total > 0 ? this.hits / total : 0 };
+  }
+
+  /** Resets the hit/miss counters to 0. Exposed for tests/diagnostics — never required for correctness. */
+  resetStats(): void {
+    this.hits = 0;
+    this.misses = 0;
   }
 
   set(toolName: string, input: Record<string, unknown>, result: ToolResult): void {

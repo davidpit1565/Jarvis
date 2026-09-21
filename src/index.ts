@@ -510,6 +510,7 @@ function main() {
     maxMonthlyCostUsd: config.maxMonthlyCostUsd,
     maxCostPerRunUsd: config.maxCostPerRunUsd,
     zeroCostMode: config.zeroCostMode,
+    softBudgetCapRatio: config.softBudgetCapRatio,
     circuitBreakerThreshold: config.aiCircuitBreakerThreshold,
     circuitBreakerCooldownMs: config.aiCircuitBreakerCooldownMs,
     eventBus,
@@ -1324,6 +1325,7 @@ function main() {
     // route these enable 404s without them, so nothing existing changes.
     automationRuleStoreForAdmin: automationRuleStore,
     costTrackerForAdmin: costTracker,
+    toolResultCacheForAdmin: toolResultCache,
     liveStateTracker,
     dataDirectory: config.memoryDbPath === ":memory:" ? undefined : dirname(config.memoryDbPath),
     backupDbPaths: [

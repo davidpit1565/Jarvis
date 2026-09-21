@@ -109,11 +109,12 @@ describe("buildAnthropicTools", () => {
   });
 });
 
-function makeResponse(content: unknown[], usage: Partial<Anthropic.Usage> = {}): Anthropic.Message {
+function makeResponse(content: unknown[], usage: Partial<Anthropic.Usage> = {}, model?: string): Anthropic.Message {
   return {
     content,
     stop_reason: "end_turn",
     usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...usage },
+    model,
   } as unknown as Anthropic.Message;
 }
 
@@ -176,6 +177,12 @@ describe("fromAnthropicResponse", () => {
     const response = makeResponse([{ type: "text", text: "hi" }]);
     const result = fromAnthropicResponse(response);
     expect(result.serverToolUses).toBeUndefined();
+  });
+
+  test("carries the response's model, for CostTracker's per-model ledger", () => {
+    const response = makeResponse([{ type: "text", text: "hi" }], {}, "claude-sonnet-4-5-20250929");
+    const result = fromAnthropicResponse(response);
+    expect(result.model).toBe("claude-sonnet-4-5-20250929");
   });
 });
 
