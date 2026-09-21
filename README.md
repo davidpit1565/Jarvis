@@ -1984,6 +1984,17 @@ This is a best-effort file copy, not a hot/transactional backup — fine
 for a single-writer assistant triggered manually, not meant for point-in-
 time recovery under heavy concurrent writes.
 
+Before streaming the archive, `GET /backup` now also actually opens each
+database file and runs SQLite's own `PRAGMA integrity_check`
+(`src/backup/verifyBackupIntegrity.ts`) instead of just trusting that the
+file being present and copyable means it's a valid, restorable database.
+This is deliberately best-effort, not gating: the archive is still
+returned even if a file fails (the other files in it are still fine),
+but the response carries `X-Jarvis-Backup-Integrity-Checked` and
+`X-Jarvis-Backup-Integrity-Failed` counts, and any failure is written
+both to the activity log and as a structured `error` log line with a
+unique `errorId` (see "Reliability" below).
+
 ## Usage summary in /status
 
 `GET /status` also reports a `toolUsage` summary (total calls, error
@@ -2031,6 +2042,21 @@ distinct from the aggregate `toolUsage` stats already in `GET /status`.
 Same `X-Jarvis-Admin-Token` gating as `POST /pairing/approve`: required
 whenever an admin token is configured, optional only for local
 development with none set.
+
+`GET /providers/health` is the same kind of admin-gated read-only view,
+over `AIRouter.getProviderStatus()` this time — per-provider circuit
+breaker state, consecutive failures, latest/average call latency, and
+success rate over the last window of calls, so you can actually see
+whether e.g. Groq's free tier is currently circuit-broken without asking
+JARVIS to make a call and watching it fail. 404s when no AI provider is
+configured (never the case in a real deployment, since `main()` always
+constructs an `AIRouter`).
+
+`GET /automation-failures` (optional `?limit=N`) lists every proactive
+automation rule execution that threw, from `AutomationFailureStore` — a
+durable record distinct from the transient `ActivityLog` entry a failure
+also produces (see "Proactive automation" above and "Reliability"
+below).
 
 ## Reliability
 
@@ -2122,6 +2148,53 @@ restart/redeploy, not just a dev sandbox" rather than new capabilities:
   before it ever reaches the brain or conversation history — an
   accidental huge paste or a caller trying to run up cost/abuse the phone
   gateway costs nothing and never pollutes conversation history.
+- **Structured logging, correlation IDs, and error IDs**
+  (`src/core/logging/Logger.ts`) — a small JSON-line logger, the
+  go-forward pattern for reliability-relevant call sites (schedulers,
+  admin endpoints, backup verification). It's deliberately *not* a
+  wholesale replacement of the ad-hoc `console.log("[jarvis] ...")`
+  calls throughout the rest of the codebase — that would be a large,
+  risky rewrite with little payoff for a single-process assistant.
+  `new Logger(scope)` writes `{ts, level, scope, event, ...fields}`
+  lines; `.withCorrelationId(id)` returns a bound copy that threads one
+  id (an `AutomationRuleStore` rule id, a fresh `newCorrelationId()`
+  UUID per chat turn, etc.) through every entry a single unit of work
+  produces; `.error(event, fields)` additionally stamps a stable,
+  unique `errorId` onto the entry and returns it, so a user-facing
+  message or Telegram alert can reference exactly that log line. Used
+  today by the automation-rule scheduler's failure path and by
+  `GET /backup`'s integrity check (see below); everything else still
+  logs the old way.
+- **Scheduler health** (`src/core/health/SchedulerHealthTracker.ts`) —
+  each of the 7 `setInterval` loops in `src/index.ts` (wake-up calls,
+  alarms, weekly digest, check-in, morning briefing, automation rules,
+  reminder notifications) calls `.tick(name)` at the top of its own
+  callback. `GET /status` includes the resulting `schedulerHealth` array
+  (last-tick timestamp and age in ms per scheduler), so a scheduler that
+  silently stopped firing — an unhandled synchronous throw before the
+  tick call, a bug in its own interval, a feature that was never
+  enabled — is visible instead of invisible. In-memory only: it answers
+  "is this process still looping," not "did every event fire since the
+  last restart" (each feature's own persisted `lastTriggeredDate`/
+  `notifiedAt` still answers that).
+- **Automation failure alerts + a durable failure record**
+  (`src/automation/AutomationFailureStore.ts`,
+  `JARVIS_AUTOMATION_FAILURES_DB_PATH`) — when a proactive automation
+  rule's execution throws, it's still logged to the console and the
+  activity log as before, but now also: recorded as a durable row
+  (survives restart/redeploy, unlike both of those), given a structured
+  `error` log entry with a unique `errorId` via the `Logger` above, and
+  pushed as a best-effort Telegram message when one is configured —
+  matching the exact "best-effort push, never let a notification
+  failure crash the scheduler" pattern the wake-up-call scheduler
+  already used. Read the durable record back via `GET
+  /automation-failures` (see "Inspecting what JARVIS remembers" above).
+- **Provider health over HTTP** — `AIRouter.getProviderStatus()`
+  (circuit-breaker state, consecutive failures, latency, success rate
+  per configured AI provider) was already computed internally for
+  routing decisions but had no way to actually see it from outside the
+  process; `GET /providers/health` exposes it, admin-token gated the
+  same way as `GET /reminders`.
 
 ## Current limitations
 

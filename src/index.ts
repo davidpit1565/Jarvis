@@ -132,6 +132,9 @@ import { WebAuthnStore } from "@/auth/WebAuthnStore";
 import { WebAuthnService } from "@/auth/WebAuthnService";
 import { SessionStore } from "@/auth/SessionStore";
 import { AudioLevelBroadcaster } from "@/communication/websocket/AudioLevelBroadcaster";
+import { SchedulerHealthTracker } from "@/core/health/SchedulerHealthTracker";
+import { AutomationFailureStore } from "@/automation/AutomationFailureStore";
+import { Logger } from "@/core/logging/Logger";
 
 const DEFAULT_USER_ID = "local-user";
 
@@ -180,6 +183,16 @@ function main() {
   const memoryStore = new MemoryStore(config.memoryDbPath);
   const reminderStore = new ReminderStore(config.remindersDbPath);
   const automationRuleStore = new AutomationRuleStore(config.automationRulesDbPath);
+  const automationFailureStore = new AutomationFailureStore(config.automationFailuresDbPath);
+  // Tracks "is this setInterval loop actually still ticking" for each
+  // background scheduler below — see JARVIS_ROADMAP_AUDIT.md #176.
+  const schedulerHealthTracker = new SchedulerHealthTracker();
+  // Base structured logger for the reliability-relevant call sites new
+  // to this pass (scheduler failures, backup verification) — see
+  // src/core/logging/Logger.ts's own doc comment for why this isn't a
+  // wholesale replacement of the console.log/console.error calls
+  // throughout the rest of this file.
+  const logger = new Logger("scheduler");
   const conversationHistoryStore = new ConversationHistoryStore(config.conversationHistoryDbPath);
   const activityLog = new ActivityLog(config.activityLogDbPath);
   const toolAuditLog = new ToolAuditLog(config.toolAuditLogDbPath);
@@ -425,7 +438,7 @@ function main() {
   // explicitly set, always wins as the primary — AI_FREE_FIRST only
   // decides between providers when no explicit choice was made, so an
   // existing single-provider deployment sees no behavior change.
-  const brain: Brain = new AIRouter(aiRegistry, costTracker, {
+  const aiRouter = new AIRouter(aiRegistry, costTracker, {
     freeFirst: config.aiFreeFirst,
     explicitProvider: config.brainProviderExplicit ? config.brainProvider : undefined,
     fallbackProvider: config.aiFallbackProvider,
@@ -436,6 +449,10 @@ function main() {
     circuitBreakerCooldownMs: config.aiCircuitBreakerCooldownMs,
     eventBus,
   });
+  // Kept as a typed AIRouter (not just the narrower Brain interface) so
+  // GET /providers/health can call its getProviderStatus() — see
+  // JARVIS_ROADMAP_AUDIT.md #174.
+  const brain: Brain = aiRouter;
   const confirmationService = new ConfirmationService(confirmViaChat);
   const phoneConfirmationService = new ConfirmationService(denyPhoneConfirmation);
 
@@ -734,6 +751,7 @@ function main() {
     const inFlightWakeUpCallIds = new Set<string>();
 
     wakeUpInterval = setInterval(() => {
+      schedulerHealthTracker.tick("wakeUpCalls");
       const now = new Date();
       const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
       const todayDateStr = formatDateKey(now, config.timezone);
@@ -789,6 +807,7 @@ function main() {
     const inFlightAlarmIds = new Set<string>();
 
     alarmInterval = setInterval(() => {
+      schedulerHealthTracker.tick("alarms");
       const now = new Date();
       const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
       const todayDateStr = formatDateKey(now, config.timezone);
@@ -824,6 +843,7 @@ function main() {
   if (weeklyDigestEnabled) {
     let lastWeeklyDigestDateKey: string | null = null;
     weeklyDigestInterval = setInterval(() => {
+      schedulerHealthTracker.tick("weeklyDigest");
       const now = new Date();
       const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
       const todayDateKey = formatDateKey(now, config.timezone);
@@ -862,6 +882,7 @@ function main() {
     });
 
     checkinInterval = setInterval(() => {
+      schedulerHealthTracker.tick("checkin");
       if (!isCheckinDue(new Date(), lastInteractionAt, config.checkinAfterHours!, checkinSentSinceLastInteraction)) {
         return;
       }
@@ -880,6 +901,7 @@ function main() {
   if (morningBriefingEnabled) {
     let lastMorningBriefingDateKey: string | null = null;
     morningBriefingInterval = setInterval(async () => {
+      schedulerHealthTracker.tick("morningBriefing");
       const now = new Date();
       const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
       const todayDateKey = formatDateKey(now, config.timezone);
@@ -914,6 +936,7 @@ function main() {
   // the same rule twice.
   const inFlightAutomationRuleIds = new Set<string>();
   const automationRuleInterval = setInterval(() => {
+    schedulerHealthTracker.tick("automationRules");
     const now = new Date();
     const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
     const todayDateKey = formatDateKey(now, config.timezone);
@@ -936,6 +959,27 @@ function main() {
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[jarvis] automation rule ${rule.id} failed:`, message);
           activityLog.record(`Automation failed: ${rule.instruction.slice(0, 100)} — ${message}`);
+          // A durable failure record (survives restart/redeploy, unlike
+          // the console line and ActivityLog entry above) plus a
+          // best-effort user-facing push — see JARVIS_ROADMAP_AUDIT.md
+          // #177/#178, and the same "best-effort push, never let a
+          // notification failure crash the scheduler" pattern the
+          // wake-up-call scheduler already uses above.
+          const errorId = logger.withCorrelationId(rule.id).error("automation_rule_failed", {
+            ruleId: rule.id,
+            message,
+          });
+          automationFailureStore.record(rule.id, rule.instruction, message);
+          if (telegramGateway && config.telegramOwnerChatId) {
+            telegramGateway!
+              .sendMessage(
+                config.telegramOwnerChatId!,
+                `⚠️ Automation rule failed (errorId ${errorId}): ${rule.instruction.slice(0, 100)} — ${message}`
+              )
+              .catch(() => {
+                // Best-effort notification about a best-effort rule — already recorded above either way.
+              });
+          }
         })
         .finally(() => {
           inFlightAutomationRuleIds.delete(rule.id);
@@ -953,6 +997,7 @@ function main() {
   // one edited to a new due date (ReminderStore.update clears notifiedAt)
   // is treated as due again.
   const reminderNotificationInterval = setInterval(() => {
+    schedulerHealthTracker.tick("reminderNotifications");
     const nowIso = new Date().toISOString();
     const due = reminderStore.getDueUnnotified(nowIso);
 
@@ -1006,6 +1051,9 @@ function main() {
     calendarClient,
     spotifyClient,
     wakeUpCallStore,
+    aiRouter,
+    schedulerHealthTracker,
+    automationFailureStore,
     dataDirectory: config.memoryDbPath === ":memory:" ? undefined : dirname(config.memoryDbPath),
     backupDbPaths: [
       config.memoryDbPath,
@@ -1019,6 +1067,7 @@ function main() {
       config.tokenUsageDbPath,
       config.wakeUpCallDbPath,
       config.calendarTokenDbPath,
+      config.automationFailuresDbPath,
     ],
     permissionService,
     defaultUserId: DEFAULT_USER_ID,
@@ -1167,6 +1216,7 @@ function main() {
     memoryStore.close();
     reminderStore.close();
     automationRuleStore.close();
+    automationFailureStore.close();
     conversationHistoryStore.close();
     activityLog.close();
     toolAuditLog.close();

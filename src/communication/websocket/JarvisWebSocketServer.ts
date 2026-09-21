@@ -34,6 +34,11 @@ import type { WebAuthnService } from "@/auth/WebAuthnService";
 import type { SessionStore } from "@/auth/SessionStore";
 import { AudioLevelBroadcaster } from "./AudioLevelBroadcaster";
 import { RateLimiter } from "./RateLimiter";
+import type { AIRouter } from "@/core/brain/AIRouter";
+import type { SchedulerHealthTracker } from "@/core/health/SchedulerHealthTracker";
+import type { AutomationFailureStore } from "@/automation/AutomationFailureStore";
+import { verifyDatabaseIntegrity } from "@/backup/verifyBackupIntegrity";
+import { Logger } from "@/core/logging/Logger";
 import { computeAudioLevel } from "@/communication/phone/audioLevel";
 import {
   makeEnvelope,
@@ -232,6 +237,29 @@ export interface JarvisWebSocketServerDependencies {
    * approval). Test-only knob — real deployments should never set this.
    */
   pingIntervalMs?: number;
+  /**
+   * Optional: enables the admin-gated `GET /providers/health` read-only
+   * endpoint, exposing `AIRouter.getProviderStatus()` (circuit-breaker
+   * state, latency, success rate per configured AI provider) over HTTP
+   * — see JARVIS_ROADMAP_AUDIT.md #174. Without it, the route 404s.
+   */
+  aiRouter?: AIRouter;
+  /**
+   * Optional: when set, `GET /status` includes a `schedulerHealth` array
+   * (last-tick timestamp/age per named background scheduler) so a
+   * scheduler that silently stopped firing is visible — see
+   * JARVIS_ROADMAP_AUDIT.md #176. The caller (src/index.ts) owns the
+   * instance and calls `.tick(name)` from each of its own `setInterval`
+   * loops; this server only ever reads it.
+   */
+  schedulerHealthTracker?: SchedulerHealthTracker;
+  /**
+   * Optional: enables the admin-gated `GET /automation-failures`
+   * read-only endpoint, a durable record of automation rule executions
+   * that threw — see JARVIS_ROADMAP_AUDIT.md #177/#178. Without it, the
+   * route 404s.
+   */
+  automationFailureStore?: AutomationFailureStore;
 }
 
 const SESSION_COOKIE = "jarvis_session";
@@ -309,6 +337,9 @@ export class JarvisWebSocketServer {
    * human can watch what Core is actually doing in real time.
    */
   private observers: Set<ServerWebSocket<SocketData>> = new Set();
+
+  /** Structured logger for this server's own reliability-relevant admin/health endpoints — see src/core/logging/Logger.ts. */
+  private readonly logger = new Logger("http");
 
   /**
    * The currently connected /chat browser socket, if any — single slot,
@@ -551,6 +582,14 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/audit-log") {
             return this.handleAuditLogHttp(req, url, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/providers/health") {
+            return this.handleProviderHealthHttp(req, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/automation-failures") {
+            return this.handleAutomationFailuresHttp(req, url, server);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/assets/hologram.jpg") {
@@ -1202,6 +1241,7 @@ export class JarvisWebSocketServer {
       memoryStore,
       conversationHistoryStore,
       lockdownService,
+      schedulerHealthTracker,
     } = this.deps;
 
     const devices = deviceRegistry.listDevices().map((device) => ({
@@ -1235,6 +1275,11 @@ export class JarvisWebSocketServer {
           ? { ...tokenUsage, estimatedCostUsd: estimateCostUsd(tokenUsage, DEFAULT_MODEL) ?? null }
           : undefined,
         toolUsage: toolAuditLog?.summary(),
+        // Last-tick timestamp/age per named background scheduler — see
+        // JARVIS_ROADMAP_AUDIT.md #176. Omitted entirely when no tracker
+        // is configured, same "undefined means the feature doesn't
+        // exist" convention as tokenUsage/toolUsage above.
+        schedulerHealth: schedulerHealthTracker?.snapshot(),
         counts: {
           memory: memoryStore?.search("").length,
           reminders: reminderStore?.list(true).length,
@@ -1278,7 +1323,29 @@ export class JarvisWebSocketServer {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
     }
 
-    return createBackupArchive(backupDbPaths ?? []);
+    // Verify every database file actually opens and passes SQLite's own
+    // PRAGMA integrity_check before handing out the archive — see
+    // JARVIS_ROADMAP_AUDIT.md #164. This is deliberately best-effort,
+    // not gating: a backup with one corrupted file is still far more
+    // useful downloaded (the other files are fine) than refused
+    // outright, but the caller needs to actually know about the bad
+    // one rather than silently trusting the archive is complete.
+    const integrity = verifyDatabaseIntegrity(backupDbPaths ?? []);
+    const failed = integrity.filter((r) => !r.ok);
+    if (failed.length > 0) {
+      const logger = this.logger.withCorrelationId(randomUUID());
+      for (const failure of failed) {
+        const errorId = logger.error("backup_integrity_check_failed", { path: failure.path, detail: failure.detail });
+        this.deps.activityLog?.record(
+          `Backup integrity check FAILED for ${failure.path}: ${failure.detail} (errorId ${errorId})`
+        );
+      }
+    }
+
+    const response = createBackupArchive(backupDbPaths ?? []);
+    response.headers.set("X-Jarvis-Backup-Integrity-Checked", String(integrity.length));
+    response.headers.set("X-Jarvis-Backup-Integrity-Failed", String(failed.length));
+    return response;
   }
 
   /**
@@ -1363,6 +1430,54 @@ export class JarvisWebSocketServer {
       return Response.json({ error: "limit must be a positive integer" }, { status: 400 });
     }
     return Response.json({ entries: toolAuditLog.list({ toolName, limit }) });
+  }
+
+  /**
+   * GET /providers/health — read-only admin view of `AIRouter.getProviderStatus()`
+   * (circuit-breaker state, consecutive failures, latency, success rate
+   * per configured AI provider) — see JARVIS_ROADMAP_AUDIT.md #174. Same
+   * admin-token gating rationale as GET /reminders above; 404s when no
+   * AIRouter is configured.
+   */
+  private handleProviderHealthHttp(req: Request, server: BunServer): Response {
+    const { adminToken, aiRouter } = this.deps;
+    if (!aiRouter) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "providers-health"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    return Response.json({ providers: aiRouter.getProviderStatus() });
+  }
+
+  /**
+   * GET /automation-failures — read-only admin view of every proactive
+   * automation rule execution that threw, a durable record distinct
+   * from the transient ActivityLog entry a failure also produces — see
+   * JARVIS_ROADMAP_AUDIT.md #177/#178. Same admin-token gating rationale
+   * as GET /reminders above; 404s when no AutomationFailureStore is
+   * configured. Optional `?limit=N` query param.
+   */
+  private handleAutomationFailuresHttp(req: Request, url: URL, server: BunServer): Response {
+    const { adminToken, automationFailureStore } = this.deps;
+    if (!automationFailureStore) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "automation-failures"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (adminToken && !constantTimeEqual(req.headers.get("X-Jarvis-Admin-Token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? Number(limitParam) : undefined;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+      return Response.json({ error: "limit must be a positive integer" }, { status: 400 });
+    }
+    return Response.json({ failures: automationFailureStore.list(limit) });
   }
 
   /**
