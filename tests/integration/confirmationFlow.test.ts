@@ -8,6 +8,7 @@ import { PermissionLevel } from "@/types/permissions";
 import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
 import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { LocalTool } from "@/types/tools";
+import { parseQuarantinedToolResult } from "@/core/orchestrator/toolResultQuarantine";
 
 class ScriptedBrain implements Brain {
   private calls = 0;
@@ -68,7 +69,7 @@ describe("Confirmation flow", () => {
 
     expect(response).toBe("Done.");
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    expect(JSON.parse((toolResult as { content: string }).content)).toEqual({ success: true, data: "deleted" });
+    expect(parseQuarantinedToolResult((toolResult as { content: string }).content)).toEqual({ success: true, data: "deleted" });
   });
 
   test("a DANGEROUS tool is blocked when the human declines", async () => {
@@ -78,7 +79,11 @@ describe("Confirmation flow", () => {
     await orchestrator.handleUserMessage("user-1", "delete everything");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/declined/i);
   });
@@ -110,7 +115,11 @@ describe("Confirmation flow", () => {
 
     expect(promptCalled).toBe(false);
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/Permission denied/);
   });
@@ -121,7 +130,11 @@ describe("Confirmation flow", () => {
     await orchestrator.handleUserMessage("user-1", "delete everything");
 
     const toolResult = conversation.getMessages().find((m) => m.role === "tool");
-    const parsed = JSON.parse((toolResult as { content: string }).content);
+    const parsed = parseQuarantinedToolResult((toolResult as { content: string }).content) as {
+      success: boolean;
+      error?: string;
+      data?: unknown;
+    };
     expect(parsed.success).toBe(false);
     expect(parsed.error).toMatch(/confirmation/i);
   });

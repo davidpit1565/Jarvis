@@ -49,6 +49,28 @@ interface BaseTool {
    * authoritative proof).
    */
   requiresVerification?: boolean;
+  /**
+   * Tool Risk Model: caps how many times this specific tool may be called
+   * within a single Orchestrator turn (see `Orchestrator`'s per-run
+   * tool-call counter), on top of the global default cap every tool
+   * already gets. Left undefined for the vast majority of tools, in which
+   * case only the global per-run cap applies. Set this on a tool where
+   * even a handful of repeated calls in one turn is inherently suspicious
+   * (e.g. SEND_EMAIL, DELETE_MEMORY) — a tighter, tool-specific ceiling
+   * independent of the global default.
+   */
+  maxCallsPerRun?: number;
+  /**
+   * Tool Risk Model: maximum time (ms) this local tool's `execute()` may
+   * run before Orchestrator.runLocalTool aborts it with a timeout error
+   * instead of waiting forever. Left undefined uses the Orchestrator's
+   * configured default (see `OrchestratorDependencies.localToolTimeoutMs`)
+   * — set this explicitly only to override that default for a tool known
+   * to need longer (or shorter). Device tools already have their own
+   * network-level timeout (`DeviceConnectionManager.toolTimeoutMs`) and
+   * don't consult this field.
+   */
+  timeoutMs?: number;
 }
 
 export interface LocalTool<TInput extends Record<string, unknown> = Record<string, unknown>> extends BaseTool {

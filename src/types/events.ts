@@ -19,6 +19,16 @@ export interface JarvisEventMap {
   "tool.dispatched": { toolName: string; deviceId: string; requestId: string };
   /** A READ-level local tool call was served from `ToolResultCache` instead of actually re-running the tool. */
   "tool.cacheHit": { toolName: string; input: Record<string, unknown> };
+  /**
+   * Tool Risk Model: a tool call was refused — never even reaching
+   * permission checks or execution — because it would exceed the
+   * per-run call cap (global default or this tool's own `maxCallsPerRun`)
+   * for the current Orchestrator turn. A real signal of a runaway/looping
+   * turn, worth watching for even though the turn itself recovers.
+   */
+  "tool.callLimitExceeded": { toolName: string; userId: string; totalToolCalls: number; limit: number };
+  /** A local tool's `execute()` was aborted after exceeding its configured timeout instead of hanging forever. */
+  "tool.timedOut": { toolName: string; userId: string; timeoutMs: number };
   "permission.checked": { toolId: string; result: PermissionCheckResult };
   "device.registered": { device: Device };
   "device.connected": { deviceId: string };

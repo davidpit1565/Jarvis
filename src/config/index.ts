@@ -350,6 +350,18 @@ export interface JarvisConfig {
    */
   quietHoursStart?: string;
   quietHoursEnd?: string;
+  /**
+   * Tool Risk Model: hard cap on how many tool calls a single Orchestrator
+   * turn will actually execute — see Orchestrator's own
+   * `maxToolCallsPerRun` doc comment for why this exists. Defaults to 30.
+   */
+  maxToolCallsPerRun: number;
+  /**
+   * Tool Risk Model: default timeout (ms) for a local tool's `execute()`
+   * call before Orchestrator aborts it instead of waiting forever. 0
+   * disables timeout enforcement. Defaults to 30000 (30s).
+   */
+  localToolTimeoutMs: number;
 }
 
 class ConfigError extends Error {}
@@ -710,6 +722,18 @@ export function loadConfig(): JarvisConfig {
     );
   }
 
+  const maxToolCallsPerRunRaw = process.env.JARVIS_MAX_TOOL_CALLS_PER_RUN?.trim();
+  const maxToolCallsPerRun = maxToolCallsPerRunRaw ? Number(maxToolCallsPerRunRaw) : 30;
+  if (maxToolCallsPerRunRaw && (!Number.isInteger(maxToolCallsPerRun) || maxToolCallsPerRun <= 0)) {
+    throw new ConfigError("JARVIS_MAX_TOOL_CALLS_PER_RUN must be a positive integer");
+  }
+
+  const localToolTimeoutMsRaw = process.env.JARVIS_LOCAL_TOOL_TIMEOUT_MS?.trim();
+  const localToolTimeoutMs = localToolTimeoutMsRaw ? Number(localToolTimeoutMsRaw) : 30_000;
+  if (localToolTimeoutMsRaw && (!Number.isInteger(localToolTimeoutMs) || localToolTimeoutMs < 0)) {
+    throw new ConfigError("JARVIS_LOCAL_TOOL_TIMEOUT_MS must be a non-negative integer");
+  }
+
   return {
     brainProvider,
     brainProviderExplicit,
@@ -792,6 +816,8 @@ export function loadConfig(): JarvisConfig {
     checkinAfterHours,
     morningBriefingTime,
     costAlertThresholdUsd,
+    maxToolCallsPerRun,
+    localToolTimeoutMs,
   };
 }
 

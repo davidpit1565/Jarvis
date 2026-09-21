@@ -538,6 +538,8 @@ function main() {
     contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
     lockdownService,
     toolResultCache,
+    maxToolCallsPerRun: config.maxToolCallsPerRun,
+    localToolTimeoutMs: config.localToolTimeoutMs,
     liveState: liveStateTracker,
     // Default liveStateChannel ("chat") — this is the primary web-chat/
     // terminal Orchestrator (see webChatOrchestrator below), so its
@@ -597,6 +599,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      maxToolCallsPerRun: config.maxToolCallsPerRun,
+      localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
       liveStateChannel: "phone",
     });
@@ -640,6 +644,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      maxToolCallsPerRun: config.maxToolCallsPerRun,
+      localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
       liveStateChannel: "wakeup-call",
     });
@@ -709,6 +715,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      maxToolCallsPerRun: config.maxToolCallsPerRun,
+      localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
       liveStateChannel: "sms",
     });
@@ -739,6 +747,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      maxToolCallsPerRun: config.maxToolCallsPerRun,
+      localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
       liveStateChannel: "telegram",
     });
@@ -820,6 +830,8 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      maxToolCallsPerRun: config.maxToolCallsPerRun,
+      localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
       liveStateChannel: "device-voice",
     });
