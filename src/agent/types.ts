@@ -1,0 +1,81 @@
+import type { ToolResult } from "@/types/tools";
+import type { AgentTaskState } from "./AgentTaskStateMachine";
+
+export type AgentStepStatus = "pending" | "in_progress" | "succeeded" | "failed" | "verified" | "verification_failed";
+
+/** A single tool call in an agent task's plan, plus its own execution/verification lifecycle. */
+export interface AgentPlanStep {
+  id: string;
+  description: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  status: AgentStepStatus;
+  /** The most recent ToolResult this step produced, if it has run at least once. */
+  lastResult?: ToolResult;
+  /** Human-readable reason from the last verification attempt, if any. */
+  verificationReason?: string;
+}
+
+/** A step the planner proposes — turned into a full AgentPlanStep once accepted onto a task. */
+export interface AgentStepProposal {
+  toolName: string;
+  input: Record<string, unknown>;
+  description: string;
+}
+
+export interface AgentTaskRecord {
+  id: string;
+  userId: string;
+  goal: string;
+  state: AgentTaskState;
+  plan: AgentPlanStep[];
+  currentStepIndex: number;
+  /** Failed attempts of the *current* step since it was last (re)planned or advanced past. Reset when the step changes. */
+  stepRetryCount: number;
+  /** Number of PLANNING/RECOVERING replans this task has gone through. */
+  recoveryCount: number;
+  /** Total tool-call steps actually executed (including retries) — the hard cap this whole task obeys. */
+  totalStepsExecuted: number;
+  failureReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+/** Request handed to an AgentPlanner to produce (or re-produce, after a failure) an ordered plan. */
+export interface AgentPlanRequest {
+  goal: string;
+  userId: string;
+  /** Set only on a RECOVERING replan: what went wrong with the previous attempt. */
+  priorFailure?: string;
+  /** Steps already completed and verified in a previous planning cycle, for context — never re-run automatically. */
+  completedSteps: AgentPlanStep[];
+}
+
+export interface AgentVerificationRequest {
+  step: AgentPlanStep;
+  result: ToolResult;
+  /**
+   * Runs an additional tool call for verification purposes (e.g. a
+   * follow-up list/get call) through the exact same Orchestrator pipeline
+   * the original step ran through — a planner must never call a tool any
+   * other way.
+   */
+  runVerificationTool: (toolName: string, input: Record<string, unknown>) => Promise<ToolResult>;
+}
+
+export interface AgentVerificationResult {
+  verified: boolean;
+  reason: string;
+}
+
+/**
+ * Produces plans and verifies step results for the Autonomous Agent Core.
+ * Kept as a narrow interface (not tied to `Brain` directly) so AgentCore is
+ * testable with a scripted stub, while `BrainAgentPlanner` provides the
+ * real, Brain-backed implementation used in production.
+ */
+export interface AgentPlanner {
+  plan(request: AgentPlanRequest): Promise<AgentStepProposal[]>;
+  verify(request: AgentVerificationRequest): Promise<AgentVerificationResult>;
+}

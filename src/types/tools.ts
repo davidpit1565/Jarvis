@@ -34,6 +34,21 @@ interface BaseTool {
   description: string;
   inputSchema: ToolInputSchema;
   requiredPermission: PermissionLevel;
+  /**
+   * Declares whether a successful call of this tool needs a follow-up
+   * verification step (e.g. a read/list call confirming the claimed effect
+   * actually happened) when it's run as a step of an autonomous agent task.
+   * Left undefined for the vast majority of existing tools, in which case
+   * the agent core falls back to a sane default derived from
+   * `requiredPermission` (see `toolRequiresVerification` in
+   * `@/tools/verificationPolicy`) — anything above READ mutates state and
+   * is assumed to need verification unless a tool opts out here, and READ
+   * tools never need it. Only set this explicitly to override that default
+   * for a specific tool (e.g. a SAFE_ACTION tool with no meaningful way to
+   * verify itself, or a CONFIRM tool whose own result is already
+   * authoritative proof).
+   */
+  requiresVerification?: boolean;
 }
 
 export interface LocalTool<TInput extends Record<string, unknown> = Record<string, unknown>> extends BaseTool {

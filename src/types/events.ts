@@ -25,6 +25,8 @@ export interface JarvisEventMap {
   "device.revoked": { deviceId: string };
   /** AIRouter switched away from its primary provider for this call — either because it failed, or a budget cap blocked a paid provider. */
   "ai.providerFallback": { from: string; to: string; reason: "call-failed" | "budget-exceeded" };
+  /** An AgentCore task moved from one state to another — see src/agent/AgentTaskStateMachine.ts for the legal transitions. */
+  "agent.task.transition": { taskId: string; userId: string; from: string; to: string; reason: string };
 }
 
 export type JarvisEventName = keyof JarvisEventMap;

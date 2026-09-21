@@ -139,6 +139,23 @@ export class Orchestrator {
   }
 
   private async runToolCall(userId: string, toolCall: ToolCallRequest): Promise<void> {
+    const result = await this.executeToolCall(userId, toolCall);
+    this.completeToolCall(toolCall, result);
+  }
+
+  /**
+   * Runs a single tool call through exactly the same permission-check /
+   * confirmation / local-or-device-dispatch pipeline as a normal chat turn,
+   * and returns its `ToolResult` directly instead of writing it into any
+   * `ConversationManager`. This is the seam the Autonomous Agent Core
+   * (`src/agent/AgentCore.ts`) executes its plan steps through — it must
+   * never reimplement tool execution, and this is what lets it reuse this
+   * exact pipeline (PermissionService, ConfirmationService, lockdown,
+   * device dispatch) without a Brain or conversation in the loop at all.
+   * `handleUserMessage`'s own per-turn tool loop is just a thin wrapper
+   * around this that also feeds the result back into conversation history.
+   */
+  async executeToolCall(userId: string, toolCall: ToolCallRequest): Promise<ToolResult> {
     const { toolRegistry, eventBus, lockdownService } = this.deps;
 
     eventBus.emit("tool.requested", { toolCall });
@@ -146,30 +163,28 @@ export class Orchestrator {
     const tool: Tool | undefined = toolRegistry.listTools().find((t) => t.name === toolCall.toolName);
 
     if (!tool) {
-      this.completeToolCall(toolCall, { success: false, error: `Unknown tool: ${toolCall.toolName}` });
-      return;
+      return { success: false, error: `Unknown tool: ${toolCall.toolName}` };
     }
 
     if (lockdownService?.isActive() && tool.requiredPermission !== PermissionLevel.READ) {
-      this.completeToolCall(toolCall, {
+      return {
         success: false,
         error: "JARVIS is in emergency lockdown right now — only read-only actions are available.",
-      });
-      return;
+      };
     }
 
     if (tool.target === "local") {
-      await this.runLocalTool(userId, tool, toolCall);
-      return;
+      return this.runLocalTool(userId, tool, toolCall);
     }
 
-    await this.runDeviceTool(userId, tool, toolCall);
+    return this.runDeviceTool(userId, tool, toolCall);
   }
 
   /**
-   * Returns true if execution may proceed. Handles both the permission
+   * Returns null if execution may proceed. Handles both the permission
    * deny path and, for allowed-but-confirmation-required tools, actually
-   * obtaining that confirmation before returning true.
+   * obtaining that confirmation before returning null — otherwise returns
+   * the ToolResult the caller should short-circuit with.
    */
   private async authorize(
     userId: string,
@@ -177,24 +192,22 @@ export class Orchestrator {
     toolCall: ToolCallRequest,
     deviceId: string | undefined,
     permissionResult: PermissionCheckResult
-  ): Promise<boolean> {
+  ): Promise<ToolResult | null> {
     const { confirmationService } = this.deps;
 
     if (!permissionResult.allowed) {
-      this.completeToolCall(toolCall, { success: false, error: `Permission denied: ${permissionResult.reason}` });
-      return false;
+      return { success: false, error: `Permission denied: ${permissionResult.reason}` };
     }
 
     if (!permissionResult.requiresConfirmation) {
-      return true;
+      return null;
     }
 
     if (!confirmationService) {
-      this.completeToolCall(toolCall, {
+      return {
         success: false,
         error: "This action requires confirmation, but no confirmation channel is configured",
-      });
-      return false;
+      };
     }
 
     const approved = await confirmationService.requestConfirmation({
@@ -206,14 +219,13 @@ export class Orchestrator {
     });
 
     if (!approved) {
-      this.completeToolCall(toolCall, { success: false, error: "User declined to confirm this action" });
-      return false;
+      return { success: false, error: "User declined to confirm this action" };
     }
 
-    return true;
+    return null;
   }
 
-  private async runLocalTool(userId: string, tool: LocalTool, toolCall: ToolCallRequest): Promise<void> {
+  private async runLocalTool(userId: string, tool: LocalTool, toolCall: ToolCallRequest): Promise<ToolResult> {
     const { permissionService, eventBus } = this.deps;
 
     const permissionResult = permissionService.check({
@@ -224,26 +236,24 @@ export class Orchestrator {
 
     eventBus.emit("permission.checked", { toolId: tool.id, result: permissionResult });
 
-    if (!(await this.authorize(userId, tool, toolCall, undefined, permissionResult))) {
-      return;
-    }
+    const denied = await this.authorize(userId, tool, toolCall, undefined, permissionResult);
+    if (denied) return denied;
 
     const requestId = randomUUID();
     const result = await tool.execute(toolCall.input, { userId, requestId });
 
     eventBus.emit("tool.executed", { toolName: tool.name, requestId, result, userId, input: toolCall.input });
-    this.completeToolCall(toolCall, result);
+    return result;
   }
 
-  private async runDeviceTool(userId: string, tool: DeviceTool, toolCall: ToolCallRequest): Promise<void> {
+  private async runDeviceTool(userId: string, tool: DeviceTool, toolCall: ToolCallRequest): Promise<ToolResult> {
     const { permissionService, eventBus, deviceRegistry, deviceConnectionManager } = this.deps;
 
     if (!deviceRegistry || !deviceConnectionManager) {
-      this.completeToolCall(toolCall, {
+      return {
         success: false,
         error: "Device execution is not configured on this Orchestrator",
-      });
-      return;
+      };
     }
 
     const requestedDeviceId =
@@ -255,8 +265,7 @@ export class Orchestrator {
 
     if (!targetDevice) {
       const reason = requestedDeviceId ? `Unknown device: ${requestedDeviceId}` : "No primary device registered";
-      this.completeToolCall(toolCall, { success: false, error: reason });
-      return;
+      return { success: false, error: reason };
     }
 
     const permissionResult = permissionService.check({
@@ -268,15 +277,13 @@ export class Orchestrator {
 
     eventBus.emit("permission.checked", { toolId: tool.id, result: permissionResult });
 
-    if (!(await this.authorize(userId, tool, toolCall, targetDevice.id, permissionResult))) {
-      return;
-    }
+    const denied = await this.authorize(userId, tool, toolCall, targetDevice.id, permissionResult);
+    if (denied) return denied;
 
     if (tool.validateInput) {
       const validation = tool.validateInput(toolCall.input);
       if (!validation.valid) {
-        this.completeToolCall(toolCall, { success: false, error: `Invalid input: ${validation.reason}` });
-        return;
+        return { success: false, error: `Invalid input: ${validation.reason}` };
       }
     }
 
@@ -289,10 +296,10 @@ export class Orchestrator {
         userId,
         input: toolCall.input,
       });
-      this.completeToolCall(toolCall, result);
+      return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Remote tool execution failed";
-      this.completeToolCall(toolCall, { success: false, error: message });
+      return { success: false, error: message };
     }
   }
 
