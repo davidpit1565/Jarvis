@@ -12,6 +12,7 @@ import type { DeviceTool, LocalTool, Tool, ToolResult } from "@/types/tools";
 import { PermissionLevel, type PermissionCheckResult } from "@/types/permissions";
 import { JARVIS_SYSTEM_PROMPT } from "@/core/brain/systemPrompt";
 import type { LockdownService } from "@/core/lockdown/LockdownService";
+import type { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 
 export interface OrchestratorDependencies {
   brain: Brain;
@@ -51,6 +52,22 @@ export interface OrchestratorDependencies {
    * exist for this Orchestrator (never locked down).
    */
   lockdownService?: LockdownService;
+  /**
+   * Optional: drives the user-facing JarvisLiveState machine
+   * (src/core/state/JarvisLiveState.ts) through LISTENING -> THINKING ->
+   * EXECUTING -> SPEAKING -> IDLE as this Orchestrator processes a turn.
+   * Omitted means live-state tracking simply doesn't happen for this
+   * Orchestrator instance — every call site below already guards on it
+   * being present, so this is purely additive and never required.
+   */
+  liveState?: JarvisLiveStateTracker;
+  /**
+   * Distinguishes this Orchestrator's live-state sessions from another
+   * channel's for the same userId (terminal, web chat, Telegram, a phone
+   * call each get their own Orchestrator instance) — the live-state
+   * session key is `${liveStateChannel}:${userId}`. Defaults to "chat".
+   */
+  liveStateChannel?: string;
 }
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -86,10 +103,16 @@ const MAX_IMAGES_PER_MESSAGE = 4;
 export class Orchestrator {
   constructor(private readonly deps: OrchestratorDependencies) {}
 
+  /** The JarvisLiveState session key for `userId` on this Orchestrator's channel — see `liveStateChannel` above. */
+  private liveSessionId(userId: string): string {
+    return `${this.deps.liveStateChannel ?? "chat"}:${userId}`;
+  }
+
   async handleUserMessage(userId: string, content: string, images?: UserMessageImage[]): Promise<string> {
-    const { brain, conversation, toolRegistry, eventBus, channelContext, contextProvider } = this.deps;
+    const { brain, conversation, toolRegistry, eventBus, channelContext, contextProvider, liveState } = this.deps;
     const extraContext = [channelContext, await contextProvider?.()].filter(Boolean).join("\n\n");
     const systemPrompt = extraContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${extraContext}` : JARVIS_SYSTEM_PROMPT;
+    const sessionId = this.liveSessionId(userId);
 
     if (content.length > MAX_USER_MESSAGE_LENGTH) {
       return (
@@ -105,37 +128,95 @@ export class Orchestrator {
       return "One of those images is too large — please send a smaller one.";
     }
 
+    // A fresh turn always starts by clearing any stop request left over
+    // from a prior interrupted turn — otherwise a new message on the same
+    // session would immediately look "stopped" again.
+    liveState?.reset(sessionId, userId, "new turn starting");
+    liveState?.transition(sessionId, userId, "LISTENING", { reason: "user message received" });
+
     conversation.addUserMessage(content, images);
 
-    for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-      eventBus.emit("brain.request", { messageCount: conversation.getMessages().length });
+    try {
+      liveState?.transition(sessionId, userId, "THINKING", { reason: "awaiting brain response" });
 
-      const response = await brain.chat({
-        messages: conversation.getMessagesForBrain(),
-        tools: toolRegistry.toToolDefinitions(),
-        context: systemPrompt,
-      });
+      for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+        if (liveState?.isStopRequested(sessionId)) {
+          return "Stopped.";
+        }
 
-      eventBus.emit("brain.response", {
-        text: response.text,
-        toolCallCount: response.toolCalls.length,
-        serverToolUses: response.serverToolUses,
-        usage: response.usage,
-      });
+        eventBus.emit("brain.request", { messageCount: conversation.getMessages().length });
 
-      if (response.toolCalls.length === 0) {
-        conversation.addAssistantMessage(response.text);
-        return response.text;
+        const response = await brain.chat({
+          messages: conversation.getMessagesForBrain(),
+          tools: toolRegistry.toToolDefinitions(),
+          context: systemPrompt,
+        });
+
+        eventBus.emit("brain.response", {
+          text: response.text,
+          toolCallCount: response.toolCalls.length,
+          serverToolUses: response.serverToolUses,
+          usage: response.usage,
+        });
+
+        // A stop could have been requested while awaiting the brain call
+        // above (the one checkpoint that can't itself be interrupted, see
+        // requestStop's doc comment) — checked here, before committing to
+        // either the SPEAKING or EXECUTING path, so a stop mid-flight
+        // can't race a transition attempted out of STOPPED.
+        if (liveState?.isStopRequested(sessionId)) {
+          return "Stopped.";
+        }
+
+        if (response.toolCalls.length === 0) {
+          conversation.addAssistantMessage(response.text);
+          liveState?.transition(sessionId, userId, "SPEAKING", { reason: "formatting final reply" });
+          liveState?.reset(sessionId, userId, "turn complete");
+          return response.text;
+        }
+
+        conversation.addAssistantMessage(response.text, response.toolCalls);
+
+        liveState?.transition(sessionId, userId, "EXECUTING", {
+          reason: `running ${response.toolCalls.length} tool call(s)`,
+        });
+
+        for (const toolCall of response.toolCalls) {
+          if (liveState?.isStopRequested(sessionId)) {
+            return "Stopped.";
+          }
+          await this.runToolCall(userId, toolCall);
+        }
+
+        if (liveState?.isStopRequested(sessionId)) {
+          return "Stopped.";
+        }
+        liveState?.transition(sessionId, userId, "THINKING", { reason: "tool results returned; back to brain" });
       }
 
-      conversation.addAssistantMessage(response.text, response.toolCalls);
-
-      for (const toolCall of response.toolCalls) {
-        await this.runToolCall(userId, toolCall);
-      }
+      throw new Error(`Exceeded maximum tool iterations (${MAX_TOOL_ITERATIONS}) without a final response`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unexpected error";
+      liveState?.transition(sessionId, userId, "ERROR", { reason: message });
+      liveState?.reset(sessionId, userId, "recovered after error");
+      throw error;
     }
+  }
 
-    throw new Error(`Exceeded maximum tool iterations (${MAX_TOOL_ITERATIONS}) without a final response`);
+  /**
+   * Response Interrupt (roadmap item 103) for a plain chat turn on this
+   * Orchestrator's channel. Cooperative, not preemptive — see
+   * `JarvisLiveStateTracker.requestStop`'s doc comment for exactly what
+   * this can and can't interrupt (it stops the tool-call loop at its next
+   * checkpoint; it can never abort a `Brain.chat()` call already in
+   * flight, since `Brain` has no cancellation signal today). Returns
+   * `false` if there was nothing active to stop (no `liveState` configured,
+   * or the session was already idle).
+   */
+  requestStop(userId: string): boolean {
+    const { liveState } = this.deps;
+    if (!liveState) return false;
+    return liveState.requestStop(this.liveSessionId(userId), userId) !== undefined;
   }
 
   private async runToolCall(userId: string, toolCall: ToolCallRequest): Promise<void> {
@@ -210,6 +291,10 @@ export class Orchestrator {
       };
     }
 
+    const { liveState } = this.deps;
+    const sessionId = this.liveSessionId(userId);
+    liveState?.transition(sessionId, userId, "WAITING", { reason: `awaiting confirmation for ${tool.name}` });
+
     const approved = await confirmationService.requestConfirmation({
       toolId: tool.id,
       toolName: tool.name,
@@ -217,6 +302,12 @@ export class Orchestrator {
       deviceId,
       input: toolCall.input,
     });
+
+    // Back to EXECUTING regardless of the answer — the caller (authorize's
+    // own caller, runLocalTool/runDeviceTool) is still mid tool-call either
+    // way; a decline just means this particular call's ToolResult will be
+    // an error, not that the whole turn is done.
+    liveState?.transition(sessionId, userId, "EXECUTING", { reason: "confirmation answered" });
 
     if (!approved) {
       return { success: false, error: "User declined to confirm this action" };

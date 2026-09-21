@@ -37,6 +37,26 @@ export interface JarvisEventMap {
   };
   /** An AgentCore task moved from one state to another — see src/agent/AgentTaskStateMachine.ts for the legal transitions. */
   "agent.task.transition": { taskId: string; userId: string; from: string; to: string; reason: string };
+  /**
+   * JARVIS's user-facing live state (see src/core/state/JarvisLiveState.ts)
+   * moved from one value to another for a given session — roadmap items
+   * 92-97/101-103 and the backend half of item 36. `sessionId` is the
+   * opaque per-channel key (`${channel}:${userId}` by convention);
+   * `userId` is included directly too so a consumer that only cares about
+   * "this user" doesn't need to parse `sessionId`. `language`, when
+   * present, is the reply language ("en" | "he") known for this session at
+   * the time of the transition. Not yet forwarded to WebSocket observer
+   * clients — see JarvisWebSocketServer's OBSERVABLE_EVENTS comment.
+   */
+  "jarvis.liveState.changed": {
+    sessionId: string;
+    userId: string;
+    from: string;
+    to: string;
+    reason?: string;
+    language?: "en" | "he";
+    timestamp: number;
+  };
 }
 
 export type JarvisEventName = keyof JarvisEventMap;

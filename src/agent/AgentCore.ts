@@ -10,6 +10,7 @@ import type { AgentPlanner, AgentTaskRecord } from "./types";
 import { classifyError } from "./errorClassification";
 import { AgentTimeoutError, withTimeout } from "./timeout";
 import type { AgentTaskState } from "./AgentTaskStateMachine";
+import { liveStateForAgentTaskState, type JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 
 function readEnvInt(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -37,6 +38,16 @@ export interface AgentCoreDependencies {
   taskStore: AgentTaskStore;
   auditLog: ToolAuditLog;
   eventBus?: EventBus;
+  /**
+   * Optional: drives the user-facing JarvisLiveState machine
+   * (src/core/state/JarvisLiveState.ts) alongside this task's own
+   * AgentTaskStateMachine transitions, via `liveStateForAgentTaskState`.
+   * Kept on a session key distinct from a plain chat Orchestrator's
+   * ("agent:<userId>" vs. that Orchestrator's own "<channel>:<userId>"),
+   * since an agent task and a live chat turn for the same user can run
+   * concurrently and must not clobber each other's live state.
+   */
+  liveState?: JarvisLiveStateTracker;
 }
 
 export interface AgentCoreOptions {
@@ -97,11 +108,30 @@ export class AgentCore {
     return this.cancelled.has(taskId);
   }
 
+  /** The JarvisLiveState session key for one agent task's userId — see the `liveState` doc comment on AgentCoreDependencies. */
+  private liveSessionId(userId: string): string {
+    return `agent:${userId}`;
+  }
+
   private emitTransition(task: AgentTaskRecord, to: AgentTaskState, reason: string): AgentTaskRecord {
     const from = task.state;
     const updated = this.deps.taskStore.setState(task.id, to);
     this.deps.auditLog.recordAgentEvent(task.id, task.userId, "state.transition", { from, to, reason });
     this.deps.eventBus?.emit("agent.task.transition", { taskId: task.id, userId: task.userId, from, to, reason });
+
+    const { liveState } = this.deps;
+    const mappedState = liveStateForAgentTaskState(to);
+    if (liveState && mappedState) {
+      const sessionId = this.liveSessionId(task.userId);
+      liveState.transition(sessionId, task.userId, mappedState, { reason: `agent task ${task.id}: ${reason}` });
+      // COMPLETED/FAILED/CANCELLED map onto SPEAKING/ERROR/STOPPED, all of
+      // which only ever lead back to IDLE — settle there immediately so a
+      // finished task doesn't leave its session stuck showing "speaking".
+      if (to === "COMPLETED" || to === "FAILED" || to === "CANCELLED") {
+        liveState.reset(sessionId, task.userId, `agent task ${task.id} ${to.toLowerCase()}`);
+      }
+    }
+
     return updated;
   }
 
