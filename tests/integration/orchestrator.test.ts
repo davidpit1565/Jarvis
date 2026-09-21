@@ -212,6 +212,40 @@ describe("Orchestrator integration", () => {
     expect(captured?.input).toEqual({ hello: "world" });
   });
 
+  test("tool.executed carries a real resultSummary derived from an actual array length, and omits it when there's nothing safe to summarize", async () => {
+    const listTool: LocalTool = {
+      id: "LIST_EVENTS",
+      name: "list_events",
+      description: "Lists events",
+      inputSchema: { type: "object", properties: {} },
+      requiredPermission: PermissionLevel.READ,
+      target: "local",
+      execute: async () => ({ success: true, data: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }, { id: 6 }, { id: 7 }] }),
+    };
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "list_events", input: {} }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+      { text: "", toolCalls: [{ id: "call-2", toolName: "echo_tool", input: { hello: "world" } }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+    const echoTool = makeEchoTool("ECHO_TOOL");
+
+    const { orchestrator, eventBus } = setup(brain, [listTool, echoTool]);
+    const captured: Array<{ toolName: string; resultSummary?: string }> = [];
+    eventBus.on("tool.executed", (payload) => captured.push(payload));
+
+    await orchestrator.handleUserMessage("user-1", "list today's calendar events");
+    await orchestrator.handleUserMessage("user-1", "echo something");
+
+    const listEvent = captured.find((c) => c.toolName === "list_events");
+    expect(listEvent?.resultSummary).toBe("7 results");
+
+    // echo_tool's result is a plain object, not an array — no fabricated
+    // summary, the field is simply absent.
+    const echoEvent = captured.find((c) => c.toolName === "echo_tool");
+    expect(echoEvent?.resultSummary).toBeUndefined();
+  });
+
   test("returns Claude's text directly when no tool call is requested", async () => {
     const brain = new ScriptedBrain([{ text: "Just chatting, no tools needed.", toolCalls: [], stopReason: "end_turn" }]);
     const { orchestrator } = setup(brain);

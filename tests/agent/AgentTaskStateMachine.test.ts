@@ -6,6 +6,7 @@ import {
   assertValidTransition,
   canTransition,
   isTerminalState,
+  phaseForAgentTaskState,
   type AgentTaskState,
 } from "@/agent/AgentTaskStateMachine";
 
@@ -81,5 +82,18 @@ describe("AgentTaskStateMachine", () => {
   test("a dependency-gated task can go PENDING -> WAITING, and resume WAITING -> PLANNING once resolved", () => {
     expect(canTransition("PENDING", "WAITING")).toBe(true);
     expect(canTransition("WAITING", "PLANNING")).toBe(true);
+  });
+
+  test("phaseForAgentTaskState maps every AgentTaskState onto the safe phase vocabulary", () => {
+    expect(phaseForAgentTaskState("PENDING")).toBe("RECEIVING");
+    expect(phaseForAgentTaskState("PLANNING")).toBe("PLANNING");
+    expect(phaseForAgentTaskState("EXECUTING")).toBe("EXECUTING");
+    expect(phaseForAgentTaskState("RETRYING")).toBe("EXECUTING");
+    expect(phaseForAgentTaskState("VERIFYING")).toBe("VERIFYING");
+    expect(phaseForAgentTaskState("RECOVERING")).toBe("RECOVERING");
+    expect(phaseForAgentTaskState("WAITING")).toBe("WAITING");
+    expect(phaseForAgentTaskState("COMPLETED")).toBe("COMPLETED");
+    expect(phaseForAgentTaskState("FAILED")).toBe("FAILED");
+    expect(phaseForAgentTaskState("CANCELLED")).toBe("CANCELLED");
   });
 });

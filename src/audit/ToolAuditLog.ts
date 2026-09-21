@@ -24,6 +24,25 @@ export interface ToolAuditEntry {
 const MAX_ROWS = 5000;
 
 /**
+ * One persisted `jarvis.liveState.changed` transition (see
+ * src/core/state/JarvisLiveState.ts) — "what was JARVIS doing at time T"
+ * for a given live session, distinct from `AgentAuditEntry` (which is
+ * scoped to one AgentCore taskId, not a live-chat session). `sessionId` is
+ * the same opaque key `JarvisLiveStateTracker` uses (`${channel}:${userId}`
+ * by convention).
+ */
+export interface LiveStateTransitionEntry {
+  id: number;
+  sessionId: string;
+  userId: string;
+  fromState: string;
+  toState: string;
+  reason: string | null;
+  language: string | null;
+  timestamp: string;
+}
+
+/**
  * One event in an autonomous agent task's audit trail: a state
  * transition, a step execution, a verification verdict, or a
  * retry/recovery decision. `taskId` ties every row back to a specific
@@ -87,6 +106,63 @@ export class ToolAuditLog {
       )
     `);
     this.db.run(`CREATE INDEX IF NOT EXISTS idx_agent_audit_log_task_id ON agent_audit_log(task_id)`);
+
+    // A third table in this same store — JARVIS's user-facing live-state
+    // history (roadmap item: "what did JARVIS do 5 minutes ago", distinct
+    // from `agent_audit_log`'s per-taskId scope, since a plain chat turn
+    // with no AgentCore task at all still moves through LISTENING/
+    // THINKING/EXECUTING/etc). Reuses this store rather than standing up a
+    // second parallel audit system.
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS live_state_transitions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        from_state TEXT NOT NULL,
+        to_state TEXT NOT NULL,
+        reason TEXT,
+        language TEXT,
+        timestamp TEXT NOT NULL
+      )
+    `);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_live_state_transitions_session_id ON live_state_transitions(session_id)`);
+  }
+
+  /** Persists one `jarvis.liveState.changed` event — see `LiveStateTransitionEntry`. */
+  recordLiveStateTransition(entry: {
+    sessionId: string;
+    userId: string;
+    from: string;
+    to: string;
+    reason?: string;
+    language?: string;
+    timestamp?: number;
+  }): void {
+    const isoTimestamp = new Date(entry.timestamp ?? Date.now()).toISOString();
+    this.db
+      .query(
+        `INSERT INTO live_state_transitions (session_id, user_id, from_state, to_state, reason, language, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(entry.sessionId, entry.userId, entry.from, entry.to, entry.reason ?? null, entry.language ?? null, isoTimestamp);
+
+    this.db.run(
+      `DELETE FROM live_state_transitions WHERE id NOT IN (SELECT id FROM live_state_transitions ORDER BY id DESC LIMIT ${MAX_ROWS})`
+    );
+  }
+
+  /**
+   * Bounded, most-recent-first read of one session's live-state history —
+   * answers "what did JARVIS do a few minutes ago" (as opposed to
+   * `JarvisLiveStateTracker.getSnapshot`, which only ever answers "what is
+   * it doing right now"). Defaults to the last 20 transitions.
+   */
+  listRecentTransitions(sessionId: string, limit: number = 20): LiveStateTransitionEntry[] {
+    return this.db
+      .query(
+        `SELECT id, session_id as sessionId, user_id as userId, from_state as fromState, to_state as toState, reason, language, timestamp
+         FROM live_state_transitions WHERE session_id = ? ORDER BY id DESC LIMIT ?`
+      )
+      .all(sessionId, limit) as LiveStateTransitionEntry[];
   }
 
   /**

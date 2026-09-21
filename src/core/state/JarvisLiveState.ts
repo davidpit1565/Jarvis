@@ -42,6 +42,16 @@ export interface LiveStateSnapshot {
   state: LiveState;
   /** The language the current/most recent turn is replying in, when known. Unset until first observed. */
   language?: LiveLanguage;
+  /**
+   * The short human-readable reason from the most recent `transition()`
+   * call for this session, if one was given — the same string mirrored
+   * into `jarvis.liveState.changed`'s own `reason` field, kept here too so
+   * a caller reading just the current snapshot (e.g. a deterministic
+   * "what are you doing?" formatter — see
+   * src/core/state/liveStatusFormatter.ts) doesn't have to separately
+   * track the live event stream just to know the current state's reason.
+   */
+  reason?: string;
   /** True once `requestStop` has been called for this session and not yet cleared by a fresh transition out of STOPPED. */
   stopRequested: boolean;
   updatedAt: number;
@@ -200,6 +210,7 @@ export class JarvisLiveStateTracker {
       userId,
       state: to,
       language: options.language ?? current.language,
+      reason: options.reason,
       // Leaving STOPPED clears the flag; anything else preserves it as-is
       // (transitioning INTO STOPPED sets it via requestStop, not here,
       // since a plain transition() call is never how a stop is requested).

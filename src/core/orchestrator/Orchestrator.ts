@@ -15,6 +15,7 @@ import type { LockdownService } from "@/core/lockdown/LockdownService";
 import type { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 import type { ToolResultCache } from "@/core/cache/ToolResultCache";
 import { quarantineToolResult } from "@/core/orchestrator/toolResultQuarantine";
+import { summarizeToolResult } from "./toolResultSummary";
 
 export interface OrchestratorDependencies {
   brain: Brain;
@@ -105,6 +106,19 @@ export interface OrchestratorDependencies {
    * `DEFAULT_LOCAL_TOOL_TIMEOUT_MS` when unset.
    */
   localToolTimeoutMs?: number;
+  /**
+   * Optional hook letting `requestStop` also cancel any in-flight
+   * Autonomous Agent Core task(s) for the same user — see the doc comment
+   * on `requestStop` below. A plain duck-typed interface rather than an
+   * import of `AgentCore` itself: `AgentCore` already depends on
+   * `Orchestrator` (to run its plan steps through `executeToolCall`), so
+   * importing it back here would create a circular module dependency for
+   * no real benefit. `src/index.ts` wires the real `AgentCore` in via a
+   * small adapter. Omitted means `requestStop` only ever affects this
+   * Orchestrator's own plain-chat turn loop, exactly as before this hook
+   * existed.
+   */
+  agentTaskCanceller?: { cancelActiveTasksForUser(userId: string): string[] };
 }
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -299,14 +313,21 @@ export class Orchestrator {
    * `JarvisLiveStateTracker.requestStop`'s doc comment for exactly what
    * this can and can't interrupt (it stops the tool-call loop at its next
    * checkpoint; it can never abort a `Brain.chat()` call already in
-   * flight, since `Brain` has no cancellation signal today). Returns
-   * `false` if there was nothing active to stop (no `liveState` configured,
-   * or the session was already idle).
+   * flight, since `Brain` has no cancellation signal today). Also cancels
+   * any in-flight Autonomous Agent Core task(s) for this user, via the
+   * optional `agentTaskCanceller` hook — a plain chat turn and an agent
+   * task are otherwise two entirely separate systems (a plain turn never
+   * runs through AgentCore, and vice versa), so without this a Stop button
+   * on the Command Center would silently do nothing for a user whose only
+   * active work is an agent task, not a live chat turn. Returns `false`
+   * only if neither had anything active to stop (no `liveState` configured
+   * or the session was already idle, AND no agent task was cancelled).
    */
   requestStop(userId: string): boolean {
-    const { liveState } = this.deps;
-    if (!liveState) return false;
-    return liveState.requestStop(this.liveSessionId(userId), userId) !== undefined;
+    const { liveState, agentTaskCanceller } = this.deps;
+    const liveStateStopped = liveState ? liveState.requestStop(this.liveSessionId(userId), userId) !== undefined : false;
+    const cancelledTaskIds = agentTaskCanceller?.cancelActiveTasksForUser(userId) ?? [];
+    return liveStateStopped || cancelledTaskIds.length > 0;
   }
 
   /**
@@ -471,7 +492,14 @@ export class Orchestrator {
       toolResultCache.set(tool.name, toolCall.input, result);
     }
 
-    eventBus.emit("tool.executed", { toolName: tool.name, requestId, result, userId, input: toolCall.input });
+    eventBus.emit("tool.executed", {
+      toolName: tool.name,
+      requestId,
+      result,
+      userId,
+      input: toolCall.input,
+      resultSummary: summarizeToolResult(result),
+    });
     return result;
   }
 
@@ -524,6 +552,7 @@ export class Orchestrator {
         result,
         userId,
         input: toolCall.input,
+        resultSummary: summarizeToolResult(result),
       });
       return result;
     } catch (error) {

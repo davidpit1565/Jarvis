@@ -125,3 +125,42 @@ describe("ToolAuditLog", () => {
     log.close();
   });
 });
+
+describe("ToolAuditLog live-state transition history", () => {
+  test("records and lists a session's transitions, most recent first", () => {
+    const log = new ToolAuditLog(":memory:");
+    log.recordLiveStateTransition({ sessionId: "chat:alice", userId: "alice", from: "IDLE", to: "LISTENING", reason: "user message received" });
+    log.recordLiveStateTransition({ sessionId: "chat:alice", userId: "alice", from: "LISTENING", to: "THINKING" });
+
+    const transitions = log.listRecentTransitions("chat:alice");
+    expect(transitions).toHaveLength(2);
+    expect(transitions[0]?.toState).toBe("THINKING");
+    expect(transitions[1]?.toState).toBe("LISTENING");
+    expect(transitions[1]?.reason).toBe("user message received");
+    log.close();
+  });
+
+  test("is scoped per session — another session's transitions never leak in", () => {
+    const log = new ToolAuditLog(":memory:");
+    log.recordLiveStateTransition({ sessionId: "chat:alice", userId: "alice", from: "IDLE", to: "THINKING" });
+    log.recordLiveStateTransition({ sessionId: "chat:bob", userId: "bob", from: "IDLE", to: "THINKING" });
+
+    expect(log.listRecentTransitions("chat:alice")).toHaveLength(1);
+    expect(log.listRecentTransitions("chat:alice")[0]?.userId).toBe("alice");
+    log.close();
+  });
+
+  test("respects a limit", () => {
+    const log = new ToolAuditLog(":memory:");
+    for (let i = 0; i < 5; i++) {
+      log.recordLiveStateTransition({ sessionId: "chat:alice", userId: "alice", from: "IDLE", to: "THINKING", reason: `turn ${i}` });
+    }
+    expect(log.listRecentTransitions("chat:alice", 2)).toHaveLength(2);
+  });
+
+  test("an unknown session returns an empty list, not an error", () => {
+    const log = new ToolAuditLog(":memory:");
+    expect(log.listRecentTransitions("chat:nobody")).toEqual([]);
+    log.close();
+  });
+});
