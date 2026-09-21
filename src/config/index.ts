@@ -277,6 +277,31 @@ export interface JarvisConfig {
   /** Both required together to enable the video studio integration (reels list, publish, Instagram stats). */
   studioBaseUrl?: string;
   studioSecret?: string;
+  /** Path to the SQLite database storing tracked commitments/promises (CommitmentStore). */
+  commitmentsDbPath: string;
+  /**
+   * How many days an open commitment can go without being fulfilled
+   * before the follow-up engine marks it "stale" (see getStaleCommitments/
+   * CommitmentStore.markStale) and it starts surfacing as proactive
+   * context. Defaults to 3.
+   */
+  staleCommitmentDays: number;
+  /**
+   * Both optional, but meant to be set together: "HH:MM" 24-hour local
+   * bounds (in `timezone`) during which non-urgent proactive
+   * notifications (reminder due-notifications, automation-rule result
+   * pushes, the morning briefing) are suppressed and queued to fire once
+   * the window ends, instead of interrupting the user overnight. An
+   * overnight window (start > end, e.g. "22:00"-"07:00") is supported and
+   * expected. Time-critical channels — alarms and scheduled wake-up
+   * calls, which fire at a time the user explicitly set for that exact
+   * purpose — deliberately do NOT check this at all (see index.ts): quiet
+   * hours is an opt-out per notification type, not a blanket "no
+   * notifications" switch. Unset (either or both) disables quiet hours
+   * entirely.
+   */
+  quietHoursStart?: string;
+  quietHoursEnd?: string;
 }
 
 class ConfigError extends Error {}
@@ -590,6 +615,29 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("JARVIS_COST_ALERT_THRESHOLD_USD must be a positive number");
   }
 
+  const commitmentsDbPath = process.env.JARVIS_COMMITMENTS_DB_PATH ?? "./data/jarvis-commitments.sqlite";
+
+  const staleCommitmentDaysRaw = process.env.JARVIS_STALE_COMMITMENT_DAYS?.trim();
+  const staleCommitmentDays = staleCommitmentDaysRaw ? Number(staleCommitmentDaysRaw) : 3;
+  if (staleCommitmentDaysRaw && (Number.isNaN(staleCommitmentDays) || staleCommitmentDays <= 0)) {
+    throw new ConfigError("JARVIS_STALE_COMMITMENT_DAYS must be a positive number");
+  }
+
+  const HHMM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const quietHoursStart = process.env.JARVIS_QUIET_HOURS_START?.trim() || undefined;
+  const quietHoursEnd = process.env.JARVIS_QUIET_HOURS_END?.trim() || undefined;
+  if (quietHoursStart && !HHMM_PATTERN.test(quietHoursStart)) {
+    throw new ConfigError("JARVIS_QUIET_HOURS_START must be in HH:MM 24-hour format");
+  }
+  if (quietHoursEnd && !HHMM_PATTERN.test(quietHoursEnd)) {
+    throw new ConfigError("JARVIS_QUIET_HOURS_END must be in HH:MM 24-hour format");
+  }
+  if (Boolean(quietHoursStart) !== Boolean(quietHoursEnd)) {
+    throw new ConfigError(
+      "JARVIS_QUIET_HOURS_START and JARVIS_QUIET_HOURS_END must be set together (or neither) to enable quiet hours"
+    );
+  }
+
   return {
     brainProvider,
     brainProviderExplicit,
@@ -647,6 +695,10 @@ export function loadConfig(): JarvisConfig {
     spotifyTokenDbPath,
     studioBaseUrl,
     studioSecret,
+    commitmentsDbPath,
+    staleCommitmentDays,
+    quietHoursStart,
+    quietHoursEnd,
     telegramBotToken,
     telegramWebhookSecret,
     telegramAllowedChatIds,
