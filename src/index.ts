@@ -61,6 +61,13 @@ import { createCreateAutomationRuleTool } from "@/tools/automation/CreateAutomat
 import { createListAutomationRulesTool } from "@/tools/automation/ListAutomationRulesTool";
 import { createUpdateAutomationRuleTool } from "@/tools/automation/UpdateAutomationRuleTool";
 import { createDeleteAutomationRuleTool } from "@/tools/automation/DeleteAutomationRuleTool";
+import { CommitmentStore } from "@/commitments/CommitmentStore";
+import { getStaleCommitments } from "@/commitments/getStaleCommitments";
+import { createCreateCommitmentTool } from "@/tools/commitments/CreateCommitmentTool";
+import { createListCommitmentsTool } from "@/tools/commitments/ListCommitmentsTool";
+import { createFulfillCommitmentTool } from "@/tools/commitments/FulfillCommitmentTool";
+import { isQuietHours, isSuppressibleByQuietHours, type QuietHoursWindow } from "@/notifications/quietHours";
+import { NotificationDedup } from "@/notifications/NotificationDedup";
 import { getDueWakeUpCalls, formatTimeOfDay, formatDateKey } from "@/wakeup/getDueWakeUpCalls";
 import { createCreateWakeUpCallTool } from "@/tools/wakeup/CreateWakeUpCallTool";
 import { createListWakeUpCallsTool } from "@/tools/wakeup/ListWakeUpCallsTool";
@@ -193,6 +200,19 @@ function main() {
   // wholesale replacement of the console.log/console.error calls
   // throughout the rest of this file.
   const logger = new Logger("scheduler");
+  const commitmentStore = new CommitmentStore(config.commitmentsDbPath);
+  // Unset (either JARVIS_QUIET_HOURS_START or _END missing) means quiet
+  // hours is disabled entirely — isQuietHours(_, undefined) always
+  // returns false, so every proactive-notification check below behaves
+  // exactly as before.
+  const quietHoursWindow: QuietHoursWindow | undefined =
+    config.quietHoursStart && config.quietHoursEnd
+      ? { start: config.quietHoursStart, end: config.quietHoursEnd }
+      : undefined;
+  // Generalizes ReminderStore's own notifiedAt dedup to proactive
+  // channels that don't have a persisted per-item flag of their own —
+  // see NotificationDedup's own doc comment.
+  const notificationDedup = new NotificationDedup();
   const conversationHistoryStore = new ConversationHistoryStore(config.conversationHistoryDbPath);
   const activityLog = new ActivityLog(config.activityLogDbPath);
   const toolAuditLog = new ToolAuditLog(config.toolAuditLogDbPath);
@@ -320,6 +340,9 @@ function main() {
   toolRegistry.registerTool(createListAutomationRulesTool(automationRuleStore));
   toolRegistry.registerTool(createUpdateAutomationRuleTool(automationRuleStore));
   toolRegistry.registerTool(createDeleteAutomationRuleTool(automationRuleStore));
+  toolRegistry.registerTool(createCreateCommitmentTool(commitmentStore));
+  toolRegistry.registerTool(createListCommitmentsTool(commitmentStore));
+  toolRegistry.registerTool(createFulfillCommitmentTool(commitmentStore));
   toolRegistry.registerTool(createSearchConversationHistoryTool(conversationHistoryStore));
   toolRegistry.registerTool(createClearConversationHistoryTool(conversationHistoryStore));
 
@@ -337,6 +360,8 @@ function main() {
   permissionService.grant(DEFAULT_USER_ID, "CREATE_AUTOMATION_RULE");
   permissionService.grant(DEFAULT_USER_ID, "UPDATE_AUTOMATION_RULE");
   permissionService.grant(DEFAULT_USER_ID, "DELETE_AUTOMATION_RULE");
+  permissionService.grant(DEFAULT_USER_ID, "CREATE_COMMITMENT");
+  permissionService.grant(DEFAULT_USER_ID, "FULFILL_COMMITMENT");
   // DANGEROUS: granted so the tool is askable at all, but PermissionService
   // still forces a fresh per-invocation confirmation regardless of this
   // grant — this never lets JARVIS erase the transcript silently.
@@ -465,7 +490,7 @@ function main() {
     deviceRegistry,
     deviceConnectionManager,
     confirmationService,
-    contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+    contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
     lockdownService,
   });
 
@@ -485,7 +510,7 @@ function main() {
       deviceConnectionManager,
       confirmationService: phoneConfirmationService,
       channelContext: "This conversation is happening over a live phone call right now.",
-      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
@@ -525,7 +550,7 @@ function main() {
         "today — a meeting, a task, a workout). If they push back or say they're tired, don't just accept it: " +
         "persuade them further with another real, specific reason, the way a determined friend would, rather " +
         "than immediately backing off. Keep replies short and energetic — this is a live phone call.",
-      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
@@ -591,7 +616,7 @@ function main() {
       deviceConnectionManager,
       confirmationService: phoneConfirmationService,
       channelContext: "This conversation is happening over text message (SMS) right now.",
-      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
     });
     return { orchestrator: smsOrchestrator, userId: DEFAULT_USER_ID };
@@ -618,7 +643,7 @@ function main() {
       deviceConnectionManager,
       confirmationService: telegramConfirmationService,
       channelContext: "This conversation is happening over Telegram right now.",
-      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
     });
     return { orchestrator: telegramOrchestrator, userId: DEFAULT_USER_ID };
@@ -696,7 +721,7 @@ function main() {
       deviceConnectionManager,
       confirmationService: voiceConfirmationService,
       channelContext: "This conversation is happening by voice, right now, on the user's Mac.",
-      contextProvider: () => buildContextNote(config, reminderStore, calendarClient),
+      contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
     });
     return { orchestrator: voiceOrchestrator, userId: DEFAULT_USER_ID };
@@ -900,17 +925,15 @@ function main() {
   const morningBriefingEnabled = Boolean(config.morningBriefingTime && telegramGateway && config.telegramOwnerChatId);
   if (morningBriefingEnabled) {
     let lastMorningBriefingDateKey: string | null = null;
-    morningBriefingInterval = setInterval(async () => {
-      schedulerHealthTracker.tick("morningBriefing");
-      const now = new Date();
-      const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
-      const todayDateKey = formatDateKey(now, config.timezone);
+    // Set when the briefing became due while quiet hours were active —
+    // held here instead of being sent (or dropped) immediately, and
+    // flushed by the very next tick once quiet hours end, same calendar
+    // day. `lastMorningBriefingDateKey` is still set the moment it
+    // becomes due (not when it's actually sent), so isMorningBriefingDue
+    // never re-captures it a second time that day.
+    let pendingMorningBriefingDateKey: string | null = null;
 
-      if (!isMorningBriefingDue(config.morningBriefingTime!, nowTimeOfDay, todayDateKey, lastMorningBriefingDateKey)) {
-        return;
-      }
-      lastMorningBriefingDateKey = todayDateKey;
-
+    async function sendMorningBriefing(now: Date): Promise<void> {
       const weather = await weatherClient?.getCurrentWeather().catch(() => undefined);
       const todaysEvents = calendarClient ? await calendarClient.listUpcomingEvents(10).catch(() => []) : [];
       const nowIso = now.toISOString();
@@ -923,6 +946,31 @@ function main() {
           error instanceof Error ? error.message : String(error)
         );
       });
+    }
+
+    morningBriefingInterval = setInterval(async () => {
+      schedulerHealthTracker.tick("morningBriefing");
+      const now = new Date();
+      const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
+      const todayDateKey = formatDateKey(now, config.timezone);
+      const quiet = isSuppressibleByQuietHours("morning_briefing") && isQuietHours(nowTimeOfDay, quietHoursWindow);
+
+      if (isMorningBriefingDue(config.morningBriefingTime!, nowTimeOfDay, todayDateKey, lastMorningBriefingDateKey)) {
+        lastMorningBriefingDateKey = todayDateKey;
+        if (quiet) {
+          // Queued: nothing sent now, but flushed below the first time a
+          // later tick lands outside the quiet-hours window.
+          pendingMorningBriefingDateKey = todayDateKey;
+        } else {
+          await sendMorningBriefing(now);
+        }
+        return;
+      }
+
+      if (pendingMorningBriefingDateKey === todayDateKey && !quiet) {
+        pendingMorningBriefingDateKey = null;
+        await sendMorningBriefing(now);
+      }
     }, 30_000);
   }
 
@@ -934,12 +982,31 @@ function main() {
   // pattern as the wake-up call scheduler above, for the same reason: a
   // slow turn still running when the next tick fires shouldn't trigger
   // the same rule twice.
+  //
+  // Quiet hours applies only to the *result push* (the Telegram message
+  // telling the user what the rule did), not to running the rule itself —
+  // a rule might do real, time-sensitive work regardless of the hour. A
+  // push suppressed by quiet hours is queued here (not dropped) and
+  // flushed by the first tick once the window ends.
   const inFlightAutomationRuleIds = new Set<string>();
+  const pendingQuietAutomationPushes: string[] = [];
   const automationRuleInterval = setInterval(() => {
     schedulerHealthTracker.tick("automationRules");
     const now = new Date();
     const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
     const todayDateKey = formatDateKey(now, config.timezone);
+    const quiet = isSuppressibleByQuietHours("automation_rule_result") && isQuietHours(nowTimeOfDay, quietHoursWindow);
+
+    if (!quiet && pendingQuietAutomationPushes.length > 0 && telegramGateway && config.telegramOwnerChatId) {
+      for (const queuedMessage of pendingQuietAutomationPushes.splice(0)) {
+        if (notificationDedup.shouldSend(`automation-push:${queuedMessage}`)) {
+          telegramGateway.sendMessage(config.telegramOwnerChatId, queuedMessage).catch(() => {
+            // Best-effort push — already logged when the rule ran.
+          });
+        }
+      }
+    }
+
     const due = getDueAutomationRules(automationRuleStore.list(), nowTimeOfDay, todayDateKey, inFlightAutomationRuleIds);
 
     for (const rule of due) {
@@ -950,9 +1017,13 @@ function main() {
           automationRuleStore.markTriggered(rule.id, todayDateKey);
           activityLog.record(`Automation ran: ${rule.instruction.slice(0, 100)}`);
           if (telegramGateway && config.telegramOwnerChatId) {
-            telegramGateway!.sendMessage(config.telegramOwnerChatId!, reply).catch(() => {
-              // Best-effort push — the rule still ran and is logged above either way.
-            });
+            if (isSuppressibleByQuietHours("automation_rule_result") && isQuietHours(formatTimeOfDay(new Date(), config.timezone), quietHoursWindow)) {
+              pendingQuietAutomationPushes.push(reply);
+            } else if (notificationDedup.shouldSend(`automation-push:${reply}`)) {
+              telegramGateway!.sendMessage(config.telegramOwnerChatId!, reply).catch(() => {
+                // Best-effort push — the rule still ran and is logged above either way.
+              });
+            }
           }
         })
         .catch((error) => {
@@ -996,9 +1067,20 @@ function main() {
   // safe across restarts: a reminder already notified stays that way, and
   // one edited to a new due date (ReminderStore.update clears notifiedAt)
   // is treated as due again.
+  //
+  // Quiet hours: a due-but-unnotified reminder found during quiet hours is
+  // simply left alone (markNotified is only called outside the window) —
+  // getDueUnnotified keeps returning it on every tick until a tick lands
+  // outside the window, which is exactly "queued to fire at the window's
+  // end" without needing a separate queue/timer of its own. Reminders are
+  // deliberately one of the notification types quiet hours DOES apply to
+  // (see JarvisConfig.quietHoursStart's own doc comment for which types
+  // opt out instead).
   const reminderNotificationInterval = setInterval(() => {
     schedulerHealthTracker.tick("reminderNotifications");
-    const nowIso = new Date().toISOString();
+    const now = new Date();
+    const nowIso = now.toISOString();
+    if (isSuppressibleByQuietHours("reminder") && isQuietHours(formatTimeOfDay(now, config.timezone), quietHoursWindow)) return;
     const due = reminderStore.getDueUnnotified(nowIso);
 
     for (const reminder of due) {
@@ -1019,6 +1101,38 @@ function main() {
       const primaryDevice = deviceRegistry.getPrimaryDevice();
       if (primaryDevice) {
         deviceConnectionManager.sendNotification(primaryDevice.id, "JARVIS Reminder", reminder.text);
+      }
+    }
+  }, 30_000);
+
+  // Follow-up engine / stale-commitment detection: same setInterval +
+  // in-flight-id-set pattern as the schedulers above, but this tick
+  // doesn't push anything itself — it only transitions an open
+  // commitment to "stale" once it's been open longer than
+  // JARVIS_STALE_COMMITMENT_DAYS (getStaleCommitments/markStale). The
+  // actual surfacing to the user happens via staleCommitmentsNote inside
+  // buildContextNote, the same proactive-context-injection mechanism
+  // dueRemindersNote already uses for overdue reminders — deliberately
+  // NOT a second notification channel (see CommitmentStore's own doc
+  // comment and JARVIS_ROADMAP_AUDIT.md #128/#129).
+  const staleCommitmentThresholdMs = config.staleCommitmentDays * 24 * 60 * 60 * 1000;
+  const inFlightStaleCommitmentIds = new Set<string>();
+  const staleCommitmentInterval = setInterval(() => {
+    const nowIso = new Date().toISOString();
+    const stale = getStaleCommitments(
+      commitmentStore.list("open"),
+      staleCommitmentThresholdMs,
+      nowIso,
+      inFlightStaleCommitmentIds
+    );
+
+    for (const commitment of stale) {
+      inFlightStaleCommitmentIds.add(commitment.id);
+      try {
+        commitmentStore.markStale(commitment.id);
+        activityLog.record(`Commitment went stale: ${commitment.text.slice(0, 100)}`);
+      } finally {
+        inFlightStaleCommitmentIds.delete(commitment.id);
       }
     }
   }, 30_000);
@@ -1059,6 +1173,7 @@ function main() {
       config.memoryDbPath,
       config.webauthnDbPath,
       config.remindersDbPath,
+      config.commitmentsDbPath,
       config.activityLogDbPath,
       config.conversationHistoryDbPath,
       config.pairingDbPath,
@@ -1217,6 +1332,8 @@ function main() {
     reminderStore.close();
     automationRuleStore.close();
     automationFailureStore.close();
+    commitmentStore.close();
+    if (staleCommitmentInterval) clearInterval(staleCommitmentInterval);
     conversationHistoryStore.close();
     activityLog.close();
     toolAuditLog.close();
