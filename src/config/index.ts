@@ -18,6 +18,28 @@ export interface JarvisConfig {
   /** Groq model id; unset uses GroqBrain's own default (a real tool-calling-capable free-tier model). */
   groqModel?: string;
   /**
+   * Optional OpenRouter API key — when set, AIProviderRegistry registers
+   * an `OpenRouterBrain` as another free-tier provider alongside Groq.
+   * Wholly optional: unset means OpenRouter is simply unavailable, same
+   * as any other unconfigured provider, never a crash and never a silent
+   * fallback to a paid one.
+   */
+  openrouterApiKey?: string;
+  /**
+   * OpenRouter model id; unset uses OpenRouterBrain's own default. Must
+   * carry OpenRouter's ":free" suffix — OpenRouterBrain refuses to
+   * construct with anything else (see its own doc comment for why).
+   */
+  openrouterModel?: string;
+  /**
+   * Enables Anthropic prompt caching (`cache_control: ephemeral`) on the
+   * system prompt and tool definitions ClaudeBrain sends. A pure cost
+   * optimization with no behavior change, so it defaults to on; set
+   * JARVIS_PROMPT_CACHING=false only to rule it out while debugging a
+   * cost/usage discrepancy. See ClaudeBrainOptions.promptCachingEnabled.
+   */
+  promptCachingEnabled: boolean;
+  /**
    * Whether AIRouter should prefer a free-tier provider (currently: Groq)
    * over a paid one when no explicit JARVIS_BRAIN_PROVIDER is set and
    * more than one provider is configured. Defaults to true — "free
@@ -52,6 +74,16 @@ export interface JarvisConfig {
   aiCircuitBreakerCooldownMs: number;
   /** Path to the SQLite database storing AIRouter's per-call estimated-cost records (CostTracker). */
   aiCostDbPath: string;
+  /**
+   * TTL (ms) for the in-memory READ-tool result cache (ToolResultCache) —
+   * how long an identical READ-tool call's result is served from cache
+   * instead of re-running the tool (e.g. a repeated GET_WEATHER for the
+   * same location). 0 disables the cache entirely (every call always
+   * re-runs the tool, today's behavior). Defaults to 60000 (60s): long
+   * enough to dedupe a burst of near-identical questions in one
+   * conversation, short enough that stale data is never surfaced for long.
+   */
+  toolResultCacheTtlMs: number;
   port: number;
   memoryDbPath: string;
   /** Path to the SQLite database storing registered Face ID/Touch ID (WebAuthn) credentials. */
@@ -367,6 +399,11 @@ export function loadConfig(): JarvisConfig {
     );
   }
   const groqModel = process.env.JARVIS_GROQ_MODEL?.trim() || undefined;
+  const openrouterApiKey = process.env.OPENROUTER_API_KEY?.trim() || undefined;
+  const openrouterModel = process.env.JARVIS_OPENROUTER_MODEL?.trim() || undefined;
+
+  const promptCachingRaw = process.env.JARVIS_PROMPT_CACHING?.trim().toLowerCase();
+  const promptCachingEnabled = promptCachingRaw === undefined || promptCachingRaw === "" ? true : promptCachingRaw === "true";
 
   const aiFreeFirstRaw = process.env.AI_FREE_FIRST?.trim().toLowerCase();
   const aiFreeFirst = aiFreeFirstRaw === undefined || aiFreeFirstRaw === "" ? true : aiFreeFirstRaw === "true";
@@ -411,6 +448,11 @@ export function loadConfig(): JarvisConfig {
   }
 
   const aiCostDbPath = process.env.JARVIS_AI_COST_DB_PATH ?? "./data/jarvis-ai-cost.sqlite";
+  const toolResultCacheTtlMsRaw = process.env.JARVIS_TOOL_RESULT_CACHE_TTL_MS?.trim();
+  const toolResultCacheTtlMs = toolResultCacheTtlMsRaw !== undefined && toolResultCacheTtlMsRaw !== "" ? Number(toolResultCacheTtlMsRaw) : 60_000;
+  if (toolResultCacheTtlMsRaw && (!Number.isInteger(toolResultCacheTtlMs) || toolResultCacheTtlMs < 0)) {
+    throw new ConfigError("Invalid JARVIS_TOOL_RESULT_CACHE_TTL_MS: must be a non-negative integer");
+  }
   const port = Number(process.env.JARVIS_PORT ?? "4770");
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
   const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
@@ -674,6 +716,9 @@ export function loadConfig(): JarvisConfig {
     anthropicApiKey,
     groqApiKey,
     groqModel,
+    openrouterApiKey,
+    openrouterModel,
+    promptCachingEnabled,
     aiFreeFirst,
     aiFallbackProvider,
     maxDailyCostUsd,
@@ -682,6 +727,7 @@ export function loadConfig(): JarvisConfig {
     aiCircuitBreakerThreshold,
     aiCircuitBreakerCooldownMs,
     aiCostDbPath,
+    toolResultCacheTtlMs,
     port,
     memoryDbPath,
     webauthnDbPath,
@@ -761,6 +807,7 @@ export function loadConfig(): JarvisConfig {
 const KNOWN_SECRET_CONFIG_FIELDS: ReadonlySet<keyof JarvisConfig> = new Set([
   "anthropicApiKey",
   "groqApiKey",
+  "openrouterApiKey",
   "twilioAuthToken",
   "telegramBotToken",
   "telegramWebhookSecret",

@@ -4,6 +4,7 @@ import {
   buildAnthropicTools,
   fromAnthropicResponse,
   isRetryableWithFallback,
+  markLastToolCacheable,
   toAnthropicMessages,
 } from "@/core/brain/ClaudeBrain";
 import type { ToolDefinition } from "@/types/tools";
@@ -248,5 +249,88 @@ describe("toAnthropicMessages (vision/image support)", () => {
     const messages: ConversationMessage[] = [{ role: "user", content: "hi", images: [] }];
     const [result] = toAnthropicMessages(messages);
     expect(result?.content).toBe("hi");
+  });
+});
+
+describe("markLastToolCacheable", () => {
+  test("marks the last tool with an ephemeral cache breakpoint", () => {
+    const tools: Anthropic.ToolUnion[] = [
+      { name: "a", description: "a", input_schema: { type: "object", properties: {} } },
+      { name: "b", description: "b", input_schema: { type: "object", properties: {} } },
+    ];
+    markLastToolCacheable(tools);
+    expect((tools[0] as Anthropic.Tool).cache_control).toBeUndefined();
+    expect((tools[1] as Anthropic.Tool).cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  test("is a no-op on an empty tools array", () => {
+    const tools: Anthropic.ToolUnion[] = [];
+    expect(() => markLastToolCacheable(tools)).not.toThrow();
+  });
+});
+
+describe("ClaudeBrain.chat prompt caching", () => {
+  function stubClientAndCapture(brain: ClaudeBrain): { calls: unknown[] } {
+    const calls: unknown[] = [];
+    const fakeResponse = makeResponse([{ type: "text", text: "ok" }]);
+    const fakeClient = {
+      messages: {
+        create: async (params: unknown) => {
+          calls.push(params);
+          return fakeResponse;
+        },
+      },
+      baseURL: "https://api.anthropic.com",
+    };
+    (brain as unknown as { client: unknown }).client = fakeClient;
+    return { calls };
+  }
+
+  test("sends the system prompt as a cached text block by default", async () => {
+    const brain = new ClaudeBrain("sk-ant-test-key");
+    const { calls } = stubClientAndCapture(brain);
+
+    await brain.chat({ messages: [{ role: "user", content: "hi" }], tools: [], context: "You are JARVIS." });
+
+    const sent = calls[0] as { system: unknown };
+    expect(sent.system).toEqual([{ type: "text", text: "You are JARVIS.", cache_control: { type: "ephemeral" } }]);
+  });
+
+  test("marks the last tool definition as cacheable by default", async () => {
+    const brain = new ClaudeBrain("sk-ant-test-key");
+    const { calls } = stubClientAndCapture(brain);
+
+    await brain.chat({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ name: "get_weather", description: "Gets weather", input_schema: { type: "object", properties: {} } }],
+    });
+
+    const sent = calls[0] as { tools: Array<{ cache_control?: unknown }> };
+    expect(sent.tools[sent.tools.length - 1]?.cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  test("promptCachingEnabled: false sends the system prompt as a plain string and leaves tools unmarked", async () => {
+    const brain = new ClaudeBrain("sk-ant-test-key", { promptCachingEnabled: false });
+    const { calls } = stubClientAndCapture(brain);
+
+    await brain.chat({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ name: "get_weather", description: "Gets weather", input_schema: { type: "object", properties: {} } }],
+      context: "You are JARVIS.",
+    });
+
+    const sent = calls[0] as { system: unknown; tools: Array<{ cache_control?: unknown }> };
+    expect(sent.system).toBe("You are JARVIS.");
+    expect(sent.tools[0]?.cache_control).toBeUndefined();
+  });
+
+  test("with no context at all, system stays undefined regardless of caching", async () => {
+    const brain = new ClaudeBrain("sk-ant-test-key");
+    const { calls } = stubClientAndCapture(brain);
+
+    await brain.chat({ messages: [{ role: "user", content: "hi" }], tools: [] });
+
+    const sent = calls[0] as { system: unknown };
+    expect(sent.system).toBeUndefined();
   });
 });

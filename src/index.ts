@@ -5,11 +5,13 @@ import { EventBus } from "@/core/events/EventBus";
 import { ConversationManager } from "@/core/conversation/ConversationManager";
 import { ClaudeBrain, DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { GroqBrain } from "@/core/brain/GroqBrain";
+import { OpenRouterBrain, OpenRouterPaidModelError } from "@/core/brain/OpenRouterBrain";
 import { AIProviderRegistry } from "@/core/brain/AIProviderRegistry";
 import { AIRouter } from "@/core/brain/AIRouter";
 import { CostTracker } from "@/core/cost/CostTracker";
 import type { Brain } from "@/types/brain";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
+import { ToolResultCache } from "@/core/cache/ToolResultCache";
 import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionService } from "@/permissions/PermissionService";
@@ -447,6 +449,28 @@ function main() {
   if (config.groqApiKey) {
     aiRegistry.register("groq", new GroqBrain(config.groqApiKey, { model: config.groqModel }), "free");
   }
+  // OpenRouter is registered as a second, independent free-tier provider
+  // next to Groq — OPENROUTER_API_KEY unset simply means it's
+  // unavailable, exactly like every other optional provider here, never
+  // a crash and never a silent fallback to a paid one. OpenRouterBrain
+  // itself refuses to construct against anything but a ":free" model
+  // (see its own doc comment), so registering it as "free" here is
+  // always honest regardless of ZERO_COST_MODE/budget settings.
+  if (config.openrouterApiKey) {
+    try {
+      aiRegistry.register(
+        "openrouter",
+        new OpenRouterBrain(config.openrouterApiKey, { model: config.openrouterModel }),
+        "free"
+      );
+    } catch (error) {
+      if (error instanceof OpenRouterPaidModelError) {
+        console.error(`[jarvis] OpenRouter provider NOT registered: ${error.message}`);
+      } else {
+        throw error;
+      }
+    }
+  }
   if (config.anthropicApiKey) {
     aiRegistry.register(
       "anthropic",
@@ -457,6 +481,7 @@ function main() {
         webFetchMaxUses: config.webFetchMaxUses,
         baseUrl: config.anthropicBaseUrl,
         fallbackModel: config.fallbackModel,
+        promptCachingEnabled: config.promptCachingEnabled,
       }),
       "paid"
     );
@@ -484,6 +509,12 @@ function main() {
   const brain: Brain = aiRouter;
   const confirmationService = new ConfirmationService(confirmViaChat);
   const phoneConfirmationService = new ConfirmationService(denyPhoneConfirmation);
+  // Shared across every channel's Orchestrator below — a repeated
+  // READ-level tool call (e.g. GET_WEATHER for the same location) hits
+  // this cache regardless of which channel asked first. TTL 0
+  // (JARVIS_TOOL_RESULT_CACHE_TTL_MS=0) disables caching entirely; see
+  // ToolResultCache's own doc comment.
+  const toolResultCache = new ToolResultCache(config.toolResultCacheTtlMs);
 
   const orchestrator = new Orchestrator({
     brain,
@@ -496,6 +527,7 @@ function main() {
     confirmationService,
     contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
     lockdownService,
+    toolResultCache,
   });
 
   // Autonomous Agent Core — Goal Engine + persistent/priority task queue +
@@ -549,6 +581,7 @@ function main() {
       channelContext: "This conversation is happening over a live phone call right now.",
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
+      toolResultCache,
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -589,6 +622,7 @@ function main() {
         "than immediately backing off. Keep replies short and energetic — this is a live phone call.",
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
+      toolResultCache,
     });
     return { orchestrator: phoneOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -655,6 +689,7 @@ function main() {
       channelContext: "This conversation is happening over text message (SMS) right now.",
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
+      toolResultCache,
     });
     return { orchestrator: smsOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -682,6 +717,7 @@ function main() {
       channelContext: "This conversation is happening over Telegram right now.",
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
+      toolResultCache,
     });
     return { orchestrator: telegramOrchestrator, userId: DEFAULT_USER_ID };
   }
@@ -760,6 +796,7 @@ function main() {
       channelContext: "This conversation is happening by voice, right now, on the user's Mac.",
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
+      toolResultCache,
     });
     return { orchestrator: voiceOrchestrator, userId: DEFAULT_USER_ID };
   }

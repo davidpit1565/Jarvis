@@ -1867,6 +1867,54 @@ not replace — the existing all-time `costAlertThresholdUsd`/
 time-windowed (today/this month) specifically so `MAX_DAILY_COST_USD`/
 `MAX_MONTHLY_COST_USD` can mean what they say.
 
+## OpenRouter: a third free-tier provider
+
+Set `OPENROUTER_API_KEY` to register `OpenRouterBrain` as another `free`-tier
+`Brain` alongside Groq. It deliberately only ever calls OpenRouter's own
+`":free"`-suffixed models (default: `meta-llama/llama-3.3-70b-instruct:free`,
+overridable with `JARVIS_OPENROUTER_MODEL`) — constructing it against
+anything else throws `OpenRouterPaidModelError` at startup rather than risk
+a silent paid call, since JARVIS has no per-model pricing table for
+OpenRouter's much larger, mostly-paid catalog. Unset means it's simply
+unavailable, exactly like an unconfigured Groq/Anthropic key: no crash, no
+silent fallback to a paid provider. Because it's always `free`, it needs no
+special-casing anywhere `ZERO_COST_MODE`/budget logic runs — it's just
+another free provider next to Groq.
+
+`src/core/brain/ModelCatalog.ts` is a small, hand-maintained, typed list
+(`MODEL_CATALOG`) of the models JARVIS actually knows about — provider, cost
+tier, and coarse capabilities (tool-calling, vision, quality) — for a future
+status endpoint or task-aware router to read from one place instead of
+re-deriving this from scattered model-id string literals. It's descriptive
+metadata only; it doesn't drive routing today.
+
+## Prompt caching and tool-result caching
+
+`ClaudeBrain` sends the system prompt and tool definitions with Anthropic's
+native prompt caching (`cache_control: {type: "ephemeral"}`) by default —
+both are large and identical, byte for byte, on almost every call in a
+conversation, so caching them means later calls in the same ~5-minute window
+only pay the steeply discounted cache-read rate for that prefix. Pure cost
+optimization, zero behavior change; set `JARVIS_PROMPT_CACHING=false` to rule
+it out while debugging a cost/usage discrepancy.
+
+`ToolResultCache` (`src/core/cache/ToolResultCache.ts`) is a small in-memory,
+TTL-based cache (no external dependency) of tool-call results, keyed on the
+tool name plus its exact input. `Orchestrator` only ever consults it for
+`LocalTool`s at `PermissionLevel.READ` — a repeated `GET_WEATHER` for the
+same city within the TTL is served from memory instead of re-running the
+tool; anything that mutates state (`SAFE_ACTION`/`CONFIRM`/`DANGEROUS`) is
+never cached. `JARVIS_TOOL_RESULT_CACHE_TTL_MS` controls the TTL (default
+`60000`; `0` disables caching entirely). A cache hit emits `tool.cacheHit` on
+the shared `EventBus`.
+
+A real embedding-based semantic cache (catching near-identical, not just
+identical, prompts/tool calls) was deliberately not built — JARVIS has no
+embeddings infrastructure, and adding one would mean either a new paid API
+call (spending money to build a *cost-saving* feature) or an unreliable
+zero-cost text-similarity heuristic that risks serving a stale answer to a
+materially different question.
+
 ## Free ($0) hosting: Cloudflare Tunnel instead of Fly.io
 
 Fly.io (see "Cloud deployment" above) is a real, small, but **not actually

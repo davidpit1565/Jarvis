@@ -17,6 +17,8 @@ export interface JarvisEventMap {
     input: Record<string, unknown>;
   };
   "tool.dispatched": { toolName: string; deviceId: string; requestId: string };
+  /** A READ-level local tool call was served from `ToolResultCache` instead of actually re-running the tool. */
+  "tool.cacheHit": { toolName: string; input: Record<string, unknown> };
   "permission.checked": { toolId: string; result: PermissionCheckResult };
   "device.registered": { device: Device };
   "device.connected": { deviceId: string };
