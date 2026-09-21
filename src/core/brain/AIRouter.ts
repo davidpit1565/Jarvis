@@ -162,6 +162,37 @@ function maxQualityForProvider(provider: ProviderName): number {
   return modelsForProvider(provider).reduce((max, entry) => Math.max(max, QUALITY_RANK[entry.capabilities.quality]), -1);
 }
 
+/**
+ * "Why did you use this model?" decision metadata (JARVIS_ROADMAP_AUDIT.md
+ * batch 4): a closed set of enum values naming the real `AIRouter` code
+ * path that decided which provider actually served one call — never
+ * free-text, and never LLM-generated. Persisted per-call via
+ * `CostCallDetails.decisionReason`/`CostRecord.decisionReason` and exposed
+ * through `GET /cost-analytics` (aggregate `recent` list and
+ * `?runId=` ledger). The "no-story" default case (nothing special fired,
+ * this was just the normal free-first/only/explicit pick) is one of
+ * `"primary-free-first"`, `"primary-explicit"`, `"primary-default"` —
+ * still a real, honest answer, just "no special condition applied" rather
+ * than an invented reason.
+ */
+export type ProviderDecisionReason =
+  | "primary-explicit"
+  | "primary-free-first"
+  | "primary-default"
+  | "vision-required"
+  | "zero-cost-mode"
+  | "budget-exceeded"
+  | "run-budget-exceeded"
+  | "soft-budget-cap"
+  | "circuit-open"
+  | "call-failed"
+  | "escalation-retry";
+
+/** Mutable single-slot holder threaded through one call's routing decisions, so the final actual reason (which may get overridden by a later, more specific decision — e.g. "primary-free-first" overridden by "budget-exceeded" when the budget check swaps providers) can be read back by the caller. */
+interface DecisionRef {
+  value: ProviderDecisionReason;
+}
+
 type CircuitState = "closed" | "open" | "half-open";
 
 interface ProviderRuntime {
@@ -291,7 +322,7 @@ export class AIRouter implements Brain {
 
     this.options.eventBus?.emit("ai.escalation", { from: used.value, to: actual, reason: "validation-failed" });
     try {
-      return await this.timedCall(actual, request, true);
+      return await this.timedCall(actual, request, true, { value: "escalation-retry" });
     } catch {
       // The stronger provider's call itself failed — fall back to the
       // original response rather than throwing, and never retry again
@@ -301,26 +332,31 @@ export class AIRouter implements Brain {
   }
 
   private async chatInternal(request: BrainRequest, providerUsedOut?: { value?: ProviderName }): Promise<BrainResponse> {
-    const primary = this.applyBudget(this.resolvePrimary(request), request);
+    const resolved = this.resolvePrimaryWithReason(request);
+    const decisionRef: DecisionRef = { value: resolved.reason };
+    const primary = this.applyBudget(resolved.provider, request, undefined, decisionRef);
     const tried = new Set<ProviderName>([primary]);
 
     if (this.effectiveCircuitState(primary) === "open") {
+      decisionRef.value = "circuit-open";
       return this.routeToFallback(
         primary,
         request,
         "circuit-open",
         tried,
         new CircuitOpenError(this.circuitOpenMessage(primary)),
-        providerUsedOut
+        providerUsedOut,
+        decisionRef
       );
     }
 
     try {
-      const response = await this.timedCall(primary, request);
+      const response = await this.timedCall(primary, request, false, decisionRef);
       if (providerUsedOut) providerUsedOut.value = primary;
       return response;
     } catch (primaryError) {
-      return this.routeToFallback(primary, request, "call-failed", tried, primaryError, providerUsedOut);
+      decisionRef.value = "call-failed";
+      return this.routeToFallback(primary, request, "call-failed", tried, primaryError, providerUsedOut, decisionRef);
     }
   }
 
@@ -358,7 +394,8 @@ export class AIRouter implements Brain {
     reason: "call-failed" | "circuit-open",
     tried: Set<ProviderName>,
     errorIfUnusable: unknown,
-    providerUsedOut?: { value?: ProviderName }
+    providerUsedOut?: { value?: ProviderName },
+    decisionRef?: DecisionRef
   ): Promise<BrainResponse> {
     const fallback = this.resolveFallback(primary, request);
     if (!fallback) throw errorIfUnusable;
@@ -366,24 +403,29 @@ export class AIRouter implements Brain {
     // applyBudget may itself throw (BudgetExceededError/ZeroCostModeError/
     // RunBudgetExceededError) — that's a more specific, more useful error
     // than errorIfUnusable and is allowed to propagate as-is.
-    const actualFallback = this.applyBudget(fallback, request, tried);
+    const actualFallback = this.applyBudget(fallback, request, tried, decisionRef);
     tried.add(actualFallback);
     if (this.effectiveCircuitState(actualFallback) === "open") throw errorIfUnusable;
 
     this.options.eventBus?.emit("ai.providerFallback", { from: primary, to: actualFallback, reason });
-    const response = await this.timedCall(actualFallback, request, true);
+    const response = await this.timedCall(actualFallback, request, true, decisionRef);
     if (providerUsedOut) providerUsedOut.value = actualFallback;
     return response;
   }
 
-  private async timedCall(provider: ProviderName, request: BrainRequest, isFallback = false): Promise<BrainResponse> {
+  private async timedCall(
+    provider: ProviderName,
+    request: BrainRequest,
+    isFallback = false,
+    decisionRef?: DecisionRef
+  ): Promise<BrainResponse> {
     const wasHalfOpenTrial = this.effectiveCircuitState(provider) === "half-open";
     const start = performance.now();
     try {
       const response = await this.registry.get(provider)!.chat(request);
       const latencyMs = performance.now() - start;
       this.recordOutcome(provider, true, latencyMs, wasHalfOpenTrial);
-      this.recordCost(provider, response, request, latencyMs, isFallback);
+      this.recordCost(provider, response, request, latencyMs, isFallback, decisionRef?.value ?? "primary-default");
       return response;
     } catch (err) {
       this.recordOutcome(provider, false, performance.now() - start, wasHalfOpenTrial);
@@ -404,8 +446,20 @@ export class AIRouter implements Brain {
    * second-guessed here.
    */
   private resolvePrimary(request: BrainRequest): ProviderName {
+    return this.resolvePrimaryWithReason(request).provider;
+  }
+
+  /**
+   * Same resolution as `resolvePrimary`, plus the real, honest reason THIS
+   * primary was picked — "why did you use this model?" decision metadata
+   * (see `ProviderDecisionReason`'s own doc comment). An explicit operator
+   * choice and a hard vision requirement both take precedence over the
+   * "no-story" free-first/default cases, matching the priority
+   * `resolvePrimary` itself already enforced.
+   */
+  private resolvePrimaryWithReason(request: BrainRequest): { provider: ProviderName; reason: ProviderDecisionReason } {
     if (this.options.explicitProvider && this.registry.has(this.options.explicitProvider)) {
-      return this.options.explicitProvider;
+      return { provider: this.options.explicitProvider, reason: "primary-explicit" };
     }
 
     if (requestNeedsVision(request)) {
@@ -418,21 +472,21 @@ export class AIRouter implements Brain {
       }
       if (this.freeFirst) {
         const freeVisionCapable = visionCapable.find((name) => this.registry.getMeta(name)?.costTier === "free");
-        if (freeVisionCapable) return freeVisionCapable;
+        if (freeVisionCapable) return { provider: freeVisionCapable, reason: "vision-required" };
       }
-      return visionCapable[0]!;
+      return { provider: visionCapable[0]!, reason: "vision-required" };
     }
 
     if (this.freeFirst) {
       const free = this.registry.findByCostTier("free")[0];
-      if (free) return free;
+      if (free) return { provider: free, reason: "primary-free-first" };
     }
 
-    if (this.registry.has("anthropic")) return "anthropic";
-    if (this.registry.has("groq")) return "groq";
+    if (this.registry.has("anthropic")) return { provider: "anthropic", reason: "primary-default" };
+    if (this.registry.has("groq")) return { provider: "groq", reason: "primary-default" };
     // The constructor already guarantees at least one provider is
     // registered, so this is always defined in practice.
-    return this.registry.listConfigured()[0]!;
+    return { provider: this.registry.listConfigured()[0]!, reason: "primary-default" };
   }
 
   /**
@@ -493,7 +547,8 @@ export class AIRouter implements Brain {
   private applyBudget(
     candidate: ProviderName,
     request: BrainRequest,
-    alreadyTried: ReadonlySet<ProviderName> = new Set()
+    alreadyTried: ReadonlySet<ProviderName> = new Set(),
+    decisionRef?: DecisionRef
   ): ProviderName {
     const meta = this.registry.getMeta(candidate);
     if (!meta || meta.costTier !== "paid") return candidate;
@@ -502,6 +557,7 @@ export class AIRouter implements Brain {
       const free = this.registry.findByCostTier("free").find((name) => !alreadyTried.has(name));
       if (free) {
         this.options.eventBus?.emit("ai.providerFallback", { from: candidate, to: free, reason: "zero-cost-mode" });
+        if (decisionRef) decisionRef.value = "zero-cost-mode";
         return free;
       }
 
@@ -523,6 +579,7 @@ export class AIRouter implements Brain {
         const free = this.registry.findByCostTier("free").find((name) => !alreadyTried.has(name));
         if (free) {
           this.options.eventBus?.emit("ai.providerFallback", { from: candidate, to: free, reason: "run-budget-exceeded" });
+          if (decisionRef) decisionRef.value = "run-budget-exceeded";
           return free;
         }
         throw new RunBudgetExceededError(
@@ -548,6 +605,7 @@ export class AIRouter implements Brain {
       const softCapFree = this.softCapFreeProvider(alreadyTried);
       if (softCapFree) {
         this.options.eventBus?.emit("ai.providerFallback", { from: candidate, to: softCapFree, reason: "soft-budget-cap" });
+        if (decisionRef) decisionRef.value = "soft-budget-cap";
         return softCapFree;
       }
       return candidate;
@@ -556,6 +614,7 @@ export class AIRouter implements Brain {
     const free = this.registry.findByCostTier("free")[0];
     if (free) {
       this.options.eventBus?.emit("ai.providerFallback", { from: candidate, to: free, reason: "budget-exceeded" });
+      if (decisionRef) decisionRef.value = "budget-exceeded";
       return free;
     }
 
@@ -591,7 +650,8 @@ export class AIRouter implements Brain {
     response: BrainResponse,
     request: BrainRequest,
     latencyMs: number,
-    isFallback: boolean
+    isFallback: boolean,
+    decisionReason: ProviderDecisionReason
   ): void {
     // Failed calls aren't recorded: a call that errors (network failure,
     // 429/5xx) is the common case where no tokens were actually billed,
@@ -607,6 +667,7 @@ export class AIRouter implements Brain {
       toolCallCount: response.toolCalls.length,
       fallback: isFallback,
       taskType: request.taskType,
+      decisionReason,
     });
     if (request.runId) this.costTracker.recordRunCost(request.runId, cost);
   }

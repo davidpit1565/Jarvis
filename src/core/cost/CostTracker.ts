@@ -93,6 +93,15 @@ export interface CostRecord {
   fallback?: boolean;
   /** Coarse label for what kind of work this call served (e.g. "chat", "agent-plan"). See `BrainRequest.taskType`. */
   taskType?: string;
+  /**
+   * "Why did you use this model?" decision metadata (JARVIS_ROADMAP_AUDIT.md
+   * batch 4): the real `AIRouter` code path that decided THIS call's
+   * provider/model — a closed set of enum values (see
+   * `AIRouter`'s `ProviderDecisionReason`), never free-text. Optional only
+   * for backward compatibility with pre-batch-4 rows/callers that don't
+   * pass one.
+   */
+  decisionReason?: string;
 }
 
 /** Optional extra dimensions `record()` persists alongside a call's estimated cost — the fields the unified AI Cost Ledger needs beyond just "provider + $ amount". Every field is optional: a caller (or a mocked Brain in a test) that doesn't have a given dimension simply omits it, and it's stored as NULL rather than guessed. */
@@ -104,6 +113,8 @@ export interface CostCallDetails {
   toolCallCount?: number;
   fallback?: boolean;
   taskType?: string;
+  /** See `CostRecord.decisionReason`. */
+  decisionReason?: string;
 }
 
 /**
@@ -182,6 +193,7 @@ export class CostTracker {
       ["tool_call_count", "INTEGER"],
       ["fallback", "INTEGER"],
       ["task_type", "TEXT"],
+      ["decision_reason", "TEXT"],
     ];
     for (const [name, type] of ledgerColumns) {
       if (!existing.has(name)) this.db.run(`ALTER TABLE ai_costs ADD COLUMN ${name} ${type}`);
@@ -219,14 +231,15 @@ export class CostTracker {
       toolCallCount: details?.toolCallCount,
       fallback: details?.fallback,
       taskType: details?.taskType,
+      decisionReason: details?.decisionReason,
     };
     this.db
       .query(
         `INSERT INTO ai_costs (
            id, provider, estimated_cost_usd, timestamp, model, input_tokens, output_tokens,
            cache_creation_input_tokens, cache_read_input_tokens, run_id, latency_ms,
-           tool_call_count, fallback, task_type
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           tool_call_count, fallback, task_type, decision_reason
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         record.id,
@@ -242,7 +255,8 @@ export class CostTracker {
         record.latencyMs ?? null,
         record.toolCallCount ?? null,
         record.fallback === undefined ? null : record.fallback ? 1 : 0,
-        record.taskType ?? null
+        record.taskType ?? null,
+        record.decisionReason ?? null
       );
     return record;
   }
@@ -357,7 +371,7 @@ export class CostTracker {
                 cache_creation_input_tokens as cacheCreationInputTokens,
                 cache_read_input_tokens as cacheReadInputTokens,
                 run_id as runId, latency_ms as latencyMs, tool_call_count as toolCallCount,
-                fallback, task_type as taskType
+                fallback, task_type as taskType, decision_reason as decisionReason
          FROM ai_costs ORDER BY timestamp DESC LIMIT ?`
       )
       .all(limit) as RawLedgerRow[];
@@ -445,6 +459,8 @@ export class CostTracker {
         providers: string[];
         models: string[];
         taskTypes: string[];
+        /** Distinct decision reasons (see `CostRecord.decisionReason`) across every call in this run, in first-seen order — "why did you use this model" for the whole run at a glance. */
+        decisionReasons: string[];
         calls: number;
         inputTokens: number;
         cacheCreationTokens: number;
@@ -465,7 +481,8 @@ export class CostTracker {
                 input_tokens as inputTokens, output_tokens as outputTokens,
                 cache_creation_input_tokens as cacheCreationInputTokens,
                 cache_read_input_tokens as cacheReadInputTokens,
-                latency_ms as latencyMs, tool_call_count as toolCallCount, fallback, task_type as taskType
+                latency_ms as latencyMs, tool_call_count as toolCallCount, fallback, task_type as taskType,
+                decision_reason as decisionReason
          FROM ai_costs WHERE run_id = ? ORDER BY timestamp ASC`
       )
       .all(runId) as Array<{
@@ -481,6 +498,7 @@ export class CostTracker {
       toolCallCount: number | null;
       fallback: number | null;
       taskType: string | null;
+      decisionReason: string | null;
     }>;
 
     if (rows.length === 0) return undefined;
@@ -488,12 +506,14 @@ export class CostTracker {
     const providers = [...new Set(rows.map((r) => r.provider))];
     const models = [...new Set(rows.map((r) => r.model).filter((m): m is string => m !== null))];
     const taskTypes = [...new Set(rows.map((r) => r.taskType).filter((t): t is string => t !== null))];
+    const decisionReasons = [...new Set(rows.map((r) => r.decisionReason).filter((d): d is string => d !== null))];
 
     return {
       runId,
       providers,
       models,
       taskTypes,
+      decisionReasons,
       calls: rows.length,
       inputTokens: sumField(rows, "inputTokens"),
       cacheCreationTokens: sumField(rows, "cacheCreationInputTokens"),
@@ -560,6 +580,7 @@ interface RawLedgerRow {
   toolCallCount: number | null;
   fallback: number | null;
   taskType: string | null;
+  decisionReason: string | null;
 }
 
 function rowToCostRecord(row: RawLedgerRow): CostRecord {
@@ -578,6 +599,7 @@ function rowToCostRecord(row: RawLedgerRow): CostRecord {
     toolCallCount: row.toolCallCount ?? undefined,
     fallback: row.fallback === null ? undefined : row.fallback === 1,
     taskType: row.taskType ?? undefined,
+    decisionReason: row.decisionReason ?? undefined,
   };
 }
 

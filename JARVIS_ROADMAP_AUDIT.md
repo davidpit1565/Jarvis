@@ -1358,3 +1358,148 @@ Baseline was 1761 passing / 0 failing / 0 typecheck errors; this batch
 added 6 tests, bringing the suite to 1767 passing / 0 failing / 0
 typecheck errors (`bun run typecheck` and `bun test` both re-run clean
 after this pass, including every test from batches 1 and 2).
+
+## Premium Agent Intelligence/Security Upgrade — batch 4 (decision metadata, "why did you do that", Timeline reasons)
+
+Scope: Phases 28-31 of the original 50-phase prompt — "why did you use
+this model" decision metadata and a safe "why did you do that" action
+explanation, both built from real, already-existing execution metadata,
+never LLM-generated. Run in parallel with a separate adversarial-security
+pass on different files.
+
+### 1. "Why did you use this model?" decision metadata — NEEDS_UPGRADE (extended AIRouter/CostTracker, no new system)
+
+Before this pass: `AIRouter` genuinely already *decided* a call's
+provider/model for a real reason in code (explicit pin, vision
+requirement, free-first default, zero-cost-mode, a budget cap, a soft
+budget cap, a circuit breaker, model escalation) — but that reason was
+only ever visible as an `ai.providerFallback`/`ai.escalation` *event*,
+which fires only when a swap actually happens, never on the far more
+common "just used the normal primary provider, nothing special" case.
+`CostTracker`'s ledger (batch 3) persisted *what* was called (provider,
+model, tokens, latency…) but never *why*. So "why did you use this model"
+had no honest per-call answer for the default case at all.
+
+Built a new closed enum, `ProviderDecisionReason` (`AIRouter.ts`):
+`"primary-explicit" | "primary-free-first" | "primary-default" |
+"vision-required" | "zero-cost-mode" | "budget-exceeded" |
+"run-budget-exceeded" | "soft-budget-cap" | "circuit-open" |
+"call-failed" | "escalation-retry"` — one value per real `AIRouter` code
+path, including the "no-story" default cases. A mutable `DecisionRef`
+holder is threaded through `resolvePrimaryWithReason` -> `applyBudget` ->
+`routeToFallback`/`chatWithEscalation` -> `timedCall` -> `recordCost`, so
+whichever condition *actually* fired for the call that was actually made
+is what gets recorded — a later, more specific decision (e.g. a budget
+swap) correctly overrides an earlier default one. This is persisted as a
+new `decisionReason` column on `CostTracker`'s existing `ai_costs` table
+(migrated in place, same pattern as every other batch-3 ledger column) —
+no parallel decision-log table. `getRunLedger()` gained a
+`decisionReasons: string[]` field (distinct reasons across the run, in
+first-seen order); `listRecent()` rows include the field directly. Both
+are already served by the existing `GET /cost-analytics` (aggregate
+`recent` list) and `GET /cost-analytics?runId=` (per-run ledger) routes —
+extended, not duplicated.
+
+### 2. "What are you doing?" — SKIP (already done in batch 3, not touched)
+
+### 3. "Why did you do that?" — MISSING, now built (`actionExplainer.ts` + a new Fast Path shape)
+
+Confirmed what was actually available: `AgentTaskStore` has a task's real
+`goal` text, and for a plain chat-turn tool call, `ConversationManager`'s
+own history already has the exact triggering user message and the exact
+tool name the assistant called — nothing new needed tracking, only a
+deterministic way to read and compose from what's already there (the same
+principle `liveStatusFormatter` already established for "what are you
+doing").
+
+New `src/core/state/actionExplainer.ts`:
+- `findLastToolCall(messages)` — scans `ConversationManager.getMessages()`
+  backward for the most recent assistant message with a tool call, then
+  backward again for the user message that started that same turn.
+  Returns `null` (never a guess) if no tool call has happened yet.
+- `explainAction(toolName, triggeringMessage, language)` — the
+  deterministic, no-LLM-call composer: `'You asked me to "<X>", so I used
+  <tool name> to help with that.'` (English and Hebrew), humanizing
+  `snake_case` tool names into plain words as a purely mechanical
+  transform, never inventing a causal story beyond the two known facts.
+- `noActionToExplain(language)` — the honest "I haven't done anything to
+  explain yet" reply for when there's nothing to explain, rather than
+  fabricating one.
+- `isLikelyWhyQuery(text)` — a small, conservative EN/HE pattern set
+  ("why did you do that", "why did you check/use/run/call X", "למה עשית
+  את זה", "למה בדקת X"…), same house style as
+  `liveStatusFormatter.isLikelyStatusQuery`/`FastPathClassifier`: biased
+  toward `false` (fall through to the full path) over a false positive.
+
+Wired into `Orchestrator.handleUserMessage` as a new Fast Path shape,
+directly modeled on batch 3's status-query fast path and checked right
+after it (before this turn's own message is recorded, so a why-query can
+never be mistaken for the tool call it's asking about): on a match, reads
+`conversation.getMessages()` (this conversation's real history, before
+this turn's message is added), answers with `explainAction`/
+`noActionToExplain` — no brain call at all — and emits a new
+`fastPath.whyQuery` event (`{ userId, sessionId, toolName? }`,
+`toolName` omitted when there was nothing to explain) for observability,
+mirroring `fastPath.statusQuery`.
+
+### 4. Surface decision metadata + explanations in the Command Center — MISSING, now built (extends the existing Timeline + Cost Analytics panels, no new panel)
+
+`ui/command-center/index.html`'s existing Timeline panel already streamed
+`ai.providerFallback` into a small "Provider fallbacks (live)" list, but
+discarded the event's own `reason` field and rendered a generic "previous
+one unavailable" caption instead. Fixed to show the real, closed-enum
+`reason` inline (e.g. "(soft-budget-cap)", "(circuit-open)") instead of
+that free-text placeholder. `ai.escalation` (real model-escalation
+retries) was already emitted by `AIRouter` but was never forwarded to
+`/observer` at all (missing from `JarvisWebSocketServer`'s
+`OBSERVABLE_EVENTS`) and never rendered by the Timeline; added to
+`OBSERVABLE_EVENTS` and wired into the same fallback list with the fixed
+`"escalation-retry"` reason label — same closed set as item 1's
+`ProviderDecisionReason`, never free text. Separately, the existing Cost
+Analytics panel's "Recent calls" table gained a "Why this model" column
+rendering `recent[i].decisionReason` verbatim (item 1's new ledger
+field) — the most direct place to answer "why did you use this model"
+for a specific call, without inventing a new panel.
+
+### Files touched this pass
+
+Changed: `src/core/brain/AIRouter.ts` (`ProviderDecisionReason`,
+`DecisionRef`, `resolvePrimaryWithReason`, decision-reason threading
+through `applyBudget`/`routeToFallback`/`timedCall`/`recordCost`/
+`chatWithEscalation`), `src/core/cost/CostTracker.ts` (`decisionReason`
+column + migration, `CostCallDetails`/`CostRecord` field,
+`getRunLedger().decisionReasons`), `src/core/orchestrator/Orchestrator.ts`
+(why-query fast path), `src/types/events.ts` (`fastPath.whyQuery`),
+`src/communication/websocket/JarvisWebSocketServer.ts` (`ai.escalation`
+added to `OBSERVABLE_EVENTS`), `ui/command-center/index.html` (fallback
+list shows the real reason, `ai.escalation` handling, Cost Analytics
+"Why this model" column).
+
+New file: `src/core/state/actionExplainer.ts`.
+
+New tests: `tests/core/actionExplainer.test.ts` (new),
+`tests/brain/AIRouterDecisionReason.test.ts` (new, 12 cases covering
+every `ProviderDecisionReason` value), extended
+`tests/integration/liveState.integration.test.ts` (new why-query
+`describe` block, 5 tests), extended `tests/cost/CostTracker.test.ts`
+(`decisionReason` persistence + `getRunLedger().decisionReasons`),
+extended `tests/integration/commandCenterHttp.test.ts` (`decisionReason`
+in `recent`/`?runId=` ledger). `ui/command-center/index.html`'s own
+changes have no automated tests, same documented limitation as batch 3
+(no build/test harness for that static page in this repo) — traced
+manually against the real event/endpoint shapes it now consumes.
+
+Not touched, per the hard constraints: `ui/hologram/index.html`'s
+visuals, `src/communication/websocket/dashboard.ts`'s visuals, no shell/
+AppleScript tool, no secrets exposed (decision reasons are closed enum
+strings and provider/model names only, never prompt content or keys), no
+LLM call anywhere in `explainAction`/`isLikelyWhyQuery`/the decision-
+reason logic — every string is composed from real, already-known
+structured facts, same principle as `liveStatusFormatter`. No new panel;
+`AIRouter`/`CostTracker`/the existing Fast Path system/the existing
+Timeline and Cost Analytics panels were extended in place.
+
+Baseline was 1800 passing / 0 failing / 0 typecheck errors; this batch
+added 31 tests, bringing the suite to 1831 passing / 0 failing / 0
+typecheck errors (`bun run typecheck` and `bun test` both re-run clean
+after this pass).

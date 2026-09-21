@@ -207,23 +207,38 @@ describe("GET /cost-analytics", () => {
     expect(body.toolCache).toEqual({ hits: 1, misses: 1, hitRate: 0.5 });
   });
 
-  test("?runId= returns that run's full ledger rollup", async () => {
+  test("?runId= returns that run's full ledger rollup, including decision reasons", async () => {
     const costTracker = new CostTracker();
     costTracker.record("anthropic", 0.05, undefined, {
       model: "claude-sonnet-4-5-20250929",
       usage: { inputTokens: 100, outputTokens: 20, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
       runId: "run-1",
       toolCallCount: 1,
+      decisionReason: "primary-free-first",
     });
     const { handle, port } = setupServer({ costTrackerForAdmin: costTracker });
     activeHandle = handle;
 
     const response = await fetch(`http://localhost:${port}/cost-analytics?runId=run-1`);
-    const body = (await response.json()) as { runLedger: { runId: string; calls: number; toolCalls: number } };
+    const body = (await response.json()) as {
+      runLedger: { runId: string; calls: number; toolCalls: number; decisionReasons: string[] };
+    };
     expect(response.status).toBe(200);
     expect(body.runLedger.runId).toBe("run-1");
     expect(body.runLedger.calls).toBe(1);
     expect(body.runLedger.toolCalls).toBe(1);
+    expect(body.runLedger.decisionReasons).toEqual(["primary-free-first"]);
+  });
+
+  test("recent calls include the real decisionReason for 'why did you use this model'", async () => {
+    const costTracker = new CostTracker();
+    costTracker.record("groq", 0, undefined, { decisionReason: "primary-free-first" });
+    const { handle, port } = setupServer({ costTrackerForAdmin: costTracker });
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${port}/cost-analytics`);
+    const body = (await response.json()) as { recent: Array<{ decisionReason?: string }> };
+    expect(body.recent[0]!.decisionReason).toBe("primary-free-first");
   });
 
   test("?runId= for an unknown run 404s", async () => {

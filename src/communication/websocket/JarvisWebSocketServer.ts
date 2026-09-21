@@ -101,6 +101,13 @@ const OBSERVABLE_EVENTS = [
   // Monitor) can show an honest "switched providers" notice only when a
   // real fallback fired, never a fabricated one.
   "ai.providerFallback",
+  // Real model-escalation retries (AIRouter actually retried against a
+  // stronger provider after a deterministic validity check rejected the
+  // first response — see the doc comment on "ai.escalation" in
+  // src/types/events.ts) — same rationale as ai.providerFallback above, so
+  // the Command Center's Live Agent Monitor can show an honest "escalated
+  // to a stronger model" notice only when a real escalation fired.
+  "ai.escalation",
 ] as const;
 
 export interface JarvisWebSocketServerDependencies {

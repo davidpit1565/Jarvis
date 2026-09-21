@@ -243,6 +243,77 @@ describe("JarvisLiveState wired into Orchestrator.handleUserMessage", () => {
       expect(reply).toContain("actively working on it");
     });
   });
+
+  describe("why-query fast path (\"why did you do that?\")", () => {
+    test("explains the most recent tool call from real conversation history, with no brain call at all", async () => {
+      const tool = makeTool("list_calendar_events", async () => ({ success: true, data: [] }));
+      const brain = new ScriptedBrain([
+        { text: "", toolCalls: [{ id: "c1", toolName: "list_calendar_events", input: {} }], stopReason: "tool_use" },
+        { text: "Nothing on your calendar.", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator } = setup(brain, [tool]);
+
+      await orchestrator.handleUserMessage("user-1", "prepare tomorrow");
+
+      // A second scripted brain would throw if reached — proves this
+      // second turn never touches the brain either.
+      const reply = await orchestrator.handleUserMessage("user-1", "why did you do that?");
+
+      expect(reply).toBe('You asked me to "prepare tomorrow", so I used list calendar events to help with that.');
+    });
+
+    test("emits fastPath.whyQuery with the real tool name", async () => {
+      const tool = makeTool("get_weather", async () => ({ success: true, data: {} }));
+      const brain = new ScriptedBrain([
+        { text: "", toolCalls: [{ id: "c1", toolName: "get_weather", input: {} }], stopReason: "tool_use" },
+        { text: "It's sunny.", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator, eventBus } = setup(brain, [tool]);
+
+      const events: Array<{ userId: string; sessionId: string; toolName?: string }> = [];
+      eventBus.on("fastPath.whyQuery", (payload) => events.push(payload));
+
+      await orchestrator.handleUserMessage("user-1", "what's the weather");
+      await orchestrator.handleUserMessage("user-1", "why did you check the weather");
+
+      expect(events).toEqual([{ userId: "user-1", sessionId: "chat:user-1", toolName: "get_weather" }]);
+    });
+
+    test("an honest 'nothing to explain yet' reply when no tool call has happened in this conversation", async () => {
+      const brain = new ScriptedBrain([]); // never reached
+      const { orchestrator } = setup(brain);
+
+      const reply = await orchestrator.handleUserMessage("user-1", "why did you do that?");
+
+      expect(reply).toBe("I haven't done anything to explain yet.");
+    });
+
+    test("a why-query in Hebrew is answered in Hebrew", async () => {
+      const tool = makeTool("get_weather", async () => ({ success: true, data: {} }));
+      const brain = new ScriptedBrain([
+        { text: "", toolCalls: [{ id: "c1", toolName: "get_weather", input: {} }], stopReason: "tool_use" },
+        { text: "שמש.", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator, liveState } = setup(brain, [tool]);
+      liveState.transition("chat:user-1", "user-1", "LISTENING", { language: "he" });
+
+      await orchestrator.handleUserMessage("user-1", "מה מזג האוויר");
+      const reply = await orchestrator.handleUserMessage("user-1", "למה בדקת את מזג האוויר");
+
+      expect(reply).toContain("get weather");
+      expect(reply).toContain("ביקשת ממני");
+    });
+
+    test("the exchange is still recorded into conversation history", async () => {
+      const brain = new ScriptedBrain([]);
+      const { orchestrator, conversation } = setup(brain);
+
+      await orchestrator.handleUserMessage("user-1", "why did you do that?");
+
+      const messages = conversation.getMessages();
+      expect(messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant"]);
+    });
+  });
 });
 
 describe("JarvisLiveState wired into AgentCore.runTask", () => {
