@@ -44,6 +44,13 @@ export interface JarvisConfig {
    * set OLLAMA_BASE_URL to a network address JARVIS's backend can actually
    * reach (e.g. a Tailscale/ngrok address for the Mac) instead. See
    * README's Ollama section.
+   *
+   * This one server config is shared by two independent, separately-gated
+   * features: the `OllamaBrain` chat provider (gated on `ollamaModel`
+   * below) and the `OllamaEmbeddingsClient` used for local semantic
+   * memory/caching (gated on `ollamaEmbeddingModel`) — both talk to the
+   * same Ollama instance, since that's the whole point of running it
+   * locally, rather than each inventing its own server URL.
    */
   ollamaBaseUrl: string;
   /**
@@ -437,16 +444,6 @@ export interface JarvisConfig {
    * day. Defaults to 20.
    */
   agentMailMaxSendsPerDay: number;
-  /**
-   * Base URL of a locally-run Ollama server (https://ollama.com) — used
-   * for genuinely free, local embeddings (see OllamaEmbeddingsClient).
-   * Named to match the env var a concurrently-developed Ollama chat
-   * provider (OllamaBrain) also reads, so both features share one Ollama
-   * server config rather than each inventing its own. Defaults to
-   * Ollama's own standard local address; only meaningful once
-   * `ollamaEmbeddingModel` is also set.
-   */
-  ollamaBaseUrl: string;
   /**
    * Enables the entire Semantic Memory Search / Semantic Result Cache
    * layer (JARVIS_ROADMAP_AUDIT.md #60, previously skipped for lack of a
@@ -867,7 +864,6 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("AGENTMAIL_MAX_SENDS_PER_DAY must be a positive integer");
   }
 
-  const ollamaBaseUrl = process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434";
   const ollamaEmbeddingModel = process.env.OLLAMA_EMBEDDING_MODEL?.trim() || undefined;
 
   return {
@@ -962,7 +958,6 @@ export function loadConfig(): JarvisConfig {
     agentMailApiKey,
     agentMailInboxId,
     agentMailMaxSendsPerDay,
-    ollamaBaseUrl,
     ollamaEmbeddingModel,
   };
 }
