@@ -35,6 +35,36 @@ python3 -m http.server 8080   # from ui/hologram/
 Clicking the button while on `file://` shows an explicit
 `NEEDS LOCAL SERVER` message instead of a silent/confusing failure.
 
+### As a desktop app — and which Core it talks to
+
+```
+./scripts/install-hologram-app.sh
+```
+
+installs `~/Applications/JARVIS Core (Local).app`, a launcher that opens
+`http://localhost:4770/hologram/` in a chromeless Chrome window. Pass a URL
+(and optionally a name) to point one at a different Core.
+
+The page derives the Core it talks to from its own address — `?host`/`?port`/
+`?secure` if given, otherwise the origin it was served from, falling back to
+`localhost:4770`. So the launcher's URL decides everything: served from the
+local Core, TALK TO JARVIS opens `ws://localhost:4770/chat` and the device
+tools reach the paired iMac; served from a deployed Core, it talks to that one
+and needs that Core's `JARVIS_ADMIN_TOKEN`.
+
+This is worth being deliberate about, because the failure is confusing.
+A Chrome PWA installed from a deployed Core keeps pointing there forever, and
+`/chat` answers a wrong or missing token by closing the WebSocket — and a
+close event carries no HTTP status, so the browser cannot tell 401 from 404
+from "Core is down". That's why the chat now probes `/health` after a failed
+connect and reports `CORE UNREACHABLE`, `TOKEN REJECTED` or `TOKEN REQUIRED`
+by name, with the Core's origin in the message and in the status tooltip.
+
+Don't try to repoint an already-installed PWA shim by editing its
+`Info.plist`: the real target lives in Chrome's own Web Applications registry
+keyed by an extension-style id, the shim is ad-hoc signed, and Chrome
+rewrites it. Install the launcher instead and delete the shim.
+
 ## The Core — why an abstract shape, not a face
 
 This page used to render a real human 3D face scan
