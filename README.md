@@ -2062,7 +2062,7 @@ time-windowed (today/this month) specifically so `MAX_DAILY_COST_USD`/
 
 Set `OPENROUTER_API_KEY` to register `OpenRouterBrain` as another `free`-tier
 `Brain` alongside Groq. It deliberately only ever calls OpenRouter's own
-`":free"`-suffixed models (default: `meta-llama/llama-3.3-70b-instruct:free`,
+`":free"`-suffixed models (default: `nvidia/nemotron-3-ultra-550b-a55b:free`,
 overridable with `JARVIS_OPENROUTER_MODEL`) — constructing it against
 anything else throws `OpenRouterPaidModelError` at startup rather than risk
 a silent paid call, since JARVIS has no per-model pricing table for
@@ -2071,6 +2071,15 @@ unavailable, exactly like an unconfigured Groq/Anthropic key: no crash, no
 silent fallback to a paid provider. Because it's always `free`, it needs no
 special-casing anywhere `ZERO_COST_MODE`/budget logic runs — it's just
 another free provider next to Groq.
+
+The one thing the `":free"` check cannot catch is OpenRouter withdrawing a
+model from its free tier, which is what happened to the previous default,
+`meta-llama/llama-3.3-70b-instruct:free`: the id keeps its suffix, so the
+provider still constructs and registers, and every call then returns 404
+("This model is unavailable for free"). A fallback provider that looks
+configured but never answers is worse than an absent one, so when the
+Groq fallback stops producing replies, check the model id against
+OpenRouter's live `/api/v1/models` before assuming the routing is broken.
 
 `src/core/brain/ModelCatalog.ts` is a small, hand-maintained, typed list
 (`MODEL_CATALOG`) of the models JARVIS actually knows about — provider, cost

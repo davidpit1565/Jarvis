@@ -159,10 +159,10 @@ describe("loadConfig", () => {
 
   test("reads OPENROUTER_API_KEY and JARVIS_OPENROUTER_MODEL when set", () => {
     process.env.OPENROUTER_API_KEY = "or-test-key";
-    process.env.JARVIS_OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+    process.env.JARVIS_OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
     const config = loadConfig();
     expect(config.openrouterApiKey).toBe("or-test-key");
-    expect(config.openrouterModel).toBe("meta-llama/llama-3.3-70b-instruct:free");
+    expect(config.openrouterModel).toBe("nvidia/nemotron-3-ultra-550b-a55b:free");
   });
 
   test("ollamaBaseUrl defaults to the real Ollama default local port, ollamaModel/ollamaApiKey undefined by default", () => {

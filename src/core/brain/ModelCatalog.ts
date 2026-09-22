@@ -68,15 +68,18 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
       "GroqBrain's own doc comment for the honest quality tradeoff vs. Claude.",
   },
   {
-    id: "meta-llama/llama-3.3-70b-instruct:free",
+    id: "nvidia/nemotron-3-ultra-550b-a55b:free",
     provider: "openrouter",
-    label: "Llama 3.3 70B Instruct (OpenRouter, free)",
+    label: "Nemotron 3 Ultra (OpenRouter, free)",
     costTier: "free",
     capabilities: { toolCalling: true, vision: false, quality: "good" },
     notes:
       "OpenRouter's free tier (the \":free\" model-id suffix is OpenRouter's own convention for $0 models, rate-limited " +
       "but genuinely free). See OpenRouterBrain's own doc comment for why JARVIS only ever calls \":free\" models " +
-      "through this provider.",
+      "through this provider. Replaced meta-llama/llama-3.3-70b-instruct:free as the default on 2026-09-22 after " +
+      "OpenRouter stopped offering that model for free — same failure shape as Groq decommissioning " +
+      "llama-3.3-70b-versatile above. Tool-calling and Hebrew verified live against this id; text-only input per " +
+      "OpenRouter's own model metadata, hence vision: false.",
   },
   {
     id: "ollama-local",

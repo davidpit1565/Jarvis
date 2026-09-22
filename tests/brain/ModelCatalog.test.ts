@@ -1,5 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { MODEL_CATALOG, findModel, modelsForProvider, modelsByCostTier } from "@/core/brain/ModelCatalog";
+import { DEFAULT_GROQ_MODEL } from "@/core/brain/GroqBrain";
+import { DEFAULT_OPENROUTER_MODEL } from "@/core/brain/OpenRouterBrain";
 
 describe("ModelCatalog", () => {
   test("every entry has a non-empty id, label, and notes", () => {
@@ -33,6 +35,25 @@ describe("ModelCatalog", () => {
 
     const paid = modelsByCostTier("paid");
     expect(paid.every((m) => m.costTier === "paid")).toBe(true);
+  });
+
+  test("each Brain's hardcoded default model is actually in the catalog", () => {
+    // These live in two files that have to be changed together: the Brain
+    // picks the model, the catalog is what maxQualityForProvider() and
+    // providerSupportsVision() consult when AIRouter chooses a fallback or
+    // an escalation target. Swapping one and forgetting the other leaves
+    // the router reasoning about a model nobody calls. Both defaults have
+    // already been swapped once (Groq decommissioned llama-3.3-70b-versatile;
+    // OpenRouter withdrew llama-3.3-70b-instruct:free), so this will happen
+    // again.
+    for (const [name, id] of [
+      ["groq", DEFAULT_GROQ_MODEL],
+      ["openrouter", DEFAULT_OPENROUTER_MODEL],
+    ] as const) {
+      const entry = findModel(id);
+      expect(entry, `${id} is missing from MODEL_CATALOG`).toBeDefined();
+      expect(entry?.provider).toBe(name);
+    }
   });
 
   test("every free-tier OpenRouter entry's id carries the :free suffix, matching OpenRouterBrain's own hard guard", () => {

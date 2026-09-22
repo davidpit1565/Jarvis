@@ -2,7 +2,18 @@ import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { ConversationMessage, ToolCallRequest } from "@/types/conversation";
 import type { ToolDefinition } from "@/types/tools";
 
-export const DEFAULT_OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+// meta-llama/llama-3.3-70b-instruct:free, the previous default, no longer
+// exists on OpenRouter as a free model — it answers 404 with "This model is
+// unavailable for free. The paid version is available now". Because the
+// ":free" suffix check below is a string test, that dead id still passed
+// construction, so OpenRouter registered happily and then 404'd every call:
+// a fallback provider that looks configured and silently never works.
+// Nemotron 3 Ultra was picked over the other free tool-calling models on
+// 2026-09-22 by testing them: qwen3.8-27b and gemma-4-31b were rate-limited
+// to 429 on the free tier, and nemotron-3-super leaked its raw reasoning
+// ("The user writes in Hebrew: ... We need to answer in Hebrew") into the
+// content field. This one emitted a correct tool_call and clean Hebrew.
+export const DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 const DEFAULT_MAX_TOKENS = 1024;
 const OPENROUTER_API_BASE_URL = "https://openrouter.ai/api/v1";
 const MAX_RETRIES = 2;
