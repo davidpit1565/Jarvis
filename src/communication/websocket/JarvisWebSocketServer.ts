@@ -783,6 +783,10 @@ export class JarvisWebSocketServer {
             return await this.handleAuthRoute(req, url, server);
           }
 
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/image-proxy") {
+            return await this.handleImageProxy(url);
+          }
+
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/calendar/oauth/start") {
             return this.handleCalendarOAuthStart(req, url, server);
           }
@@ -1925,6 +1929,62 @@ export class JarvisWebSocketServer {
       return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
     }
     return Response.json({ config: redactConfigForDisplay(jarvisConfig) });
+  }
+
+  /**
+   * GET /image-proxy?url=<pollinations image URL> — fetches a JARVIS-
+   * generated image server-side and re-serves it with
+   * `Content-Disposition: attachment`, so the media panel's download
+   * button (ui/hologram/index.html) actually forces a save-to-device
+   * instead of just opening the image in a new tab. A browser only
+   * honors an `<a download>` attribute for a same-origin URL —
+   * image.pollinations.ai is cross-origin, so the direct link alone
+   * couldn't force a real download (a known limitation called out when
+   * that panel first shipped). Routing the bytes through Core's own
+   * origin fixes that.
+   *
+   * Deliberately restricted to exactly the one trusted host
+   * (image.pollinations.ai) GenerateImageTool actually generates
+   * images from — never a general-purpose proxy for an arbitrary URL,
+   * which would otherwise let this endpoint be used to probe internal
+   * network addresses (SSRF) or hotlink arbitrary third-party content
+   * through Core's own IP.
+   */
+  private async handleImageProxy(url: URL): Promise<Response> {
+    const target = url.searchParams.get("url");
+    if (!target) {
+      return Response.json({ error: "Missing url parameter" }, { status: 400 });
+    }
+
+    let parsedTarget: URL;
+    try {
+      parsedTarget = new URL(target);
+    } catch {
+      return Response.json({ error: "Invalid url parameter" }, { status: 400 });
+    }
+    if (parsedTarget.protocol !== "https:" || parsedTarget.hostname !== "image.pollinations.ai") {
+      return Response.json({ error: "url must be an https://image.pollinations.ai URL" }, { status: 400 });
+    }
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(parsedTarget.toString());
+    } catch (error) {
+      return Response.json(
+        { error: `Failed to fetch image: ${error instanceof Error ? error.message : String(error)}` },
+        { status: 502 }
+      );
+    }
+    if (!upstream.ok) {
+      return Response.json({ error: `Upstream returned ${upstream.status}` }, { status: 502 });
+    }
+
+    return new Response(upstream.body, {
+      headers: {
+        "Content-Type": upstream.headers.get("Content-Type") ?? "image/jpeg",
+        "Content-Disposition": "attachment; filename=\"jarvis-image.jpg\"",
+      },
+    });
   }
 
   /**
