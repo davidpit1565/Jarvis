@@ -57,14 +57,15 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
     notes: "JARVIS's default brain — the model every other tradeoff in this catalog is measured against.",
   },
   {
-    id: "llama-3.3-70b-versatile",
+    id: "openai/gpt-oss-120b",
     provider: "groq",
-    label: "Llama 3.3 70B (Groq)",
+    label: "GPT-OSS 120B (Groq)",
     costTier: "free",
     capabilities: { toolCalling: true, vision: false, quality: "good" },
     notes:
-      "Groq's free tier (no credit card, 14,400 req/day at time of writing). Real tool-calling, no image input. " +
-      "See GroqBrain's own doc comment for the honest quality tradeoff vs. Claude.",
+      "Groq's free tier (no credit card). Real tool-calling (verified live), no image input. Replaced " +
+      "llama-3.3-70b-versatile as the default on 2026-09-22 after Groq decommissioned that model. See " +
+      "GroqBrain's own doc comment for the honest quality tradeoff vs. Claude.",
   },
   {
     id: "meta-llama/llama-3.3-70b-instruct:free",
