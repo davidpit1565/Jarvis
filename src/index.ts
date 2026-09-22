@@ -1179,8 +1179,9 @@ function main() {
       const todaysEvents = calendarClient ? await calendarClient.listUpcomingEvents(10).catch(() => []) : [];
       const nowIso = now.toISOString();
       const dueOrOverdueReminders = reminderStore.list().filter((r) => r.dueAt !== null && r.dueAt <= nowIso);
+      const unreadEmailCount = gmailClient ? await gmailClient.getMessageCount("is:unread").catch(() => undefined) : undefined;
 
-      const message = formatMorningBriefing(weather, todaysEvents, dueOrOverdueReminders);
+      const message = formatMorningBriefing(weather, todaysEvents, dueOrOverdueReminders, unreadEmailCount);
       telegramGateway!.sendMessage(config.telegramOwnerChatId!, message).catch((error) => {
         console.error(
           "[jarvis] failed to send morning briefing:",
