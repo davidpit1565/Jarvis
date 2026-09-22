@@ -175,3 +175,72 @@ describe("SpotifyClient.searchTracks", () => {
     expect(requestedLimit).toBe("10");
   });
 });
+
+describe("SpotifyClient.listPlaylists / findPlaylistByName", () => {
+  test("listPlaylists parses the user's own playlists", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [{ name: "Workout Mix", owner: { display_name: "David" }, tracks: { total: 42 }, uri: "spotify:playlist:1" }],
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const playlists = await client.listPlaylists();
+    expect(playlists).toEqual([{ name: "Workout Mix", ownerName: "David", trackCount: 42, uri: "spotify:playlist:1" }]);
+  });
+
+  test("findPlaylistByName matches case-insensitively, exact match preferred", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [
+            { name: "Workout", owner: null, tracks: { total: 5 }, uri: "spotify:playlist:1" },
+            { name: "Morning Workout Mix", owner: null, tracks: { total: 20 }, uri: "spotify:playlist:2" },
+          ],
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const found = await client.findPlaylistByName("workout");
+    expect(found?.uri).toBe("spotify:playlist:1");
+  });
+
+  test("findPlaylistByName falls back to a substring match", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [{ name: "Morning Workout Mix", owner: null, tracks: { total: 20 }, uri: "spotify:playlist:2" }],
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const found = await client.findPlaylistByName("workout");
+    expect(found?.uri).toBe("spotify:playlist:2");
+  });
+
+  test("findPlaylistByName returns null when nothing matches", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    global.fetch = (async () => new Response(JSON.stringify({ items: [] }), { status: 200 })) as unknown as typeof fetch;
+
+    const found = await client.findPlaylistByName("nonexistent");
+    expect(found).toBeNull();
+  });
+});
+
+describe("SpotifyClient.playContext", () => {
+  test("sends context_uri, not uris, distinguishing a playlist from a track", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    let capturedBody: Record<string, unknown> | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    await client.playContext("spotify:playlist:1");
+    expect(capturedBody).toEqual({ context_uri: "spotify:playlist:1" });
+  });
+});

@@ -1,16 +1,24 @@
 import type { SpotifyTokenStore } from "@/spotify/SpotifyTokenStore";
-import type { SpotifyPlaybackState, SpotifyTrack } from "@/types/spotify";
+import type { SpotifyPlaybackState, SpotifyPlaylist, SpotifyTrack } from "@/types/spotify";
 
 const SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
 const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
 const SPOTIFY_API_BASE_URL = "https://api.spotify.com/v1";
 
-// Playback control (play/pause/skip) + reading what's currently playing.
-// Deliberately not requesting playlist-modify or library-modify scopes —
-// this integration lets JARVIS control whatever's already playing on
-// whichever of your devices has Spotify open (Spotify Connect handles
-// routing to the active device), not manage your library or playlists.
-const SPOTIFY_SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing";
+// Playback control (play/pause/skip) + reading what's currently playing,
+// plus read-only access to the user's own playlists (added on direct
+// request: "play my [playlist name] playlist") — still deliberately not
+// requesting playlist-modify or library-modify scopes. JARVIS can see and
+// play what's already there, never create, edit, reorder, or delete a
+// playlist.
+//
+// NOTE: adding playlist-read-private here only takes effect for a NEWLY
+// linked account — a token saved before this change was granted under the
+// old, narrower scope list and Spotify does not retroactively widen it.
+// An already-linked account needs to unlink (UNLINK_SPOTIFY) and re-link
+// (GET /spotify/oauth/start) once for playlist search/play to work.
+const SPOTIFY_SCOPES =
+  "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private playlist-read-collaborative";
 
 const TOKEN_EXPIRY_SAFETY_MARGIN_MS = 60_000;
 
@@ -179,6 +187,83 @@ export class SpotifyClient {
     if (!response.ok && response.status !== 204) {
       throw new Error(`Spotify play failed (${response.status}): ${await response.text().catch(() => "")}`);
     }
+  }
+
+  /**
+   * Starts playing a playlist (or any other Spotify "context" — an album,
+   * an artist's top tracks) as a queue, given its context URI
+   * (spotify:playlist:... from `SpotifyPlaylist.uri` / `findPlaylistByName`).
+   * Distinct from `play(trackUri)`, which plays one specific track — the
+   * Spotify Web API itself splits these into `context_uri` vs `uris` in
+   * the same PUT /me/player/play body, never both at once.
+   */
+  async playContext(contextUri: string): Promise<void> {
+    const accessToken = await this.getValidAccessToken();
+
+    const response = await fetch(`${SPOTIFY_API_BASE_URL}/me/player/play`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ context_uri: contextUri }),
+    });
+
+    if (!response.ok && response.status !== 204) {
+      throw new Error(`Spotify play failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+  }
+
+  /**
+   * Lists the user's own playlists (owned or followed) — up to Spotify's
+   * own per-request max of 50. Spotify's search API's `type=playlist`
+   * only searches public playlists generally, not reliably scoped to just
+   * this user's own library, so finding "my [name] playlist" lists and
+   * matches by name client-side instead of searching. A user with more
+   * than 50 playlists won't have later ones considered — pagination isn't
+   * implemented, a reasonable first cut for what this is actually for
+   * (matching one playlist you asked for by name, not browsing a library).
+   */
+  async listPlaylists(): Promise<SpotifyPlaylist[]> {
+    const accessToken = await this.getValidAccessToken();
+
+    const url = new URL(`${SPOTIFY_API_BASE_URL}/me/playlists`);
+    url.searchParams.set("limit", "50");
+
+    const response = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Spotify list playlists failed (${response.status}): ${await response.text().catch(() => "")}`);
+    }
+
+    const data = (await response.json()) as {
+      items: Array<{ name: string; owner: { display_name: string | null } | null; tracks: { total: number }; uri: string }>;
+    };
+
+    return data.items.map((item) => ({
+      name: item.name,
+      ownerName: item.owner?.display_name ?? null,
+      trackCount: item.tracks.total,
+      uri: item.uri,
+    }));
+  }
+
+  /**
+   * Finds the user's own playlist whose name best matches `query` — an
+   * exact case-insensitive match first, falling back to a substring match
+   * (so "play my workout playlist" matches a playlist literally named
+   * "Workout" or "Morning Workout Mix"). Returns null when nothing
+   * matches at all, letting the caller give an honest "couldn't find a
+   * playlist named X" instead of guessing.
+   */
+  async findPlaylistByName(query: string): Promise<SpotifyPlaylist | null> {
+    const playlists = await this.listPlaylists();
+    const normalized = query.trim().toLowerCase();
+
+    const exact = playlists.find((p) => p.name.toLowerCase() === normalized);
+    if (exact) return exact;
+
+    const substring = playlists.find((p) => p.name.toLowerCase().includes(normalized));
+    return substring ?? null;
   }
 
   async pause(): Promise<void> {

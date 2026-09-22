@@ -116,6 +116,54 @@ describe("PLAY_MUSIC tool", () => {
     const result = await tool.execute({ query: "" }, context);
     expect(result.success).toBe(false);
   });
+
+  test("finds and plays one of the user's own playlists by name", async () => {
+    let playedContextUri: string | undefined;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.includes("/me/playlists")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              { name: "Workout Mix", owner: { display_name: "David" }, tracks: { total: 42 }, uri: "spotify:playlist:1" },
+              { name: "Chill Vibes", owner: { display_name: "David" }, tracks: { total: 10 }, uri: "spotify:playlist:2" },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/me/player/play")) {
+        playedContextUri = JSON.parse(init?.body as string).context_uri;
+        return new Response(null, { status: 204 });
+      }
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    const tool = createPlayMusicTool(makeLinkedClient());
+    const result = await tool.execute({ playlist: "workout mix" }, context);
+
+    expect(result.success).toBe(true);
+    expect(playedContextUri).toBe("spotify:playlist:1");
+    expect((result.data as { playlist: { name: string } }).playlist.name).toBe("Workout Mix");
+  });
+
+  test("fails clearly when no playlist matches the name", async () => {
+    global.fetch = (async (url: string) => {
+      if (url.includes("/me/playlists")) {
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    const tool = createPlayMusicTool(makeLinkedClient());
+    const result = await tool.execute({ playlist: "nonexistent playlist" }, context);
+    expect(result.success).toBe(false);
+  });
+
+  test("rejects passing both query and playlist", async () => {
+    const tool = createPlayMusicTool(makeLinkedClient());
+    const result = await tool.execute({ query: "a song", playlist: "a playlist" }, context);
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("PAUSE_MUSIC tool", () => {
