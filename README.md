@@ -2110,6 +2110,60 @@ configured base URL rather than crashing, and `AIRouter`'s existing circuit
 breaker (see below) opens after repeated failures and routes around it
 without blocking any other configured provider.
 
+## Cloudflare Workers AI: a fifth free-tier provider
+
+[Cloudflare Workers AI](https://developers.cloudflare.com/workers-ai/) is a
+real, hosted inference service on Cloudflare's own edge network — not
+something you run yourself the way Ollama is — with a genuinely free daily
+allocation: **10,000 "Neurons" (Cloudflare's own compute-unit currency) per
+account per day, resetting daily at 00:00 UTC, no credit card required**
+(verified against Cloudflare's own current pricing docs). Crucially, once
+that daily allocation is used up, Cloudflare's own docs say further calls
+simply **fail with an error** — it does not silently fall through to billing
+a card on file, which is exactly what makes it safe to treat as genuinely
+free the same way Groq/OpenRouter/Ollama are (see `CostTracker`'s
+`KNOWN_FREE_PROVIDERS`). It serves an OpenAI-compatible chat completions
+endpoint with real function/tool-calling support for many of its 50+ hosted
+models (Llama, Mistral, Gemma, DeepSeek, Qwen, and more).
+
+Set all three of the following to register `CloudflareWorkersAIBrain`
+(`src/core/brain/CloudflareWorkersAIBrain.ts`) as another `free`-tier
+provider — partial config (only one or two of the three set) leaves the
+feature simply inactive, the same "no default, no guessing" philosophy as
+`OLLAMA_MODEL`:
+
+```
+CLOUDFLARE_ACCOUNT_ID=your-account-id                          # required — see below for where to find it
+CLOUDFLARE_API_TOKEN=your-api-token                             # required — see below for how to create it
+CLOUDFLARE_MODEL=@cf/meta/llama-3.3-70b-instruct-fp8-fast       # required — no default across 50+ hosted models
+```
+
+How to get each value (from the [Cloudflare dashboard](https://dash.cloudflare.com)):
+
+- **`CLOUDFLARE_ACCOUNT_ID`** — shown on any zone/account overview page in
+  the dashboard sidebar (under "Account ID").
+- **`CLOUDFLARE_API_TOKEN`** — create one under **My Profile > API Tokens >
+  Create Token**, with **"Workers AI" read (or edit)** permission scoped to
+  your account. Never share this value or commit it to source control.
+- **`CLOUDFLARE_MODEL`** — any model id from
+  [Cloudflare's Workers AI models catalog](https://developers.cloudflare.com/workers-ai/models/)
+  that supports function calling via the OpenAI-compatible endpoint (the
+  catalog page's filters/badges call this out per model). JARVIS has no way
+  to guess which one of 50+ hosted models you want, so this is always
+  explicit — same reasoning as `OLLAMA_MODEL`.
+
+Message/tool-call translation reuses the exact same OpenAI-compatible shape
+`GroqBrain`/`OpenRouterBrain`/`OllamaBrain` already implement (the same
+`toOpenAIMessages`/`toOpenAITools`/`fromOpenAIResponse` logic, duplicated
+per-file the way those three already are — this class changes nothing about
+that existing pattern). Unlike `OllamaBrain`, both an account id and an API
+token are always required — this is a real hosted account, not local
+software with no auth. A 429 response is treated as either a normal rate
+limit or (more likely, in practice) today's free allocation being exhausted,
+and the error message says so explicitly, naming the 00:00 UTC daily reset;
+a 401/403 names exactly what to check (the token's validity and its
+"Workers AI" permission, and that the account id matches).
+
 ## Prompt caching and tool-result caching
 
 `ClaudeBrain` sends the system prompt and tool definitions with Anthropic's

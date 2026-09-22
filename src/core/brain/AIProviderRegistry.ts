@@ -1,6 +1,6 @@
 import type { Brain } from "@/types/brain";
 
-export type ProviderName = "anthropic" | "groq" | "openrouter" | "ollama";
+export type ProviderName = "anthropic" | "groq" | "openrouter" | "ollama" | "cloudflare-workers-ai";
 export type CostTier = "free" | "paid";
 
 export interface ProviderMeta {

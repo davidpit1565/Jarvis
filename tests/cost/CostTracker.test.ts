@@ -21,6 +21,18 @@ describe("estimateCostUsd", () => {
     ).toBe(0);
   });
 
+  test("is always exactly $0 for cloudflare-workers-ai, regardless of usage — the daily free-tier cap fails closed rather than billing", () => {
+    expect(estimateCostUsd("cloudflare-workers-ai")).toBe(0);
+    expect(
+      estimateCostUsd("cloudflare-workers-ai", {
+        inputTokens: 100_000,
+        outputTokens: 50_000,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+      })
+    ).toBe(0);
+  });
+
   test("estimates anthropic cost from usage using the documented approximate per-token rates", () => {
     const cost = estimateCostUsd("anthropic", {
       inputTokens: 1_000_000,

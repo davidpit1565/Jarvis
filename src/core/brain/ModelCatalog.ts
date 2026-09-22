@@ -92,6 +92,21 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
       "model — set it per-deployment if the user's specific model is known to support it. Always genuinely $0: there " +
       "is no paid tier for a model running on hardware the user already owns.",
   },
+  {
+    id: "cloudflare-workers-ai-hosted",
+    provider: "cloudflare-workers-ai",
+    label: "Cloudflare Workers AI (hosted model, user-chosen)",
+    costTier: "free",
+    capabilities: { toolCalling: true, vision: false, quality: "good" },
+    notes:
+      "A generic placeholder entry, not one specific model id — Cloudflare hosts 50+ models (Llama, Mistral, Gemma, " +
+      "DeepSeek, Qwen, and more) and the actual model is whatever the user sets as CLOUDFLARE_MODEL, so there's no " +
+      "single real model id to catalog here the way there is for Groq/OpenRouter's fixed defaults. toolCalling " +
+      "assumes a function-calling-capable model via Cloudflare's OpenAI-compatible endpoint; vision is left false " +
+      "since it isn't verified for an arbitrary user-chosen model, same reasoning as the Ollama entry above. Genuinely " +
+      "free up to Cloudflare's 10,000-Neuron daily allocation (resets 00:00 UTC), which fails closed rather than " +
+      "silently billing on overage — see CloudflareWorkersAIBrain's own doc comment.",
+  },
 ] as const;
 
 /** Looks up a catalog entry by its exact model id, or undefined if this id isn't in the catalog. */
