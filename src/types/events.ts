@@ -45,8 +45,15 @@ export interface JarvisEventMap {
     runId?: string;
   };
   "tool.dispatched": { toolName: string; deviceId: string; requestId: string };
-  /** A READ-level local tool call was served from `ToolResultCache` instead of actually re-running the tool. */
-  "tool.cacheHit": { toolName: string; input: Record<string, unknown> };
+  /**
+   * A READ-level local tool call was served from `ToolResultCache` instead
+   * of actually re-running the tool. `semantic: true` means this was a
+   * Semantic Result Cache hit (a differently-worded but similar-enough
+   * call to a `Tool.semanticCacheable` tool) rather than an exact-match
+   * hit — omitted (the default, and the only possibility before this
+   * feature existed) means an ordinary exact-match hit.
+   */
+  "tool.cacheHit": { toolName: string; input: Record<string, unknown>; semantic?: boolean };
   /**
    * Tool Risk Model: a tool call was refused — never even reaching
    * permission checks or execution — because it would exceed the

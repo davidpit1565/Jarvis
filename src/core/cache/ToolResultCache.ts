@@ -1,9 +1,35 @@
 import type { ToolResult } from "@/types/tools";
+import { cosineSimilarity } from "@/core/embeddings/similarity";
 
 interface CacheEntry {
   result: ToolResult;
   expiresAt: number;
+  toolName: string;
+  /** Only set when this entry was cached with an embedding — see `setSemantic`. */
+  embedding?: number[];
 }
+
+/**
+ * Semantic Result Cache: the similarity threshold above which two DIFFERENT
+ * inputs to the SAME tool are considered "close enough" to serve the same
+ * cached answer (JARVIS_ROADMAP_AUDIT.md #60, "Semantic Cache" — previously
+ * skipped for lack of a free embeddings source; OllamaEmbeddingsClient is
+ * that source now).
+ *
+ * Chosen deliberately HIGH (0.92 on cosine similarity's [-1, 1] scale) —
+ * much higher than MemoryStore's semantic *search* threshold (0.5) — for
+ * the opposite reason: a cache hit is served silently, with no human in
+ * the loop to notice a near-miss the way they would skimming a memory
+ * search's results list. Serving a stale/wrong answer because two
+ * genuinely different questions ("AI news today" vs. "AI stocks today")
+ * were judged "similar enough" is a real correctness bug, not a minor
+ * inconvenience — so this only matches true near-paraphrases (word order,
+ * tense, filler words: "AI news today" vs. "today's AI news"), which is
+ * also all a per-tool `semanticCacheable` opt-in is meant to cover in the
+ * first place (see `Tool.semanticCacheable`'s own doc comment for which
+ * tools that is and isn't appropriate for).
+ */
+export const SEMANTIC_CACHE_SIMILARITY_THRESHOLD = 0.92;
 
 /**
  * A small in-memory, TTL-based cache of tool-call results, keyed on the
@@ -76,14 +102,67 @@ export class ToolResultCache {
     this.misses = 0;
   }
 
-  set(toolName: string, input: Record<string, unknown>, result: ToolResult): void {
+  /**
+   * @param embedding Semantic Result Cache only (see
+   *   `SEMANTIC_CACHE_SIMILARITY_THRESHOLD`'s own doc comment): an
+   *   embedding of this call's input, stored alongside the exact-match
+   *   entry so a LATER, differently-worded call to the same tool can find
+   *   it via `getSemantic`. Omitted (the default) means this entry is
+   *   exact-match only, exactly as before this feature existed — the
+   *   caller (Orchestrator) only ever passes one when the tool opted in
+   *   via `Tool.semanticCacheable` AND embeddings are configured.
+   */
+  set(toolName: string, input: Record<string, unknown>, result: ToolResult, embedding?: number[]): void {
     if (this.ttlMs <= 0) return;
     // Never cache a failed call — a transient error (rate limit, network
     // blip) should never be replayed as if it were a real, current
     // answer for the rest of the TTL window.
     if (!result.success) return;
     const key = ToolResultCache.keyFor(toolName, input);
-    this.store.set(key, { result, expiresAt: Date.now() + this.ttlMs });
+    this.store.set(key, { result, expiresAt: Date.now() + this.ttlMs, toolName, embedding });
+  }
+
+  /**
+   * Semantic Result Cache (additive, opt-in — see
+   * `SEMANTIC_CACHE_SIMILARITY_THRESHOLD`'s own doc comment). Looks for a
+   * NON-expired, previously-cached entry for the SAME `toolName` (never
+   * across different tools) whose stored embedding is at or above the
+   * similarity threshold against `queryEmbedding`, and returns its result.
+   * Only ever consults entries that were stored WITH an embedding (via
+   * `set`'s optional 4th argument) — a tool that never opted in via
+   * `Tool.semanticCacheable` never has any such entries, so this always
+   * returns undefined for it regardless of how similar an input might be.
+   *
+   * A cache-instance-wide linear scan, same reasoning as
+   * `MemoryStore.searchSemantic`'s own doc comment: this is a small,
+   * bounded, in-memory cache (see the class doc comment — no LRU, no
+   * external dependency), not a workload that needs real indexing.
+   *
+   * Ties into the same `getStats()` hit counter as `get()` — a semantic
+   * hit is still a cache hit. Never increments the miss counter itself
+   * (the caller's preceding `get()` call already counted the exact-match
+   * miss that led here).
+   */
+  getSemantic(toolName: string, queryEmbedding: number[]): ToolResult | undefined {
+    if (this.ttlMs <= 0) return undefined;
+    const now = Date.now();
+    let best: { result: ToolResult; similarity: number } | undefined;
+
+    for (const entry of this.store.values()) {
+      if (entry.toolName !== toolName) continue;
+      if (!entry.embedding) continue;
+      if (now >= entry.expiresAt) continue;
+      if (entry.embedding.length !== queryEmbedding.length) continue;
+
+      const similarity = cosineSimilarity(queryEmbedding, entry.embedding);
+      if (similarity >= SEMANTIC_CACHE_SIMILARITY_THRESHOLD && (!best || similarity > best.similarity)) {
+        best = { result: entry.result, similarity };
+      }
+    }
+
+    if (!best) return undefined;
+    this.hits += 1;
+    return best.result;
   }
 
   /** Drops every expired entry. Not required for correctness (get() already checks expiry) — just keeps memory bounded for a long-running process. */

@@ -74,6 +74,8 @@ const ENV_KEYS = [
   "AGENTMAIL_API_KEY",
   "AGENTMAIL_INBOX_ID",
   "AGENTMAIL_MAX_SENDS_PER_DAY",
+  "OLLAMA_BASE_URL",
+  "OLLAMA_EMBEDDING_MODEL",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -683,6 +685,20 @@ describe("loadConfig", () => {
   test("leaves newsRssUrl undefined when unset", () => {
     const config = loadConfig();
     expect(config.newsRssUrl).toBeUndefined();
+  });
+
+  test("ollamaBaseUrl defaults to the standard local Ollama address, ollamaEmbeddingModel to undefined", () => {
+    const config = loadConfig();
+    expect(config.ollamaBaseUrl).toBe("http://localhost:11434");
+    expect(config.ollamaEmbeddingModel).toBeUndefined();
+  });
+
+  test("reads OLLAMA_BASE_URL and OLLAMA_EMBEDDING_MODEL when set", () => {
+    process.env.OLLAMA_BASE_URL = "http://my-ollama-box:11434";
+    process.env.OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+    const config = loadConfig();
+    expect(config.ollamaBaseUrl).toBe("http://my-ollama-box:11434");
+    expect(config.ollamaEmbeddingModel).toBe("nomic-embed-text");
   });
 
   test("loads weekly digest settings when both are set", () => {

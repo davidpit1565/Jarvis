@@ -66,6 +66,7 @@ function setup(
     lockdownService?: LockdownService;
     toolResultCache?: ToolResultCache;
     confirmationService?: ConfirmationService;
+    embeddingsClient?: { embed(text: string): Promise<number[]> };
   } = {}
 ) {
   const eventBus = new EventBus();
@@ -85,6 +86,7 @@ function setup(
     lockdownService: options.lockdownService,
     toolResultCache: options.toolResultCache,
     confirmationService: options.confirmationService,
+    embeddingsClient: options.embeddingsClient,
   });
   return { orchestrator, conversation, eventBus, toolRegistry, permissionService };
 }
@@ -809,7 +811,8 @@ describe("Orchestrator remote tool execution", () => {
 describe("Orchestrator READ-tool result caching", () => {
   function makeCountingTool(
     id: string,
-    requiredPermission: LocalTool["requiredPermission"] = PermissionLevel.READ
+    requiredPermission: LocalTool["requiredPermission"] = PermissionLevel.READ,
+    semanticCacheable = false
   ): { tool: LocalTool; calls: () => number } {
     let calls = 0;
     const tool: LocalTool = {
@@ -819,6 +822,7 @@ describe("Orchestrator READ-tool result caching", () => {
       inputSchema: { type: "object", properties: { city: { type: "string" } } },
       requiredPermission,
       target: "local",
+      semanticCacheable,
       execute: async (input) => {
         calls++;
         return { success: true, data: { ...input, callNumber: calls } };
@@ -912,6 +916,105 @@ describe("Orchestrator READ-tool result caching", () => {
     await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv again?");
 
     expect(calls()).toBe(2);
+  });
+
+  describe("Semantic Result Cache (opt-in, additive)", () => {
+    test("a semantically similar (but exactly different) query hits the cache for a semanticCacheable tool", async () => {
+      const { tool, calls } = makeCountingTool("SEARCH_NEWS", PermissionLevel.READ, true);
+      const cache = new ToolResultCache(60_000);
+      const embeddingsClient = {
+        embed: async (text: string) => (text.includes("AI news today") ? [1, 0] : [0.99, 0.01]),
+      };
+      const brain = new ScriptedBrain([
+        { text: "", toolCalls: [{ id: "call-1", toolName: "search_news", input: { city: "AI news today" } }], stopReason: "tool_use" },
+        { text: "here", toolCalls: [], stopReason: "end_turn" },
+        { text: "", toolCalls: [{ id: "call-2", toolName: "search_news", input: { city: "today's AI news" } }], stopReason: "tool_use" },
+        { text: "here again", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator } = setup(brain, [tool], { toolResultCache: cache, embeddingsClient });
+
+      await orchestrator.handleUserMessage("user-1", "AI news today");
+      await orchestrator.handleUserMessage("user-1", "today's AI news");
+
+      expect(calls()).toBe(1); // second, differently-worded call was served from the semantic cache
+    });
+
+    test("emits tool.cacheHit with semantic: true on a semantic-cache hit", async () => {
+      const { tool } = makeCountingTool("SEARCH_NEWS", PermissionLevel.READ, true);
+      const cache = new ToolResultCache(60_000);
+      const embeddingsClient = { embed: async () => [1, 0] };
+      const brain = new ScriptedBrain([
+        { text: "", toolCalls: [{ id: "call-1", toolName: "search_news", input: { city: "AI news today" } }], stopReason: "tool_use" },
+        { text: "here", toolCalls: [], stopReason: "end_turn" },
+        { text: "", toolCalls: [{ id: "call-2", toolName: "search_news", input: { city: "today's AI news" } }], stopReason: "tool_use" },
+        { text: "here again", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator, eventBus } = setup(brain, [tool], { toolResultCache: cache, embeddingsClient });
+      const cacheHits: unknown[] = [];
+      eventBus.on("tool.cacheHit", (payload) => cacheHits.push(payload));
+
+      await orchestrator.handleUserMessage("user-1", "AI news today");
+      await orchestrator.handleUserMessage("user-1", "today's AI news");
+
+      expect(cacheHits).toEqual([
+        { toolName: "search_news", input: { city: "today's AI news" }, semantic: true },
+      ]);
+    });
+
+    test("a dissimilar query does not hit the semantic cache", async () => {
+      const { tool, calls } = makeCountingTool("SEARCH_NEWS", PermissionLevel.READ, true);
+      const cache = new ToolResultCache(60_000);
+      const embeddingsClient = {
+        embed: async (text: string) => (text.includes("AI news") ? [1, 0] : [0, 1]),
+      };
+      const brain = new ScriptedBrain([
+        { text: "", toolCalls: [{ id: "call-1", toolName: "search_news", input: { city: "AI news today" } }], stopReason: "tool_use" },
+        { text: "here", toolCalls: [], stopReason: "end_turn" },
+        { text: "", toolCalls: [{ id: "call-2", toolName: "search_news", input: { city: "stock market today" } }], stopReason: "tool_use" },
+        { text: "here too", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator } = setup(brain, [tool], { toolResultCache: cache, embeddingsClient });
+
+      await orchestrator.handleUserMessage("user-1", "AI news today");
+      await orchestrator.handleUserMessage("user-1", "stock market today");
+
+      expect(calls()).toBe(2); // genuinely different query — both actually ran
+    });
+
+    test("a tool without semanticCacheable never gets a semantic match, regardless of similarity", async () => {
+      const { tool, calls } = makeCountingTool("GET_WEATHER", PermissionLevel.READ, false);
+      const cache = new ToolResultCache(60_000);
+      const embeddingsClient = { embed: async () => [1, 0] }; // identical embedding every time
+      const brain = new ScriptedBrain([
+        { text: "", toolCalls: [{ id: "call-1", toolName: "get_weather", input: { city: "Tel Aviv" } }], stopReason: "tool_use" },
+        { text: "sunny", toolCalls: [], stopReason: "end_turn" },
+        { text: "", toolCalls: [{ id: "call-2", toolName: "get_weather", input: { city: "Jerusalem" } }], stopReason: "tool_use" },
+        { text: "rainy", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator } = setup(brain, [tool], { toolResultCache: cache, embeddingsClient });
+
+      await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv?");
+      await orchestrator.handleUserMessage("user-1", "weather in Jerusalem?");
+
+      expect(calls()).toBe(2); // no semanticCacheable flag -> exact-match caching only
+    });
+
+    test("with no embeddingsClient configured, semanticCacheable has no effect at all", async () => {
+      const { tool, calls } = makeCountingTool("SEARCH_NEWS", PermissionLevel.READ, true);
+      const cache = new ToolResultCache(60_000);
+      const brain = new ScriptedBrain([
+        { text: "", toolCalls: [{ id: "call-1", toolName: "search_news", input: { city: "AI news today" } }], stopReason: "tool_use" },
+        { text: "here", toolCalls: [], stopReason: "end_turn" },
+        { text: "", toolCalls: [{ id: "call-2", toolName: "search_news", input: { city: "today's AI news" } }], stopReason: "tool_use" },
+        { text: "here again", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator } = setup(brain, [tool], { toolResultCache: cache }); // no embeddingsClient
+
+      await orchestrator.handleUserMessage("user-1", "AI news today");
+      await orchestrator.handleUserMessage("user-1", "today's AI news");
+
+      expect(calls()).toBe(2); // both ran — semanticCacheable is inert without an embeddings client
+    });
   });
 
   describe("Fast Path", () => {

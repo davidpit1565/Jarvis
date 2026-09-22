@@ -124,6 +124,17 @@ export interface OrchestratorDependencies {
    * existed.
    */
   agentTaskCanceller?: { cancelActiveTasksForUser(userId: string): string[] };
+  /**
+   * Semantic Result Cache (additive, opt-in — see
+   * `ToolResultCache.getSemantic`'s own doc comment): when given (only
+   * when OLLAMA_EMBEDDING_MODEL is configured — see src/index.ts), a
+   * READ-level local tool call whose exact-match cache misses AND whose
+   * `Tool.semanticCacheable` is true also gets its input embedded and
+   * checked against that same tool's recently-cached inputs. Omitted (the
+   * default) means every tool only ever gets exact-match caching — the
+   * `semanticCacheable` flag has no effect at all without this.
+   */
+  embeddingsClient?: { embed(text: string): Promise<number[]> };
 }
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -131,6 +142,21 @@ const MAX_TOOL_ITERATIONS = 5;
 const DEFAULT_MAX_TOOL_CALLS_PER_RUN = 30;
 /** See `OrchestratorDependencies.localToolTimeoutMs`. Generous for any real network call (Gmail/Calendar/weather/etc.) while still bounding an otherwise-infinite hang. */
 const DEFAULT_LOCAL_TOOL_TIMEOUT_MS = 30_000;
+
+/**
+ * Semantic Result Cache: a plain, deterministic text representation of a
+ * tool call's input, embedded so it can be compared for similarity against
+ * other calls to the same tool. Deliberately simple — sorted-key JSON, not
+ * a bespoke per-tool text template — since every `semanticCacheable` tool
+ * so far (see `Tool.semanticCacheable`'s own doc comment) takes a single
+ * natural-language `query`-shaped field, which dominates the resulting
+ * text either way; a real embedding model captures the meaning of that
+ * text regardless of the surrounding JSON punctuation.
+ */
+function stableInputText(input: Record<string, unknown>): string {
+  const keys = Object.keys(input).sort();
+  return JSON.stringify(Object.fromEntries(keys.map((key) => [key, input[key]])));
+}
 
 class LocalToolTimeoutError extends Error {
   constructor(toolName: string, timeoutMs: number) {
@@ -722,7 +748,7 @@ export class Orchestrator {
     toolCall: ToolCallRequest,
     runId?: string
   ): Promise<ToolResult> {
-    const { permissionService, eventBus, toolResultCache } = this.deps;
+    const { permissionService, eventBus, toolResultCache, embeddingsClient } = this.deps;
 
     const permissionResult = permissionService.check({
       subject: { userId },
@@ -740,11 +766,34 @@ export class Orchestrator {
     // email, placing a call), and must always actually run. See
     // `ToolResultCache`'s own doc comment.
     const cacheable = tool.requiredPermission === PermissionLevel.READ;
+    // Semantic Result Cache: only ever attempted for a tool that opted in
+    // via `semanticCacheable` AND when embeddings are actually configured
+    // — never a general behavior. Computed once per call (not per
+    // exact-cache-hit) since it's only needed on an exact-match miss.
+    const semanticCacheEligible = cacheable && tool.semanticCacheable === true && embeddingsClient !== undefined;
+    let queryEmbedding: number[] | undefined;
+
     if (cacheable && toolResultCache) {
       const cached = toolResultCache.get(tool.name, toolCall.input);
       if (cached) {
         eventBus.emit("tool.cacheHit", { toolName: tool.name, input: toolCall.input });
         return cached;
+      }
+
+      if (semanticCacheEligible) {
+        try {
+          queryEmbedding = await embeddingsClient!.embed(stableInputText(toolCall.input));
+          const semanticHit = toolResultCache.getSemantic(tool.name, queryEmbedding);
+          if (semanticHit) {
+            eventBus.emit("tool.cacheHit", { toolName: tool.name, input: toolCall.input, semantic: true });
+            return semanticHit;
+          }
+        } catch {
+          // Ollama unreachable/misconfigured for this one call — semantic
+          // caching is an optional enhancement; fall through to actually
+          // running the tool, exactly as if it had simply missed.
+          queryEmbedding = undefined;
+        }
       }
     }
 
@@ -763,7 +812,7 @@ export class Orchestrator {
     }
 
     if (cacheable && toolResultCache) {
-      toolResultCache.set(tool.name, toolCall.input, result);
+      toolResultCache.set(tool.name, toolCall.input, result, queryEmbedding);
     }
 
     eventBus.emit("tool.executed", {

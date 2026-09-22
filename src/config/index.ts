@@ -437,6 +437,29 @@ export interface JarvisConfig {
    * day. Defaults to 20.
    */
   agentMailMaxSendsPerDay: number;
+  /**
+   * Base URL of a locally-run Ollama server (https://ollama.com) — used
+   * for genuinely free, local embeddings (see OllamaEmbeddingsClient).
+   * Named to match the env var a concurrently-developed Ollama chat
+   * provider (OllamaBrain) also reads, so both features share one Ollama
+   * server config rather than each inventing its own. Defaults to
+   * Ollama's own standard local address; only meaningful once
+   * `ollamaEmbeddingModel` is also set.
+   */
+  ollamaBaseUrl: string;
+  /**
+   * Enables the entire Semantic Memory Search / Semantic Result Cache
+   * layer (JARVIS_ROADMAP_AUDIT.md #60, previously skipped for lack of a
+   * free embeddings source) — unset (the default) means every existing
+   * exact-match code path (MemoryStore.search LIKE matching,
+   * ToolResultCache's exact-match cache) runs completely unchanged, with
+   * zero dependency on Ollama being installed or running at all. Set to
+   * an embedding model actually pulled into Ollama (e.g.
+   * "nomic-embed-text" — run `ollama pull nomic-embed-text` first) to opt
+   * in. See README's "Semantic memory & caching (optional, local-only)"
+   * section for what this unlocks and what stays exact-match-only.
+   */
+  ollamaEmbeddingModel?: string;
 }
 
 class ConfigError extends Error {}
@@ -844,6 +867,9 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("AGENTMAIL_MAX_SENDS_PER_DAY must be a positive integer");
   }
 
+  const ollamaBaseUrl = process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434";
+  const ollamaEmbeddingModel = process.env.OLLAMA_EMBEDDING_MODEL?.trim() || undefined;
+
   return {
     brainProvider,
     brainProviderExplicit,
@@ -936,6 +962,8 @@ export function loadConfig(): JarvisConfig {
     agentMailApiKey,
     agentMailInboxId,
     agentMailMaxSendsPerDay,
+    ollamaBaseUrl,
+    ollamaEmbeddingModel,
   };
 }
 

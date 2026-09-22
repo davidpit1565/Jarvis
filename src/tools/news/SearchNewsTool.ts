@@ -31,6 +31,18 @@ export function createSearchNewsTool(newsClient: RssNewsClient): LocalTool<Searc
     },
     requiredPermission: PermissionLevel.READ,
     target: "local",
+    // Semantic Result Cache opt-in (see Tool.semanticCacheable's own doc
+    // comment): this is the one existing tool this pass found genuinely
+    // appropriate for it. Its input is a loosely-phrased natural-language
+    // query over one time-bounded feed ("what's the top headline right
+    // now"), where two different phrasings of the same question ("AI news
+    // today" vs. "today's AI news") deserve the exact same real answer
+    // within the cache's own TTL — the textbook case this feature exists
+    // for. Deliberately NOT applied to GET_NEWS (no query text at all to
+    // compare — nothing to be "similar" to) or to any precise lookup tool
+    // elsewhere in the codebase (a specific date/city/person), where a
+    // near-miss match would silently answer a different question.
+    semanticCacheable: true,
 
     async execute(input) {
       if (typeof input.query !== "string" || input.query.trim().length === 0) {

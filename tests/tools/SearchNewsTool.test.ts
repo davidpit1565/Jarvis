@@ -16,6 +16,11 @@ describe("SEARCH_NEWS tool", () => {
     expect(tool.requiredPermission).toBe(PermissionLevel.READ);
   });
 
+  test("opts into the Semantic Result Cache (a loosely-phrased query over one time-bounded feed)", () => {
+    const tool = createSearchNewsTool(new RssNewsClient("https://example.com/feed.xml"));
+    expect(tool.semanticCacheable).toBe(true);
+  });
+
   test("rejects a missing/empty query", async () => {
     const tool = createSearchNewsTool(new RssNewsClient("https://example.com/feed.xml"));
     expect((await tool.execute({} as never, context)).success).toBe(false);

@@ -90,6 +90,68 @@ describe("ToolResultCache", () => {
     });
   });
 
+  describe("getSemantic (opt-in, additive Semantic Result Cache)", () => {
+    test("returns undefined when nothing was cached with an embedding", () => {
+      const cache = new ToolResultCache(60_000);
+      cache.set("SEARCH_NEWS", { query: "AI news today" }, { success: true, data: "x" }); // no embedding
+      expect(cache.getSemantic("SEARCH_NEWS", [1, 0])).toBeUndefined();
+    });
+
+    test("a semantically similar query (different exact input) hits the cache", () => {
+      const cache = new ToolResultCache(60_000);
+      cache.set("SEARCH_NEWS", { query: "AI news today" }, { success: true, data: "headlines" }, [1, 0, 0]);
+
+      // "today's AI news" — different exact string, near-identical embedding
+      const hit = cache.getSemantic("SEARCH_NEWS", [0.99, 0.01, 0]);
+      expect(hit).toEqual({ success: true, data: "headlines" });
+    });
+
+    test("a dissimilar query does not hit the cache", () => {
+      const cache = new ToolResultCache(60_000);
+      cache.set("SEARCH_NEWS", { query: "AI news today" }, { success: true, data: "headlines" }, [1, 0, 0]);
+
+      // "AI stocks today" — a genuinely different question, orthogonal embedding
+      expect(cache.getSemantic("SEARCH_NEWS", [0, 1, 0])).toBeUndefined();
+    });
+
+    test("a tool that never stored an embedding never gets a semantic match, regardless of similarity", () => {
+      const cache = new ToolResultCache(60_000);
+      // GET_WEATHER never opted into semanticCacheable, so its entries
+      // never carry an embedding, even if the cache instance is also
+      // caching a different, semantic-cacheable tool.
+      cache.set("GET_WEATHER", { city: "Tel Aviv" }, { success: true, data: { tempC: 25 } }); // no embedding
+      cache.set("SEARCH_NEWS", { query: "AI news today" }, { success: true, data: "headlines" }, [1, 0, 0]);
+
+      expect(cache.getSemantic("GET_WEATHER", [1, 0, 0])).toBeUndefined();
+    });
+
+    test("never matches across different tools, even with identical embeddings", () => {
+      const cache = new ToolResultCache(60_000);
+      cache.set("SEARCH_NEWS", { query: "AI news today" }, { success: true, data: "news" }, [1, 0]);
+      expect(cache.getSemantic("SEARCH_WEB", [1, 0])).toBeUndefined();
+    });
+
+    test("an expired entry is never a semantic hit", async () => {
+      const cache = new ToolResultCache(10);
+      cache.set("SEARCH_NEWS", { query: "AI news today" }, { success: true, data: "news" }, [1, 0]);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(cache.getSemantic("SEARCH_NEWS", [1, 0])).toBeUndefined();
+    });
+
+    test("TTL 0 disables semantic caching too", () => {
+      const cache = new ToolResultCache(0);
+      cache.set("SEARCH_NEWS", { query: "AI news today" }, { success: true, data: "news" }, [1, 0]);
+      expect(cache.getSemantic("SEARCH_NEWS", [1, 0])).toBeUndefined();
+    });
+
+    test("a semantic hit counts toward the same hit/miss stats as an exact hit", () => {
+      const cache = new ToolResultCache(60_000);
+      cache.set("SEARCH_NEWS", { query: "AI news today" }, { success: true, data: "news" }, [1, 0]);
+      cache.getSemantic("SEARCH_NEWS", [0.99, 0.01]);
+      expect(cache.getStats().hits).toBe(1);
+    });
+  });
+
   test("sweep removes only expired entries", async () => {
     const cache = new ToolResultCache(10);
     cache.set("A", {}, { success: true, data: 1 });
