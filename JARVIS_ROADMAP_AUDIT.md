@@ -1885,3 +1885,120 @@ Baseline was 1846 passing / 0 failing / 0 typecheck errors; this batch
 added 17 tests, bringing the suite to 1863 passing / 0 failing / 0
 typecheck errors (`bun run typecheck` and `bun test` both re-run clean
 after this pass, including every test from batches 1-4).
+
+---
+
+## AgentMail integration — JARVIS's own independent email inbox (new pass)
+
+**What it is:** a new, wholly additive integration giving JARVIS its own
+real email identity via [AgentMail](https://docs.agentmail.to) (e.g.
+`jarvis@agentmail.to`) — explicitly separate from the existing Gmail
+integration, which operates the *user's* personal Google account.
+`GmailClient`/`SendEmailTool`/`SearchEmailTool`/`GoogleCalendarClient`
+were not modified at all in this pass.
+
+**What was built:**
+
+- `src/types/agentmail.ts` — response shapes (`AgentMailMessageSummary`,
+  `AgentMailMessage`, `AgentMailSendResult`), field names verified against
+  AgentMail's own API reference (see below), not guessed.
+- `src/agentmail/AgentMailClient.ts` — raw `fetch` + `fetchWithRetry`
+  client (`sendMessage`, `listMessages`, `getMessage`), same style as
+  `GmailClient`/`GoogleCalendarClient`/`RssNewsClient`. Auth is a static
+  `Authorization: Bearer <api_key>` header (no OAuth/token-refresh dance,
+  unlike Gmail/Calendar/Spotify — AgentMail's key is long-lived).
+  `listMessages`/the inbox-list tool built on it are capped at 20 results
+  regardless of what's requested, mirroring `MemoryStore.search`'s
+  bounded-query fix and `GmailClient.searchMessages`'s own 10-result cap.
+  A 401/403 is translated into a generic "check AGENTMAIL_API_KEY"
+  message; the raw API key is never included in any error, log line, or
+  tool result.
+- `src/agentmail/AgentMailSendGuard.ts` — a per-day send counter, the same
+  shape and reasoning as `TwilioCostGuard` (`src/communication/phone/
+  TwilioCostGuard.ts`), kept as its own small class rather than reusing
+  `TwilioCostGuard` directly so the two caps are never accidentally shared.
+- `src/tools/agentmail/SendAgentEmailTool.ts` (`SEND_AGENT_EMAIL`,
+  `PermissionLevel.CONFIRM`) and `src/tools/agentmail/CheckAgentInboxTool.ts`
+  (`CHECK_AGENT_INBOX`, `PermissionLevel.READ`) — registered in
+  `src/index.ts` only when both `AGENTMAIL_API_KEY` and
+  `AGENTMAIL_INBOX_ID` are set (`Boolean(config.agentMailApiKey &&
+  config.agentMailInboxId)`, the same conditional-registration pattern as
+  Gmail/Calendar/Telegram/Spotify), with one `console.log` line on
+  successful registration and total silence when unconfigured — no crash,
+  no warning spam. `SEND_AGENT_EMAIL` is `CONFIRM` for the identical
+  reason `SEND_EMAIL` is (see that tool's own doc comment, quoted in this
+  pass's `SendAgentEmailTool.ts`): `CHECK_AGENT_INBOX` feeds real external
+  message content into the model's context, so a successful prompt
+  injection could otherwise turn `SEND_AGENT_EMAIL` into real third-party
+  data exfiltration under JARVIS's own identity. It also enforces
+  `AGENTMAIL_MAX_SENDS_PER_DAY` (default 20) via `AgentMailSendGuard`
+  before ever calling the API — a validation failure (bad recipient,
+  empty subject/body) never consumes the daily cap, only an actual send
+  attempt does.
+- `src/config/index.ts` — `agentMailApiKey`, `agentMailInboxId` (must be
+  set together or neither, same `Boolean(a) !== Boolean(b)` pairing check
+  as every other paired-credential config in this file), and
+  `agentMailMaxSendsPerDay` (default 20, validated as a positive integer).
+  `agentMailApiKey` added to `KNOWN_SECRET_CONFIG_FIELDS` explicitly
+  (though the existing `SECRET_FIELD_NAME_PATTERN` — `/apikey/i` — would
+  already have caught it by name; both are set for belt-and-suspenders
+  consistency with every other secret field in this file).
+
+**API shape verification:** fetched directly from AgentMail's own
+published documentation during this pass —
+`docs.agentmail.to/api-reference/inboxes/create`,
+`.../inboxes/list`, `.../inboxes/messages/send`,
+`.../inboxes/messages/list`, `.../inboxes/messages/get`, and
+`.../webhooks/create` — not inferred or guessed. Confirmed: base URL
+`https://api.agentmail.to`; `Authorization: Bearer <token>` auth; `POST
+/v0/inboxes/{inbox_id}/messages/send` (body: `to`/`subject`/`text`/`html`/
+etc., response: `message_id`/`thread_id`); `GET
+/v0/inboxes/{inbox_id}/messages` (query: `limit`/`page_token`/`labels`/
+etc., response: `messages[]` with `message_id`/`thread_id`/`from`/`to`/
+`subject`/`preview`/`timestamp`); `GET
+/v0/inboxes/{inbox_id}/messages/{message_id}` (adds `text`/`html`/
+`attachments`). This codebase's client implements send/list/get against
+exactly these shapes. AgentMail does support webhooks (`POST /v0/webhooks`,
+`message.received` event type) for real-time push notification of new
+mail — not implemented in this pass, since the task only called for
+`SEND_AGENT_EMAIL`/`CHECK_AGENT_INBOX` (a pull-based `READ` tool); a
+future pass could add an inbound webhook route the same way the Telegram/
+Twilio webhook routes already exist in `src/index.ts`, gated by a shared
+secret the same way those are.
+
+**REQUIRES_USER_SETUP:** the AgentMail account, inbox, and API key must
+be created by David at [agentmail.to](https://agentmail.to) — nothing in
+this codebase can provision that from here. Until `AGENTMAIL_API_KEY`/
+`AGENTMAIL_INBOX_ID` are set, the feature simply doesn't register.
+
+**REQUIRES REAL VALIDATION:** like every other freshly-added integration
+in this codebase (Spotify, the video studio integration, OpenRouter),
+`AgentMailClient` has never been exercised against a real AgentMail
+account — the endpoint shapes come from AgentMail's own documentation,
+verified during this pass, not from a live call this codebase has
+actually made.
+
+**Tests:** `tests/agentmail/AgentMailClient.test.ts` (11 tests — send/
+list/get, bearer auth header, 429-retries-safely/network-error-does-not
+on send matching `GmailClient.test.ts`'s own reasoning, result-cap
+enforcement, API-key-never-leaked-in-errors, auth-failure message shape),
+`tests/agentmail/AgentMailSendGuard.test.ts` (4 tests — cap enforcement,
+daily reset, `remaining()`), `tests/tools/SendAgentEmailTool.test.ts` (8
+tests — permission level, input validation, send-cap enforcement, cap not
+consumed on validation failure), `tests/tools/CheckAgentInboxTool.test.ts`
+(6 tests — permission level, input validation, result-cap passthrough),
+plus new `describe` blocks in `tests/config/config.test.ts` (paired-field
+validation, default cap, redaction).
+
+Not touched, per the hard constraints: `ui/hologram/index.html`'s
+visuals, `src/communication/websocket/dashboard.ts`'s visuals,
+`GmailClient`/`GoogleCalendarClient`/`SearchEmailTool`/`SendEmailTool`/
+`ReplyEmailTool`/`GetEmailTool`/`GetUnreadEmailCountTool` (fully
+untouched — verified by diff), no shell/AppleScript/arbitrary-execution
+tool, no API key logged or exposed anywhere (error messages, audit trail,
+tool results, and Config Center's `GET /config` were all checked).
+
+Baseline for this pass was 1867 passing / 0 failing / 0 typecheck errors;
+this pass added 35 tests, bringing the suite to 1902 passing / 0 failing
+/ 0 typecheck errors (`bun run typecheck` and `bun test` both re-run
+clean after this pass).

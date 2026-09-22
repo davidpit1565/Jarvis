@@ -384,6 +384,27 @@ export interface JarvisConfig {
    * disables timeout enforcement. Defaults to 30000 (30s).
    */
   localToolTimeoutMs: number;
+  /**
+   * Both required together to enable the AgentMail integration
+   * (https://docs.agentmail.to) — JARVIS's own independent email inbox
+   * (e.g. jarvis@agentmail.to), completely separate from the user's
+   * personal Gmail account (GmailClient/SEND_EMAIL). The inbox itself is
+   * created once by the user in AgentMail's own dashboard/API; JARVIS only
+   * ever operates the one inbox id given here, never creates or lists
+   * inboxes on its own. Unset means the feature simply doesn't register —
+   * no crash, no warning spam, just one informative log line when it IS
+   * configured (see src/index.ts).
+   */
+  agentMailApiKey?: string;
+  agentMailInboxId?: string;
+  /**
+   * Hard daily cap on real sends via SEND_AGENT_EMAIL — mirrors
+   * maxOutboundCallsPerDay's reasoning for Twilio: nothing else stops a
+   * misconfigured automation rule (or a runaway agent loop) from sending
+   * an unbounded number of real emails under JARVIS's own identity in a
+   * day. Defaults to 20.
+   */
+  agentMailMaxSendsPerDay: number;
 }
 
 class ConfigError extends Error {}
@@ -768,6 +789,22 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("JARVIS_LOCAL_TOOL_TIMEOUT_MS must be a non-negative integer");
   }
 
+  const agentMailApiKey = process.env.AGENTMAIL_API_KEY?.trim() || undefined;
+  const agentMailInboxId = process.env.AGENTMAIL_INBOX_ID?.trim() || undefined;
+  if (Boolean(agentMailApiKey) !== Boolean(agentMailInboxId)) {
+    throw new ConfigError(
+      "AGENTMAIL_API_KEY and AGENTMAIL_INBOX_ID must be set together (or neither) to enable the AgentMail integration"
+    );
+  }
+  const agentMailMaxSendsPerDayRaw = process.env.AGENTMAIL_MAX_SENDS_PER_DAY?.trim();
+  const agentMailMaxSendsPerDay = agentMailMaxSendsPerDayRaw ? Number(agentMailMaxSendsPerDayRaw) : 20;
+  if (
+    agentMailMaxSendsPerDayRaw &&
+    (!Number.isInteger(agentMailMaxSendsPerDay) || agentMailMaxSendsPerDay < 1)
+  ) {
+    throw new ConfigError("AGENTMAIL_MAX_SENDS_PER_DAY must be a positive integer");
+  }
+
   return {
     brainProvider,
     brainProviderExplicit,
@@ -854,6 +891,9 @@ export function loadConfig(): JarvisConfig {
     costAlertThresholdUsd,
     maxToolCallsPerRun,
     localToolTimeoutMs,
+    agentMailApiKey,
+    agentMailInboxId,
+    agentMailMaxSendsPerDay,
   };
 }
 
@@ -877,6 +917,7 @@ const KNOWN_SECRET_CONFIG_FIELDS: ReadonlySet<keyof JarvisConfig> = new Set([
   "googleClientSecret",
   "spotifyClientSecret",
   "studioSecret",
+  "agentMailApiKey",
 ]);
 
 /** Case-insensitive fallback pattern catching any field name that reads as a secret, even one not in the explicit list above. */
