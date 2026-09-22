@@ -2909,6 +2909,10 @@
     // supported, so closing the panel can reliably stop it without the
     // outer scope needing to know whether that block ran at all.
     let stopVoiceModeImpl = () => {};
+    // Same reasoning as stopVoiceModeImpl above — lets the panel
+    // open/close handlers drive "Hey JARVIS" wake-word listening without
+    // needing to know whether SpeechRecognition is supported at all.
+    let setChatPanelOpen = () => {};
 
     // Recognizes a generate_image tool result URL (see GenerateImageTool.ts)
     // inside JARVIS's own reply text so a generated image actually shows
@@ -2935,15 +2939,29 @@
       }
 
       const generatedMatch = !imagePreviewUrl && cls === "jarvis" ? text.match(POLLINATIONS_URL_PATTERN) : null;
+      let displayText = text;
       if (generatedMatch) {
         const img = document.createElement("img");
         img.src = generatedMatch[0];
         img.className = "chat-attached-image";
         img.alt = "Generated image";
         div.appendChild(img);
+
+        // Once the URL is rendered as an actual <img> above, strip it back
+        // out of the plain text — otherwise both the raw markdown image
+        // tag ("![Generated image](https://...)") AND the bare URL the
+        // model tends to repeat right after it ("Here it is: https://...")
+        // show up a second time as ugly unrendered text under the image
+        // that's already showing it.
+        const escapedUrl = generatedMatch[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        displayText = text
+          .replace(new RegExp("!\\[[^\\]]*\\]\\(" + escapedUrl + "\\)", "g"), "")
+          .replace(new RegExp(escapedUrl, "g"), "")
+          .replace(/[ \t]+\n/g, "\n")
+          .trim();
       }
 
-      div.appendChild(document.createTextNode(text));
+      div.appendChild(document.createTextNode(displayText));
       log.appendChild(div);
       log.scrollTop = log.scrollHeight;
     }
@@ -3105,15 +3123,18 @@
       panel.classList.remove("hidden");
       input.focus();
       if (!socket || socket.readyState === WebSocket.CLOSED) ensureTokenThenConnect();
+      setChatPanelOpen(true);
     });
     closeBtn.addEventListener("click", () => {
       panel.classList.add("hidden");
       stopVoiceMode();
+      setChatPanelOpen(false);
     });
     panel.addEventListener("click", (e) => {
       if (e.target === panel) {
         panel.classList.add("hidden");
         stopVoiceMode();
+        setChatPanelOpen(false);
       }
     });
 
@@ -3168,6 +3189,20 @@
      * chat without voice remains fully available everywhere via the
      * text input above regardless.
      * ------------------------------------------------------------- */
+    // Matches the Mac Agent's own wake phrases (WakeWordListener.swift) so
+    // "say it, don't click it" works the same way here as it does on the
+    // Mac — loose/case-insensitive on purpose, real speech recognition
+    // rarely produces the exact same wording twice.
+    const WAKE_PHRASE_PATTERN = /\b(hey|hi|ok)\s+jarvis\b|ג'?\s?רוויס\s?שומע|היי\s?ג'?רוויס/i;
+    // A short, unambiguous way to end the hands-free loop by voice instead
+    // of having to reach for the mouse — "ok done"/"thank you"/"bye" and
+    // their Hebrew equivalents. Anchored to the *whole* utterance (not a
+    // substring) so a real question that happens to end in "thanks" (e.g.
+    // "what's on my calendar, thanks?") is never swallowed as a stop
+    // command instead of being sent.
+    const STOP_PHRASE_PATTERN =
+      /^\s*(ok(ay)?[,.]?\s*)?(done|that'?s (all|it)|thank(s| you)( very much)?|bye|goodbye)[.!]?\s*$|^\s*(תודה|זהו|סיימנו|די תודה|ביי|להתראות)[.!]?\s*$/i;
+
     const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
     const voiceBtn = document.getElementById("chat-voice-toggle");
     if (SpeechRecognitionCtor && voiceBtn && "speechSynthesis" in window) {
@@ -3182,6 +3217,62 @@
       let speaking = false;
       let awaitingReply = false;
       let recognitionActive = false;
+
+      /* -----------------------------------------------------------
+       * "Hey JARVIS" wake-word listening for the browser — a second,
+       * lightweight, continuous recognition instance that runs only
+       * while the chat panel is open AND full voice mode is off,
+       * watching for the wake phrase so voice mode can start itself
+       * instead of requiring a click every time, matching the Mac
+       * Agent's always-on wake-word behavior. Mic access is exclusive
+       * to one recognition instance at a time, so this and the main
+       * `recognition` above are never both running — wakeRecognition
+       * stops itself the instant the phrase is heard, then hands off
+       * to the exact same activation path the button click uses.
+       * ----------------------------------------------------------- */
+      const wakeRecognition = new SpeechRecognitionCtor();
+      wakeRecognition.continuous = true;
+      wakeRecognition.interimResults = false;
+      wakeRecognition.lang = navigator.language || "en-US";
+      let wakeListening = false;
+      let wakePanelOpen = false;
+
+      function startWakeListening() {
+        if (!wakePanelOpen || voiceModeOn || wakeListening) return;
+        try {
+          wakeRecognition.start();
+          wakeListening = true;
+        } catch (e) {
+          // start() throws if already started (a benign race) — the next
+          // 'end' event (or the next panel-open) retries it naturally.
+        }
+      }
+
+      function stopWakeListening() {
+        wakeListening = false;
+        try { wakeRecognition.stop(); } catch (e) {}
+      }
+
+      wakeRecognition.addEventListener("result", (ev) => {
+        const heard = ev.results[ev.results.length - 1][0].transcript.trim();
+        if (WAKE_PHRASE_PATTERN.test(heard)) {
+          stopWakeListening();
+          activateVoiceMode();
+        }
+      });
+      wakeRecognition.addEventListener("end", () => {
+        wakeListening = false;
+        // Browsers stop a recognition session on their own after a pause
+        // even with continuous=true — restart unless the panel's since
+        // closed or voice mode's since taken over the mic.
+        if (wakePanelOpen && !voiceModeOn) startWakeListening();
+      });
+      wakeRecognition.addEventListener("error", () => {
+        wakeListening = false;
+        // Silent by design — mic permission not yet granted (before the
+        // user's first manual VOICE MODE click) is the routine case here,
+        // not something worth surfacing as a chat error every retry.
+      });
 
       function startListening() {
         // Deliberately NOT gated on `speaking` — see speak() below: this
@@ -3232,6 +3323,14 @@
         recognitionActive = false;
         if (!text) return;
         if (speaking) speechSynthesis.cancel(); // barge-in: stop talking, this is now the user's turn
+        // A spoken stop phrase ("ok done", "thank you", "bye"...) ends the
+        // hands-free loop instead of being sent as a chat message — the
+        // voice equivalent of clicking VOICE MODE off.
+        if (STOP_PHRASE_PATTERN.test(text)) {
+          appendMessage("SYSTEM", "Voice mode ended.", "error");
+          deactivateVoiceMode();
+          return;
+        }
         awaitingReply = true;
         setStatus("THINKING…", "demo");
         sendText(text);
@@ -3264,19 +3363,19 @@
         else if (voiceModeOn) startListening();
       };
 
-      voiceBtn.addEventListener("click", () => {
-        voiceModeOn = !voiceModeOn;
-        voiceBtn.setAttribute("aria-pressed", String(voiceModeOn));
-        if (voiceModeOn) {
-          voiceBtn.textContent = "🎙️ VOICE MODE (ON)";
-          startListening();
-        } else {
-          voiceBtn.textContent = "🎙️ VOICE MODE";
-          stopVoiceMode();
-        }
-      });
+      // Shared by the button click and the "Hey JARVIS" wake listener —
+      // whichever one starts the conversation, it looks identical from
+      // here on (same recognition loop, same barge-in, same stop phrases).
+      function activateVoiceMode() {
+        if (voiceModeOn) return;
+        stopWakeListening(); // mic is exclusive — hand off before starting the main loop
+        voiceModeOn = true;
+        voiceBtn.setAttribute("aria-pressed", "true");
+        voiceBtn.textContent = "🎙️ VOICE MODE (ON)";
+        startListening();
+      }
 
-      stopVoiceModeImpl = () => {
+      function deactivateVoiceMode() {
         voiceModeOn = false;
         awaitingReply = false;
         voiceBtn.setAttribute("aria-pressed", "false");
@@ -3285,6 +3384,23 @@
         speechSynthesis.cancel();
         speaking = false;
         delete voiceBtn.dataset.speaking;
+        startWakeListening(); // resume listening for "Hey JARVIS" now that the mic is free again
+      }
+
+      voiceBtn.addEventListener("click", () => {
+        if (voiceModeOn) deactivateVoiceMode();
+        else activateVoiceMode();
+      });
+
+      stopVoiceModeImpl = () => {
+        deactivateVoiceMode();
+        stopWakeListening();
+      };
+
+      setChatPanelOpen = (open) => {
+        wakePanelOpen = open;
+        if (open) startWakeListening();
+        else stopWakeListening();
       };
     }
 
