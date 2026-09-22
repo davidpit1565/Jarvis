@@ -11,6 +11,9 @@ const ENV_KEYS = [
   "OLLAMA_BASE_URL",
   "OLLAMA_MODEL",
   "OLLAMA_API_KEY",
+  "CLOUDFLARE_ACCOUNT_ID",
+  "CLOUDFLARE_API_TOKEN",
+  "CLOUDFLARE_MODEL",
   "JARVIS_PROMPT_CACHING",
   "JARVIS_TOOL_RESULT_CACHE_TTL_MS",
   "JARVIS_PORT",
@@ -177,6 +180,23 @@ describe("loadConfig", () => {
     expect(config.ollamaBaseUrl).toBe("http://192.168.1.50:11434");
     expect(config.ollamaModel).toBe("qwen2.5");
     expect(config.ollamaApiKey).toBe("proxy-token");
+  });
+
+  test("leaves cloudflareAccountId/cloudflareApiToken/cloudflareModel undefined by default", () => {
+    const config = loadConfig();
+    expect(config.cloudflareAccountId).toBeUndefined();
+    expect(config.cloudflareApiToken).toBeUndefined();
+    expect(config.cloudflareModel).toBeUndefined();
+  });
+
+  test("reads CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN and CLOUDFLARE_MODEL when set", () => {
+    process.env.CLOUDFLARE_ACCOUNT_ID = "acct-1234";
+    process.env.CLOUDFLARE_API_TOKEN = "cf-token-abc";
+    process.env.CLOUDFLARE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    const config = loadConfig();
+    expect(config.cloudflareAccountId).toBe("acct-1234");
+    expect(config.cloudflareApiToken).toBe("cf-token-abc");
+    expect(config.cloudflareModel).toBe("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
   });
 
   test("promptCachingEnabled defaults to true", () => {
@@ -996,6 +1016,9 @@ describe("redactConfigForDisplay", () => {
     process.env.GROQ_API_KEY = "gsk-REAL-SECRET-VALUE";
     process.env.OPENROUTER_API_KEY = "or-REAL-SECRET-VALUE";
     process.env.OLLAMA_API_KEY = "ollama-REAL-SECRET-VALUE";
+    process.env.CLOUDFLARE_ACCOUNT_ID = "cf-account-id";
+    process.env.CLOUDFLARE_API_TOKEN = "cloudflare-REAL-SECRET-VALUE";
+    process.env.CLOUDFLARE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
     process.env.TWILIO_AUTH_TOKEN = "twilio-REAL-SECRET-VALUE";
     process.env.TWILIO_PUBLIC_BASE_URL = "https://example.com";
     process.env.JARVIS_PUBLIC_BASE_URL = "https://example.com";
@@ -1020,6 +1043,8 @@ describe("redactConfigForDisplay", () => {
     expect(redacted.groqApiKey).toEqual({ configured: true });
     expect(redacted.openrouterApiKey).toEqual({ configured: true });
     expect(redacted.ollamaApiKey).toEqual({ configured: true });
+    expect(redacted.cloudflareApiToken).toEqual({ configured: true });
+    expect(redacted.cloudflareAccountId).toBe("cf-account-id");
     expect(redacted.twilioAuthToken).toEqual({ configured: true });
     expect(redacted.adminToken).toEqual({ configured: true });
     expect(redacted.telegramBotToken).toEqual({ configured: true });

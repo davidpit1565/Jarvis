@@ -8,6 +8,7 @@ import { ClaudeBrain, DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { GroqBrain } from "@/core/brain/GroqBrain";
 import { OpenRouterBrain, OpenRouterPaidModelError } from "@/core/brain/OpenRouterBrain";
 import { OllamaBrain } from "@/core/brain/OllamaBrain";
+import { CloudflareWorkersAIBrain } from "@/core/brain/CloudflareWorkersAIBrain";
 import { AIProviderRegistry } from "@/core/brain/AIProviderRegistry";
 import { AIRouter } from "@/core/brain/AIRouter";
 import { CostTracker } from "@/core/cost/CostTracker";
@@ -524,6 +525,23 @@ function main() {
     aiRegistry.register(
       "ollama",
       new OllamaBrain(config.ollamaApiKey, { model: config.ollamaModel, baseUrl: config.ollamaBaseUrl }),
+      "free"
+    );
+  }
+  // Cloudflare Workers AI is a fifth, independent free-tier provider: a
+  // real hosted account (unlike Ollama), so it only activates once ALL
+  // THREE of account id/API token/model are explicitly set — a partial
+  // config stays inert rather than half-working. Always registered as
+  // "free": Cloudflare's own docs confirm exceeding the 10,000-Neuron
+  // daily allocation makes further calls fail rather than silently bill,
+  // so this is genuinely $0 the same way Groq/OpenRouter/Ollama are — see
+  // CloudflareWorkersAIBrain's own doc comment.
+  if (config.cloudflareAccountId && config.cloudflareApiToken && config.cloudflareModel) {
+    aiRegistry.register(
+      "cloudflare-workers-ai",
+      new CloudflareWorkersAIBrain(config.cloudflareAccountId, config.cloudflareApiToken, {
+        model: config.cloudflareModel,
+      }),
       "free"
     );
   }

@@ -71,6 +71,35 @@ export interface JarvisConfig {
    */
   ollamaApiKey?: string;
   /**
+   * Cloudflare account id — required, together with `cloudflareApiToken`
+   * and `cloudflareModel`, to register `CloudflareWorkersAIBrain` as
+   * another free-tier provider. Unlike Ollama (software the user runs
+   * themselves), Cloudflare Workers AI is a real hosted service, so both
+   * an account id and an API token are always required here — there is no
+   * sensible default to fall back to. Visible on any zone/account
+   * overview page in the Cloudflare dashboard.
+   */
+  cloudflareAccountId?: string;
+  /**
+   * Cloudflare API token with "Workers AI" read/edit permission, created
+   * under My Profile > API Tokens in the Cloudflare dashboard. Required
+   * alongside `cloudflareAccountId`/`cloudflareModel` to enable the
+   * provider — all three or none, same "no default, no guessing"
+   * philosophy as `ollamaModel`.
+   */
+  cloudflareApiToken?: string;
+  /**
+   * Model id from Cloudflare Workers AI's model catalog (e.g.
+   * "@cf/meta/llama-3.3-70b-instruct-fp8-fast" — see
+   * https://developers.cloudflare.com/workers-ai/models/ for the full
+   * list of 50+ hosted models). Deliberately has no default: Cloudflare
+   * hosts far too many models, with different capabilities, for JARVIS to
+   * guess a universally-correct one. Only registering the provider once
+   * `cloudflareAccountId`/`cloudflareApiToken`/`cloudflareModel` are ALL
+   * set keeps a partially-configured setup inert rather than half-working.
+   */
+  cloudflareModel?: string;
+  /**
    * Enables Anthropic prompt caching (`cache_control: ephemeral`) on the
    * system prompt and tool definitions ClaudeBrain sends. A pure cost
    * optimization with no behavior change, so it defaults to on; set
@@ -516,6 +545,15 @@ export function loadConfig(): JarvisConfig {
   const ollamaModel = process.env.OLLAMA_MODEL?.trim() || undefined;
   const ollamaApiKey = process.env.OLLAMA_API_KEY?.trim() || undefined;
 
+  // Cloudflare Workers AI: a real hosted account, unlike Ollama, so all
+  // three of account id/token/model are read plainly here — src/index.ts
+  // (not this function) decides whether to actually register the
+  // provider, only once all three are set together (see cloudflareModel's
+  // own doc comment for why partial config must stay inert).
+  const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || undefined;
+  const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN?.trim() || undefined;
+  const cloudflareModel = process.env.CLOUDFLARE_MODEL?.trim() || undefined;
+
   const promptCachingRaw = process.env.JARVIS_PROMPT_CACHING?.trim().toLowerCase();
   const promptCachingEnabled = promptCachingRaw === undefined || promptCachingRaw === "" ? true : promptCachingRaw === "true";
 
@@ -877,6 +915,9 @@ export function loadConfig(): JarvisConfig {
     ollamaBaseUrl,
     ollamaModel,
     ollamaApiKey,
+    cloudflareAccountId,
+    cloudflareApiToken,
+    cloudflareModel,
     promptCachingEnabled,
     aiFreeFirst,
     aiFallbackProvider,
@@ -976,6 +1017,7 @@ const KNOWN_SECRET_CONFIG_FIELDS: ReadonlySet<keyof JarvisConfig> = new Set([
   "groqApiKey",
   "openrouterApiKey",
   "ollamaApiKey",
+  "cloudflareApiToken",
   "twilioAuthToken",
   "telegramBotToken",
   "telegramWebhookSecret",

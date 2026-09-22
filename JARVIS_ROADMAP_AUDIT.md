@@ -2114,3 +2114,100 @@ Baseline for this pass was 1902 passing / 0 failing / 0 typecheck errors;
 this pass added 45 tests, bringing the suite to 1947 passing / 0 failing
 / 0 typecheck errors (`bun run typecheck` and `bun test` both re-run
 clean after this pass).
+
+## 2026-09-22 update — Cloudflare Workers AI: a fifth free-tier `Brain` provider (MISSING → built)
+
+**Classification:** MISSING → now built. No prior roadmap item named this
+provider; added on explicit request, following the exact established
+pattern of `OllamaBrain`/`GroqBrain`/`OpenRouterBrain` rather than
+refactoring it.
+
+**Free-tier verification (done for real, not assumed):** fetched
+Cloudflare's own current developer docs before writing any code —
+https://developers.cloudflare.com/workers-ai/platform/pricing/ confirms
+**10,000 "Neurons" (Cloudflare's compute-unit currency) per account per
+day, resetting daily at 00:00 UTC, no credit card required**, and — the
+property that actually matters for `CostTracker.KNOWN_FREE_PROVIDERS` —
+"if you exceed any one of the above limits, further operations will fail
+with an error," i.e. it fails closed rather than silently falling through
+to billing a card on file (a separate "Workers Paid" plan exists, but
+that's an explicit account-level upgrade, not something this provider
+triggers on its own). Also fetched
+https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/
+to confirm the exact endpoint shape (`POST /client/v4/accounts/{account_id}/ai/v1/chat/completions`,
+`Authorization: Bearer <api_token>`) and
+https://developers.cloudflare.com/workers-ai/features/function-calling/ to
+confirm tool-calling support (OpenAI-style `tools`/`tool_calls` shape) for
+Cloudflare's fine-tuned function-calling models.
+
+**What was built:**
+
+- `src/core/brain/CloudflareWorkersAIBrain.ts` — a new `Brain`
+  implementation, duplicating the exact OpenAI-compatible message/tool
+  translation logic `OllamaBrain`/`GroqBrain`/`OpenRouterBrain` already
+  each carry their own copy of (`toOpenAIMessages`/`toOpenAITools`/
+  `fromOpenAIResponse`) — this codebase's established convention, not
+  refactored. Unlike `OllamaBrain` (no config required — local software),
+  this needs a real Cloudflare account id AND API token, both required
+  with no default, plus a required model id (Cloudflare hosts 50+ models
+  with no single sensible default). Uses `fetchWithRetry` the same way
+  `OllamaBrain` does; a 429 is treated as either a normal rate limit or
+  (more likely) the daily free allocation being exhausted, and the thrown
+  error names the 00:00 UTC reset explicitly; a 401/403 names exactly what
+  to check (token validity/permission, account id match); an unreachable
+  endpoint throws a clear "could not reach Cloudflare Workers AI" error
+  naming the account id, never crashing silently.
+- `src/config/index.ts` — three new fields: `cloudflareAccountId`
+  (`CLOUDFLARE_ACCOUNT_ID`), `cloudflareApiToken` (`CLOUDFLARE_API_TOKEN`),
+  `cloudflareModel` (`CLOUDFLARE_MODEL`). `cloudflareApiToken` added to
+  `KNOWN_SECRET_CONFIG_FIELDS` (it was already caught by the fallback
+  `token` pattern, but explicit is safer per the file's own "belt and
+  suspenders" reasoning). All three are read unconditionally; `src/index.ts`
+  is the one place that decides whether to actually register the provider.
+- `src/core/brain/AIProviderRegistry.ts` — `ProviderName` extended with
+  `"cloudflare-workers-ai"`.
+- `src/core/brain/ModelCatalog.ts` — one generic placeholder catalog entry
+  (`cloudflare-workers-ai-hosted`, same "not one real model id" pattern as
+  the existing `ollama-local` entry, for the same reason: the actual model
+  is whatever the user sets as `CLOUDFLARE_MODEL`), `costTier: "free"`,
+  `toolCalling: true`, `vision: false` (unverified for an arbitrary
+  user-chosen model, same reasoning as Ollama's entry).
+- `src/core/cost/CostTracker.ts` — `"cloudflare-workers-ai"` added to
+  `KNOWN_FREE_PROVIDERS`, with a doc comment explicitly contrasting it with
+  a hypothetical provider whose free tier auto-upgrades to paid billing on
+  overage (which would NOT belong in this set) — Cloudflare's fail-closed
+  behavior is the load-bearing property.
+- `src/index.ts` — conditional registration: `CloudflareWorkersAIBrain` is
+  only constructed and registered (tagged `"free"`) when ALL THREE of
+  `cloudflareAccountId`/`cloudflareApiToken`/`cloudflareModel` are set —
+  partial config stays inert, mirroring `ollamaModel`'s own gating
+  philosophy exactly (no half-working state).
+- `README.md` — new "Cloudflare Workers AI: a fifth free-tier provider"
+  section, analogous in structure to the existing Ollama section: what it
+  is, why it's genuinely free (with the fail-closed distinction called
+  out), the three required env vars and exactly how to obtain each one from
+  the Cloudflare dashboard (account id on the account overview page; API
+  token under My Profile > API Tokens with "Workers AI" permission), and a
+  pointer to Cloudflare's models catalog for choosing `CLOUDFLARE_MODEL`.
+- Tests — `tests/brain/CloudflareWorkersAIBrain.test.ts` (construction
+  validation for all three required fields, `fromOpenAIResponse` pure-logic
+  coverage, request/response translation, tool-calling round trip, 503
+  retry, 401 error naming what's misconfigured, 429 error naming the daily
+  quota/reset explicitly, unreachable-endpoint error handling — mirroring
+  `OllamaBrain.test.ts`'s structure and coverage); `tests/cost/
+  CostTracker.test.ts` extended with a `cloudflare-workers-ai` free-cost
+  assertion mirroring the existing `openrouter`/`ollama` ones; `tests/
+  config/config.test.ts` extended with parsing coverage for the three new
+  fields and a redaction assertion for `cloudflareApiToken` (with
+  `cloudflareAccountId` confirmed to pass through unredacted, since it's an
+  id, not a secret).
+
+**Not touched, as scoped:** `OllamaBrain.ts`/`GroqBrain.ts`/
+`OpenRouterBrain.ts` (no refactor — the duplicated-translation-logic
+convention is followed, not questioned), dashboard/UI, and every other
+existing feature.
+
+This pass added 17 new tests (14 in `CloudflareWorkersAIBrain.test.ts`, 1
+in `CostTracker.test.ts`, 2 in `config.test.ts`), bringing the suite to
+1983 passing / 0 failing / 0 typecheck errors (`bun run typecheck` and
+`bun test` both re-run clean after this pass).

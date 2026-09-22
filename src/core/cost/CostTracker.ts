@@ -25,10 +25,23 @@ const ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS_USD = 15;
  */
 const PAID_PROVIDER_FLAT_FALLBACK_COST_USD = 0.01;
 
-/** Groq's free tier, OpenRouter (OpenRouterBrain refuses to construct against any model id that isn't ":free"), and Ollama (a user-run local model — there is no paid tier at all): genuinely $0, not an estimate. */
+/**
+ * Groq's free tier, OpenRouter (OpenRouterBrain refuses to construct
+ * against any model id that isn't ":free"), Ollama (a user-run local
+ * model — there is no paid tier at all), and Cloudflare Workers AI
+ * (10,000 free "Neurons"/day, resetting daily at 00:00 UTC): genuinely
+ * $0, not an estimate. Cloudflare belongs in this set for the same reason
+ * as the others — its own docs confirm exceeding the daily allocation
+ * makes further calls simply fail with an error, rather than silently
+ * falling through to billing a card on file the way, say, a "free trial
+ * credit that becomes pay-as-you-go on exhaustion" provider would. A
+ * provider with that latter shape would NOT belong here, since treating
+ * it as free would risk understating real spend once it quietly starts
+ * costing money.
+ */
 const FREE_PROVIDER_COST_USD = 0;
 
-const KNOWN_FREE_PROVIDERS = new Set(["groq", "openrouter", "ollama"]);
+const KNOWN_FREE_PROVIDERS = new Set(["groq", "openrouter", "ollama", "cloudflare-workers-ai"]);
 
 /**
  * Approximates a single brain call's cost in USD. Free providers (Groq)
