@@ -215,7 +215,15 @@ function toOpenAIMessages(messages: ConversationMessage[], systemContext?: strin
       }));
       result.push({
         role: "assistant",
-        content: message.content || null,
+        // Unlike Groq/OpenRouter/Ollama's identical-looking translation
+        // (which use `null` here per the OpenAI spec's own allowance),
+        // Cloudflare Workers AI's OpenAI-compat layer rejects `null`
+        // content on a tool-calls-only assistant message outright — found
+        // live: a real tool-call round trip 400'd with a schema error
+        // ("'string' not in 'null'"), confirmed by reproducing the exact
+        // same request with curl and fixing it the same way. An empty
+        // string is accepted and is semantically the same "no text" case.
+        content: message.content || "",
         tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
       });
       continue;
