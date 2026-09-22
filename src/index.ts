@@ -7,12 +7,14 @@ import { ConversationManager } from "@/core/conversation/ConversationManager";
 import { ClaudeBrain, DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { GroqBrain } from "@/core/brain/GroqBrain";
 import { OpenRouterBrain, OpenRouterPaidModelError } from "@/core/brain/OpenRouterBrain";
+import { OllamaBrain } from "@/core/brain/OllamaBrain";
 import { AIProviderRegistry } from "@/core/brain/AIProviderRegistry";
 import { AIRouter } from "@/core/brain/AIRouter";
 import { CostTracker } from "@/core/cost/CostTracker";
 import type { Brain } from "@/types/brain";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { ToolResultCache } from "@/core/cache/ToolResultCache";
+import { OllamaEmbeddingsClient } from "@/core/embeddings/OllamaEmbeddingsClient";
 import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionService } from "@/permissions/PermissionService";
@@ -206,6 +208,16 @@ function main() {
   // GET /agent-status / POST /agent/stop — JARVIS_ROADMAP_AUDIT.md
   // #187/#195/#196 (Live Agent Monitor / live status / Stop button).
   const liveStateTracker = new JarvisLiveStateTracker(eventBus);
+  // Semantic Memory Search / Semantic Result Cache (additive, opt-in —
+  // JARVIS_ROADMAP_AUDIT.md #60): only constructed when
+  // OLLAMA_EMBEDDING_MODEL is set, so every existing exact-match code path
+  // (MemoryStore.search LIKE matching, ToolResultCache's exact-match
+  // cache) has zero dependency on Ollama when this is unset, the default.
+  // See README's "Semantic memory & caching (optional, local-only)"
+  // section.
+  const embeddingsClient = config.ollamaEmbeddingModel
+    ? new OllamaEmbeddingsClient({ baseUrl: config.ollamaBaseUrl, model: config.ollamaEmbeddingModel })
+    : undefined;
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
   const reminderStore = new ReminderStore(config.remindersDbPath, config.timezone);
@@ -364,8 +376,8 @@ function main() {
   toolRegistry.registerTool(listMacRemindersTool);
   toolRegistry.registerTool(createMacReminderTool);
   toolRegistry.registerTool(completeMacReminderTool);
-  toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
-  toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
+  toolRegistry.registerTool(createSaveMemoryTool(memoryStore, embeddingsClient));
+  toolRegistry.registerTool(createSearchMemoryTool(memoryStore, embeddingsClient));
   toolRegistry.registerTool(createDeleteMemoryTool(memoryStore, undoStore));
   toolRegistry.registerTool(createCreateReminderTool(reminderStore));
   toolRegistry.registerTool(createListRemindersTool(reminderStore));
@@ -501,6 +513,20 @@ function main() {
       }
     }
   }
+  // Ollama is a fourth, independent free-tier provider: a user-run local
+  // model server, not a hosted account. It only activates when
+  // OLLAMA_MODEL is explicitly set — OLLAMA_BASE_URL defaulting to
+  // Ollama's real default port is not itself a reason to assume the user
+  // has a model pulled and running. Always registered as "free": there is
+  // no paid-tier concept for a locally-run model at all, unlike
+  // OpenRouter's mixed marketplace, so no per-model gate is needed here.
+  if (config.ollamaModel) {
+    aiRegistry.register(
+      "ollama",
+      new OllamaBrain(config.ollamaApiKey, { model: config.ollamaModel, baseUrl: config.ollamaBaseUrl }),
+      "free"
+    );
+  }
   if (config.anthropicApiKey) {
     aiRegistry.register(
       "anthropic",
@@ -568,6 +594,7 @@ function main() {
     contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
     lockdownService,
     toolResultCache,
+    embeddingsClient,
     maxToolCallsPerRun: config.maxToolCallsPerRun,
     localToolTimeoutMs: config.localToolTimeoutMs,
     liveState: liveStateTracker,
@@ -633,6 +660,7 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      embeddingsClient,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -678,6 +706,7 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      embeddingsClient,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -749,6 +778,7 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      embeddingsClient,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -781,6 +811,7 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      embeddingsClient,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -864,6 +895,7 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      embeddingsClient,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,

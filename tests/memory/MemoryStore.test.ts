@@ -430,4 +430,88 @@ describe("MemoryStore", () => {
       store.close();
     });
   });
+
+  describe("searchSemantic (additive, opt-in — MemoryStore itself never computes embeddings)", () => {
+    test("returns nothing when no memory has a stored embedding", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.name", value: "David" });
+
+      expect(store.searchSemantic([1, 0, 0])).toEqual([]);
+      store.close();
+    });
+
+    test("finds a memory whose stored embedding is similar, even with no word overlap", () => {
+      const store = new MemoryStore(":memory:");
+      // "dentist" query embedding vs. a memory about "Dr. Cohen" with a
+      // similar (but not identical) embedding direction — the whole point
+      // of semantic search over exact LIKE matching.
+      store.save({ key: "appointments.dentist", value: "appointment with Dr. Cohen", embedding: [1, 0.1, 0] });
+      store.save({ key: "user.favorite_color", value: "blue", embedding: [0, 0, 1] });
+
+      const results = store.searchSemantic([1, 0, 0]);
+      expect(results).toHaveLength(1);
+      expect(results[0]?.key).toBe("appointments.dentist");
+      expect(results[0]?.similarity).toBeGreaterThan(0.5);
+    });
+
+    test("excludes memories below the similarity threshold", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "a", value: "a", embedding: [1, 0] });
+      store.save({ key: "b", value: "b", embedding: [0, 1] }); // orthogonal -> similarity 0
+
+      const results = store.searchSemantic([1, 0]);
+      expect(results.map((r) => r.key)).toEqual(["a"]);
+    });
+
+    test("skips memories with a mismatched embedding dimensionality rather than crashing", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "a", value: "a", embedding: [1, 0, 0] });
+      store.save({ key: "b", value: "b", embedding: [1, 0] }); // different length than the query
+
+      const results = store.searchSemantic([1, 0, 0]);
+      expect(results.map((r) => r.key)).toEqual(["a"]);
+    });
+
+    test("excludes expired memories", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({
+        key: "expired",
+        value: "old",
+        embedding: [1, 0],
+        expiresAt: new Date(Date.now() - 1000).toISOString(),
+      });
+
+      expect(store.searchSemantic([1, 0])).toEqual([]);
+      store.close();
+    });
+
+    test("results are sorted most-similar first and bounded by limit", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "close", value: "close", embedding: [1, 0.05] });
+      store.save({ key: "closer", value: "closer", embedding: [1, 0] });
+
+      const results = store.searchSemantic([1, 0], 1);
+      expect(results).toHaveLength(1);
+      expect(results[0]?.key).toBe("closer");
+    });
+
+    test("save() with embedding: undefined never touches an existing stored embedding", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "k", value: "v1", embedding: [1, 0] });
+      store.save({ key: "k", value: "v2" }); // no embedding field at all — same as every pre-existing caller
+
+      const results = store.searchSemantic([1, 0]);
+      expect(results.map((r) => r.value)).toEqual(["v2"]);
+      store.close();
+    });
+
+    test("save() with an explicit null embedding clears a previously-stored one", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "k", value: "v1", embedding: [1, 0] });
+      store.save({ key: "k", value: "v2", embedding: null });
+
+      expect(store.searchSemantic([1, 0])).toEqual([]);
+      store.close();
+    });
+  });
 });

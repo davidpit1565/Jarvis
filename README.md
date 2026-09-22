@@ -197,6 +197,77 @@ memory store (`src/memory/MemoryStore.ts`) that survives restarts:
 This is the first real step toward "JARVIS knows things about you between
 conversations" rather than only within a single session.
 
+## Semantic memory & caching (optional, local-only)
+
+Everything above (`SEARCH_MEMORY`, `ToolResultCache`) is exact/substring
+matching by default and stays that way forever unless you explicitly opt
+in — nothing below changes any existing behavior on its own.
+
+**What this unlocks.** With a locally-run [Ollama](https://ollama.com)
+server serving an embedding model, JARVIS can also match by *meaning*:
+
+- **Semantic memory search** — `SEARCH_MEMORY` can find a memory that
+  shares no words with your query at all. Ask "what did I say about the
+  dentist" and it can surface a fact saved as "appointment with Dr. Cohen"
+  — `LIKE` matching alone would miss this entirely, since neither the key
+  nor the value contains the word "dentist."
+- **Semantic result caching** — a handful of tools that take a
+  loosely-phrased natural-language query (currently just `SEARCH_NEWS`; see
+  `Tool.semanticCacheable` in `src/types/tools.ts`) can serve a cached
+  answer for a *differently worded* but equivalent question — "AI news
+  today" and "today's AI news" hit the same cache entry instead of two
+  separate real lookups.
+
+**What stays exact-match-only, always.** `MemoryStore.search()`'s `LIKE`
+behavior is completely unchanged (see "Persistent memory" above) and
+remains the default/fallback — semantic results, when available, are only
+ever *appended* after exact matches, never instead of them. Every other
+tool's caching stays exact-input-only; a tool must explicitly set
+`semanticCacheable: true` to be eligible at all, and none above
+`PermissionLevel.READ` ever is, regardless of that flag. If Ollama isn't
+running or the embedding model isn't pulled, every one of these features
+falls back to its exact-match behavior silently — nothing errors, nothing
+degrades except losing the fuzzy-match extra.
+
+**Why this exists now.** A previous pass (see `JARVIS_ROADMAP_AUDIT.md`,
+item #60) explicitly skipped semantic search/caching because building it
+would have required a *paid* embeddings API call — spending money to build
+a cost-saving/UX feature contradicted this project's zero-cost mandate.
+Ollama serving embedding models locally (e.g. `nomic-embed-text`) removes
+that blocker entirely: genuinely free, runs on your own machine, no API
+key, no per-call cost.
+
+**Setup.**
+
+1. Install and run [Ollama](https://ollama.com) (`ollama serve`, or use its
+   default background service).
+2. Pull an embedding model: `ollama pull nomic-embed-text`.
+3. Set two environment variables:
+   - `OLLAMA_BASE_URL` — where Ollama is reachable. Optional; defaults to
+     `http://localhost:11434` (Ollama's own standard local address).
+   - `OLLAMA_EMBEDDING_MODEL` — the pulled model's name, e.g.
+     `nomic-embed-text`. **Required to enable any of this** — leaving it
+     unset (the default) keeps every code path above exact-match-only,
+     with zero dependency on Ollama being installed at all.
+
+This is the same `OLLAMA_BASE_URL` a local Ollama *chat* provider
+(`OllamaBrain`, if configured — see its own docs) also reads, so one
+running Ollama server backs both chat and embeddings without duplicating
+config.
+
+**Implementation notes, for the curious.** `OllamaEmbeddingsClient`
+(`src/core/embeddings/OllamaEmbeddingsClient.ts`) is a small wrapper around
+Ollama's `POST /api/embeddings` endpoint. `src/core/embeddings/similarity.ts`
+is a dependency-free cosine-similarity function — no vector database, no
+external library, no indexing: at personal-assistant scale (dozens to
+low-thousands of memories/cached queries) a linear scan in JS is
+effectively instant, and building real vector-search infrastructure for
+that scale would be pure over-engineering. `MemoryStore` gained one new
+nullable `embedding` column (additive migration, same
+`PRAGMA table_info`/`ALTER TABLE` pattern as every other column it's grown
+over time) and one new method, `searchSemantic()`, alongside — not instead
+of — `search()`.
+
 ## JARVIS knows what time it actually is
 
 A real gap found in this session's own research: JARVIS never told Claude
@@ -1968,6 +2039,77 @@ status endpoint or task-aware router to read from one place instead of
 re-deriving this from scattered model-id string literals. It's descriptive
 metadata only; it doesn't drive routing today.
 
+## Ollama: a genuinely $0, unlimited, local AI provider
+
+[Ollama](https://ollama.com) is free, open-source software you install and
+run yourself — on your own Mac (or wherever JARVIS's backend is deployed),
+not a hosted account JARVIS signs up for. It serves an OpenAI-compatible
+`chat/completions` API for whatever model you've pulled locally
+(Qwen2.5/Qwen3, `gpt-oss`, Llama, and others with real tool-calling
+support), with **no rate limit, no request quota, and no per-token cost of
+any kind** — the only "cost" is the compute your own machine spends running
+it.
+
+Setup (on the machine you want to run inference on):
+
+```bash
+# Install Ollama — see https://ollama.com for platform-specific instructions.
+ollama pull qwen2.5        # or gpt-oss, llama3.3, or any tool-calling-capable model you prefer
+ollama serve                # starts the local server on :11434 (often already running as a background service)
+```
+
+Then point JARVIS at it:
+
+```
+OLLAMA_MODEL=qwen2.5                        # required — enables OllamaBrain; no default, since JARVIS can't guess what you pulled
+OLLAMA_BASE_URL=http://localhost:11434      # optional — this is already the default (Ollama's own default port)
+OLLAMA_API_KEY=some-token                   # optional — only needed if you've put Ollama behind a reverse proxy that requires auth
+```
+
+`src/index.ts` only registers `OllamaBrain` (`src/core/brain/OllamaBrain.ts`)
+when `OLLAMA_MODEL` is explicitly set — `OLLAMA_BASE_URL` defaulting to
+Ollama's real default port is never itself a reason to assume a model is
+actually pulled and running. Once registered, it's a fourth `free`-tier
+`AIProviderRegistry` provider next to Groq/OpenRouter/Anthropic, participates
+in `AIRouter`'s free-first routing/fallback/circuit-breaker exactly like the
+others, and `CostTracker`'s `estimateCostUsd` always returns exactly `$0` for
+it — there's no `:free`-suffix-style gate the way `OpenRouterBrain` needs,
+because there is no paid tier for a model running on hardware you already
+own. `ZERO_COST_MODE` treats it as just another free provider.
+
+Message/tool-call translation reuses the exact same OpenAI-compatible shape
+`GroqBrain`/`OpenRouterBrain` already implement (the same
+`toOpenAIMessages`/`toOpenAITools`/`fromOpenAIResponse` logic, duplicated
+per-file the way those two already are — this class changes nothing about
+that existing pattern). The only real differences: no API key is ever
+required (Ollama's default local setup has no auth at all — the optional
+`OLLAMA_API_KEY` above exists only for a proxied setup, never as a hard
+dependency), and a much longer default request timeout (30s via
+`fetchWithRetry`, vs. `fetchWithRetry`'s own 10s default) — local inference
+on modest hardware can genuinely take much longer than a hosted API call.
+
+**IMPORTANT — this only works out of the box when JARVIS's backend and
+Ollama run on the same machine or the same local network.** `localhost`
+always means "wherever this process is running," never "the user's
+computer" from the process's own point of view. If JARVIS's backend is
+deployed to a cloud host (e.g. Fly.io) and Ollama runs on your Mac at home,
+`OLLAMA_BASE_URL=http://localhost:11434` will simply fail to connect — it
+resolves to Fly.io's own container, which has no Ollama server on it.
+Bridging a cloud deployment to a home machine (for example, via
+[Tailscale](https://tailscale.com) or [ngrok](https://ngrok.com) so
+`OLLAMA_BASE_URL` points at a reachable tunnel/VPN address instead of
+`localhost`) is entirely your own setup responsibility — JARVIS does not
+implement or manage that bridging itself. The straightforward, "just works"
+case is running JARVIS's backend directly on the same Mac that runs
+`ollama serve`.
+
+Ollama being unreachable (not started, or not reachable over the network) is
+a much more likely real-world failure mode for this provider than for a
+hosted one — `OllamaBrain` surfaces a clear, actionable error naming the
+configured base URL rather than crashing, and `AIRouter`'s existing circuit
+breaker (see below) opens after repeated failures and routes around it
+without blocking any other configured provider.
+
 ## Prompt caching and tool-result caching
 
 `ClaudeBrain` sends the system prompt and tool definitions with Anthropic's
@@ -1989,11 +2131,11 @@ never cached. `JARVIS_TOOL_RESULT_CACHE_TTL_MS` controls the TTL (default
 the shared `EventBus`.
 
 A real embedding-based semantic cache (catching near-identical, not just
-identical, prompts/tool calls) was deliberately not built — JARVIS has no
-embeddings infrastructure, and adding one would mean either a new paid API
-call (spending money to build a *cost-saving* feature) or an unreliable
-zero-cost text-similarity heuristic that risks serving a stale answer to a
-materially different question.
+identical, tool calls) is now available, opt-in, at zero cost — see
+"Semantic memory & caching (optional, local-only)" below. It only activates
+per-tool (`Tool.semanticCacheable`) and only once a local Ollama embeddings
+model is configured; without that, `ToolResultCache` behaves exactly as
+described above, unchanged.
 
 ## Free ($0) hosting: Cloudflare Tunnel instead of Fly.io
 

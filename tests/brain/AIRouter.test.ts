@@ -558,6 +558,59 @@ describe("AIRouter", () => {
       await expect(router.chat(REQUEST)).rejects.toThrow(); // 1 failure again (not 3rd consecutive)
       expect(router.getProviderStatus().groq!.circuitOpen).toBe(false); // threshold is 2, only 1 consecutive failure
     });
+
+    test("a genuinely unreachable Ollama server (connection refused) opens its circuit and routes around it, without blocking other providers", async () => {
+      // Real OllamaBrain, not a stub — proves AIRouter's circuit breaker
+      // handles OllamaBrain's actual thrown error shape (see
+      // OllamaBrain.test.ts's "connection refused" test) gracefully, since
+      // an offline/unreachable local Ollama server is a far more likely
+      // real-world scenario for this provider than for a hosted one (the
+      // user hasn't run `ollama serve`, or JARVIS's backend simply can't
+      // reach it — see OllamaBrain's own doc comment on the
+      // localhost/network-reachability caveat).
+      const { OllamaBrain } = await import("@/core/brain/OllamaBrain");
+      const originalFetch = global.fetch;
+      global.fetch = (async () => {
+        throw new Error("connect ECONNREFUSED 127.0.0.1:11434");
+      }) as unknown as typeof fetch;
+
+      try {
+        const registry = new AIProviderRegistry();
+        const calls: string[] = [];
+        registry.register("ollama", new OllamaBrain(undefined, { model: "qwen2.5", retryDelayMs: 0 }), "free");
+        registry.register("anthropic", countingBrain("paid reply", calls, "anthropic"), "paid");
+        const costTracker = new CostTracker(":memory:");
+        const router = new AIRouter(registry, costTracker, {
+          freeFirst: true,
+          circuitBreakerThreshold: 2,
+          circuitBreakerCooldownMs: 60_000,
+        });
+
+        // 1st and 2nd calls: ollama fails (unreachable), falls back to
+        // anthropic each time — the turn itself still succeeds.
+        const first = await router.chat(REQUEST);
+        expect(first.text).toBe("paid reply");
+        const second = await router.chat(REQUEST);
+        expect(second.text).toBe("paid reply");
+        expect(calls.filter((c) => c === "anthropic").length).toBe(2);
+
+        // 3rd call: ollama's circuit is now open — routing skips it
+        // entirely (as if unconfigured) rather than trying to reach the
+        // dead server again, and anthropic still serves the request.
+        calls.length = 0;
+        const third = await router.chat(REQUEST);
+        expect(third.text).toBe("paid reply");
+        expect(calls).toEqual(["anthropic"]);
+
+        const status = router.getProviderStatus();
+        expect(status.ollama!.circuitOpen).toBe(true);
+        expect(status.ollama!.consecutiveFailures).toBeGreaterThanOrEqual(2);
+        // The other provider is entirely unaffected by ollama's outage.
+        expect(status.anthropic!.circuitOpen).toBe(false);
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
   });
 
   describe("getProviderStatus", () => {

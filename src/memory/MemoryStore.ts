@@ -11,6 +11,7 @@ import type {
   SaveMemoryInput,
   SaveMemoryResult,
 } from "@/types/memory";
+import { cosineSimilarity } from "@/core/embeddings/similarity";
 
 const DEFAULT_CATEGORY: MemoryCategory = "fact";
 const DEFAULT_IMPORTANCE: MemoryImportance = 3;
@@ -27,6 +28,32 @@ const DEFAULT_TEMPORARY_TTL_MS = 24 * 60 * 60 * 1000;
  * see each method's own doc comment.
  */
 const DEFAULT_QUERY_LIMIT = 200;
+
+/**
+ * Semantic Memory Search (additive, opt-in — see `searchSemantic`'s own doc
+ * comment). Only ever consulted for memories that actually have a stored
+ * embedding, which only happens when `OLLAMA_EMBEDDING_MODEL` is
+ * configured — this constant has zero effect otherwise.
+ *
+ * Chosen deliberately low (0.5 on cosine similarity's [-1, 1] scale, i.e.
+ * "somewhat related" rather than "nearly identical"), because the whole
+ * point of this feature is *recall* for a small, personal dataset a human
+ * skims — e.g. matching "dentist" against a memory saved as "appointment
+ * with Dr. Cohen," which share no words at all. `nomic-embed-text` (the
+ * model this is written against) isn't as tightly contrastively-tuned as
+ * some retrieval-specific embedding models, so genuinely related short
+ * phrases often land in the 0.4-0.7 range rather than requiring something
+ * close to 1.0. Set too high (e.g. 0.8+), this would miss exactly the
+ * paraphrase cases semantic search exists to catch; set too low (e.g.
+ * 0.2), it would start surfacing memories that are merely in the same
+ * broad topic. This is memory *search* (results are shown to/read by the
+ * user or Claude, never blindly trusted as a match), so erring toward
+ * recall over precision is the right tradeoff — unlike semantic *caching*
+ * (see ToolResultCache's own, much higher threshold), a bad semantic
+ * search result costs nothing more than one extra, slightly-irrelevant row
+ * in a list.
+ */
+const SEMANTIC_MEMORY_SIMILARITY_THRESHOLD = 0.5;
 
 /**
  * Memory Poisoning Defense: how much a source is trusted, highest first.
@@ -59,6 +86,12 @@ type MemoryRow = Omit<MemoryRecord, "importance"> & { importance: number };
 
 function rowToRecord(row: MemoryRow): MemoryRecord {
   return { ...row, importance: row.importance as MemoryImportance };
+}
+
+/** JSON-encodes an embedding for storage in the `embedding` TEXT column, or null for "no embedding"/"clear it". */
+function serializeEmbedding(embedding: number[] | null | undefined): string | null {
+  if (embedding == null) return null;
+  return JSON.stringify(embedding);
 }
 
 /**
@@ -116,6 +149,17 @@ export class MemoryStore {
       // SELECT_COLUMNS's COALESCE, same treatment as untyped
       // category/importance rows already get.
       `ALTER TABLE memory_records ADD COLUMN source TEXT`,
+      // Semantic Memory Search: additive, nullable, opt-in. NULL (every row
+      // written before this pass, and every row written while
+      // OLLAMA_EMBEDDING_MODEL is unset) simply means "no embedding stored
+      // for this memory" — searchSemantic() skips such rows entirely, and
+      // every other method (search/getActive/get/etc.) never looks at this
+      // column at all. Stored as a JSON-encoded number[] text blob rather
+      // than a dedicated vector type — SQLite has none, and at this scale
+      // (dozens to low-thousands of rows) that's not a real limitation.
+      // Same best-effort "ignore if already there" migration pattern as
+      // every column above.
+      `ALTER TABLE memory_records ADD COLUMN embedding TEXT`,
     ]) {
       try {
         this.db.run(ddl);
@@ -213,11 +257,25 @@ export class MemoryStore {
           )
           .run(randomUUID(), input.key, existing.value, input.value, createdAt, existing.source, source);
       }
-      this.db
-        .query(
-          `UPDATE memory_records SET value = ?, created_at = ?, category = ?, importance = ?, expires_at = ?, source = ? WHERE id = ?`
-        )
-        .run(input.value, createdAt, category, importance, expiresAt, source, existing.id);
+      // input.embedding === undefined (the overwhelming common case, and
+      // the *only* case when embeddings aren't configured at all) leaves
+      // whatever embedding this key already had untouched — SAVE_MEMORY
+      // only ever passes an embedding when it actually computed one, and a
+      // caller not opting into that shouldn't silently blow away one this
+      // key already has. Explicit null clears it.
+      if (input.embedding !== undefined) {
+        this.db
+          .query(
+            `UPDATE memory_records SET value = ?, created_at = ?, category = ?, importance = ?, expires_at = ?, source = ?, embedding = ? WHERE id = ?`
+          )
+          .run(input.value, createdAt, category, importance, expiresAt, source, serializeEmbedding(input.embedding), existing.id);
+      } else {
+        this.db
+          .query(
+            `UPDATE memory_records SET value = ?, created_at = ?, category = ?, importance = ?, expires_at = ?, source = ? WHERE id = ?`
+          )
+          .run(input.value, createdAt, category, importance, expiresAt, source, existing.id);
+      }
       return { id: existing.id, key: input.key, value: input.value, createdAt, category, importance, expiresAt, source };
     }
 
@@ -233,7 +291,7 @@ export class MemoryStore {
     };
     this.db
       .query(
-        `INSERT INTO memory_records (id, key, value, created_at, category, importance, expires_at, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO memory_records (id, key, value, created_at, category, importance, expires_at, source, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         record.id,
@@ -243,7 +301,8 @@ export class MemoryStore {
         record.category,
         record.importance,
         record.expiresAt,
-        record.source
+        record.source,
+        serializeEmbedding(input.embedding)
       );
 
     return record;
@@ -294,6 +353,59 @@ export class MemoryStore {
       )
       .all(`%${fragment}%`, `%${fragment}%`, limit) as MemoryRow[];
     return rows.map(rowToRecord);
+  }
+
+  /**
+   * Semantic Memory Search (additive — see `SEMANTIC_MEMORY_SIMILARITY_THRESHOLD`'s
+   * own doc comment for the threshold reasoning). Alongside `search()`, not
+   * a replacement for it: `search()`'s plain-`LIKE` behavior is completely
+   * unchanged and remains the default/fallback. This is only ever useful
+   * once at least one memory has a stored embedding (SAVE_MEMORY only
+   * computes one when OLLAMA_EMBEDDING_MODEL is configured) — with none,
+   * this simply returns an empty array, cheaply.
+   *
+   * A plain linear scan over every row with a non-null embedding, computing
+   * cosine similarity against `queryEmbedding` in JS. Deliberately not
+   * indexed/optimized: this is a small, personal memory store (dozens to
+   * low-thousands of rows), not a production vector database — a full scan
+   * over that many rows is effectively instant, and building real vector
+   * indexing infrastructure for a dataset this size would be pure
+   * over-engineering.
+   *
+   * Returns matches at or above the similarity threshold, most-similar
+   * first, bounded to `limit`. Unlike `search()`, this does NOT return
+   * already-expired memories (there is no equivalent of `search()`'s
+   * "search everything including expired" behavior here — this is a new
+   * method with no existing callers/behavior to preserve).
+   */
+  searchSemantic(queryEmbedding: number[], limit: number = DEFAULT_QUERY_LIMIT): Array<MemoryRecord & { similarity: number }> {
+    const now = new Date().toISOString();
+    const rows = this.db
+      .query(
+        `SELECT ${SELECT_COLUMNS}, embedding FROM memory_records
+         WHERE embedding IS NOT NULL AND (expires_at IS NULL OR expires_at > ?)`
+      )
+      .all(now) as Array<MemoryRow & { embedding: string }>;
+
+    const scored: Array<MemoryRecord & { similarity: number }> = [];
+    for (const row of rows) {
+      let embedding: number[];
+      try {
+        embedding = JSON.parse(row.embedding);
+      } catch {
+        continue; // corrupt/foreign data in the column — skip rather than crash a search
+      }
+      if (!Array.isArray(embedding) || embedding.length !== queryEmbedding.length) continue;
+
+      const similarity = cosineSimilarity(queryEmbedding, embedding);
+      if (similarity >= SEMANTIC_MEMORY_SIMILARITY_THRESHOLD) {
+        const { embedding: _discard, ...record } = row;
+        scored.push({ ...rowToRecord(record as MemoryRow), similarity });
+      }
+    }
+
+    scored.sort((a, b) => b.similarity - a.similarity);
+    return scored.slice(0, limit);
   }
 
   /**

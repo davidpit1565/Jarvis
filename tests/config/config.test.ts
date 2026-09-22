@@ -8,6 +8,9 @@ const ENV_KEYS = [
   "JARVIS_GROQ_MODEL",
   "OPENROUTER_API_KEY",
   "JARVIS_OPENROUTER_MODEL",
+  "OLLAMA_BASE_URL",
+  "OLLAMA_MODEL",
+  "OLLAMA_API_KEY",
   "JARVIS_PROMPT_CACHING",
   "JARVIS_TOOL_RESULT_CACHE_TTL_MS",
   "JARVIS_PORT",
@@ -71,6 +74,8 @@ const ENV_KEYS = [
   "AGENTMAIL_API_KEY",
   "AGENTMAIL_INBOX_ID",
   "AGENTMAIL_MAX_SENDS_PER_DAY",
+  "OLLAMA_BASE_URL",
+  "OLLAMA_EMBEDDING_MODEL",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -155,6 +160,23 @@ describe("loadConfig", () => {
     const config = loadConfig();
     expect(config.openrouterApiKey).toBe("or-test-key");
     expect(config.openrouterModel).toBe("meta-llama/llama-3.3-70b-instruct:free");
+  });
+
+  test("ollamaBaseUrl defaults to the real Ollama default local port, ollamaModel/ollamaApiKey undefined by default", () => {
+    const config = loadConfig();
+    expect(config.ollamaBaseUrl).toBe("http://localhost:11434");
+    expect(config.ollamaModel).toBeUndefined();
+    expect(config.ollamaApiKey).toBeUndefined();
+  });
+
+  test("reads OLLAMA_BASE_URL, OLLAMA_MODEL and OLLAMA_API_KEY when set", () => {
+    process.env.OLLAMA_BASE_URL = "http://192.168.1.50:11434";
+    process.env.OLLAMA_MODEL = "qwen2.5";
+    process.env.OLLAMA_API_KEY = "proxy-token";
+    const config = loadConfig();
+    expect(config.ollamaBaseUrl).toBe("http://192.168.1.50:11434");
+    expect(config.ollamaModel).toBe("qwen2.5");
+    expect(config.ollamaApiKey).toBe("proxy-token");
   });
 
   test("promptCachingEnabled defaults to true", () => {
@@ -665,6 +687,20 @@ describe("loadConfig", () => {
     expect(config.newsRssUrl).toBeUndefined();
   });
 
+  test("ollamaBaseUrl defaults to the standard local Ollama address, ollamaEmbeddingModel to undefined", () => {
+    const config = loadConfig();
+    expect(config.ollamaBaseUrl).toBe("http://localhost:11434");
+    expect(config.ollamaEmbeddingModel).toBeUndefined();
+  });
+
+  test("reads OLLAMA_BASE_URL and OLLAMA_EMBEDDING_MODEL when set", () => {
+    process.env.OLLAMA_BASE_URL = "http://my-ollama-box:11434";
+    process.env.OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+    const config = loadConfig();
+    expect(config.ollamaBaseUrl).toBe("http://my-ollama-box:11434");
+    expect(config.ollamaEmbeddingModel).toBe("nomic-embed-text");
+  });
+
   test("loads weekly digest settings when both are set", () => {
     process.env.JARVIS_WEEKLY_DIGEST_DAY = "1";
     process.env.JARVIS_WEEKLY_DIGEST_TIME = "09:00";
@@ -959,6 +995,7 @@ describe("redactConfigForDisplay", () => {
     process.env.ANTHROPIC_API_KEY = "sk-ant-REAL-SECRET-VALUE";
     process.env.GROQ_API_KEY = "gsk-REAL-SECRET-VALUE";
     process.env.OPENROUTER_API_KEY = "or-REAL-SECRET-VALUE";
+    process.env.OLLAMA_API_KEY = "ollama-REAL-SECRET-VALUE";
     process.env.TWILIO_AUTH_TOKEN = "twilio-REAL-SECRET-VALUE";
     process.env.TWILIO_PUBLIC_BASE_URL = "https://example.com";
     process.env.JARVIS_PUBLIC_BASE_URL = "https://example.com";
@@ -982,6 +1019,7 @@ describe("redactConfigForDisplay", () => {
     expect(redacted.anthropicApiKey).toEqual({ configured: true });
     expect(redacted.groqApiKey).toEqual({ configured: true });
     expect(redacted.openrouterApiKey).toEqual({ configured: true });
+    expect(redacted.ollamaApiKey).toEqual({ configured: true });
     expect(redacted.twilioAuthToken).toEqual({ configured: true });
     expect(redacted.adminToken).toEqual({ configured: true });
     expect(redacted.telegramBotToken).toEqual({ configured: true });

@@ -57,6 +57,16 @@ export interface SaveMemoryInput {
   expiresAt?: string | null;
   /** Provenance of this value — see MemoryTrust. Defaults to "USER_STATED" when omitted, matching SAVE_MEMORY's default (an explicit user-facing tool call). */
   source?: MemoryTrust;
+  /**
+   * Optional embedding vector for `value` (and/or `key`), computed by the
+   * caller (SaveMemoryTool, when OLLAMA_EMBEDDING_MODEL is configured) —
+   * MemoryStore itself never computes embeddings or talks to Ollama, it
+   * only stores what it's given. Omitted (the default, and the only
+   * possibility when embeddings aren't configured at all) means this
+   * memory is exact-match-searchable only, exactly as before this feature
+   * existed. Explicit `null` clears a previously-stored embedding.
+   */
+  embedding?: number[] | null;
 }
 
 /** Returned by MemoryStore.save(). */
