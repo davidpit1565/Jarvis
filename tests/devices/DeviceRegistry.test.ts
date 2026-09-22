@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
-import { DeviceStatus, DeviceType } from "@/types/devices";
+import { DeviceRole, DeviceStatus, DeviceType } from "@/types/devices";
 
 const baseInput = {
   agentVersion: "0.1.0",
@@ -188,5 +188,88 @@ describe("DeviceRegistry persistence", () => {
     const registry = new DeviceRegistry();
     registry.registerDevice({ id: "imac-1", name: "iMac", type: DeviceType.MAC, platform: "macos", ...baseInput });
     registry.close(); // must not throw with no backing db
+  });
+});
+
+describe("DeviceRegistry.updateRegistrationMetadata", () => {
+  const register = (registry: DeviceRegistry) =>
+    registry.registerDevice({
+      id: "imac-1",
+      name: "David's iMac",
+      type: DeviceType.MAC,
+      platform: "macos",
+      capabilities: ["get_active_application"],
+      ...baseInput,
+    });
+
+  test("refreshes the profile an upgraded Agent re-reports", () => {
+    const registry = new DeviceRegistry();
+    register(registry);
+
+    registry.updateRegistrationMetadata("imac-1", {
+      name: "David's iMac",
+      type: DeviceType.MAC,
+      platform: "macos",
+      agentVersion: "0.2.0",
+      protocolVersion: "2",
+      capabilities: ["get_active_application", "open_application", "click_element"],
+    });
+
+    const device = registry.getDevice("imac-1")!;
+    expect(device.agentVersion).toBe("0.2.0");
+    expect(device.protocolVersion).toBe("2");
+    expect(device.capabilities).toEqual([
+      "get_active_application",
+      "open_application",
+      "click_element",
+    ]);
+  });
+
+  test("never lets a re-registration grant the device a role", () => {
+    const registry = new DeviceRegistry();
+    register(registry);
+    registry.setRole("imac-1", DeviceRole.PRIMARY);
+
+    // A device reconnecting asks for a role in every payload; honouring it
+    // here would be a self-service promotion path around setRole.
+    registry.updateRegistrationMetadata("imac-1", {
+      name: "David's iMac",
+      type: DeviceType.MAC,
+      platform: "macos",
+      requestedRole: DeviceRole.PRIMARY,
+      ...baseInput,
+    });
+
+    expect(registry.getDevice("imac-1")?.role).toBe(DeviceRole.PRIMARY);
+    expect(registry.getDevice("imac-1")?.requestedRole).toBe(DeviceRole.PRIMARY);
+  });
+
+  test("keeps an admin-assigned role when the device stops asking for one", () => {
+    const registry = new DeviceRegistry();
+    register(registry);
+    registry.setRole("imac-1", DeviceRole.PRIMARY);
+
+    registry.updateRegistrationMetadata("imac-1", {
+      name: "David's iMac",
+      type: DeviceType.MAC,
+      platform: "macos",
+      ...baseInput,
+    });
+
+    expect(registry.getDevice("imac-1")?.role).toBe(DeviceRole.PRIMARY);
+    expect(registry.getDevice("imac-1")?.requestedRole).toBeNull();
+  });
+
+  test("throws for a device that was never registered", () => {
+    const registry = new DeviceRegistry();
+
+    expect(() =>
+      registry.updateRegistrationMetadata("ghost", {
+        name: "Ghost",
+        type: DeviceType.MAC,
+        platform: "macos",
+        ...baseInput,
+      })
+    ).toThrow("Unknown device: ghost");
   });
 });

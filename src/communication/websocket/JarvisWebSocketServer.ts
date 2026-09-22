@@ -1081,6 +1081,22 @@ export class JarvisWebSocketServer {
         requestedRole: payload.requestedRole,
       });
       this.deps.eventBus.emit("device.registered", { device: deviceRegistry.getDevice(deviceId)! });
+    } else {
+      // A device that's registered before still re-sends its full profile on
+      // every reconnect, and it's the only place that profile comes from. Skip
+      // this and an Agent upgrade never lands: Core keeps serving the version,
+      // protocol version and capability list captured on the device's very
+      // first connection, months out of date, while the Agent in front of it
+      // has gained whole new tools.
+      deviceRegistry.updateRegistrationMetadata(deviceId, {
+        name: payload.deviceName,
+        type: payload.deviceType,
+        platform: payload.platform,
+        agentVersion: payload.agentVersion,
+        protocolVersion: payload.protocolVersion,
+        capabilities: payload.capabilities,
+        requestedRole: payload.requestedRole,
+      });
     }
 
     const isAuthenticated = payload.credential

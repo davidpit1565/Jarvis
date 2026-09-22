@@ -124,6 +124,42 @@ export class DeviceRegistry {
     return device;
   }
 
+  /**
+   * Refreshes the self-reported metadata of an already-registered device
+   * from a fresh `device.register`.
+   *
+   * A device only ever went through registerDevice() once, on its very
+   * first connection, so without this everything it reports about itself
+   * was frozen at that moment: upgrade the Agent and Core still believed
+   * the old agentVersion, the old protocolVersion, and — most visibly —
+   * the original capability list, so newly added device tools never showed
+   * up in the registry, /status, or anything downstream that asks what a
+   * device can do.
+   *
+   * Deliberately does NOT touch `role`: that's an administrative decision
+   * made on Core's side (setRole), and letting a re-registration carry it
+   * would hand a device a way to reassign itself simply by reconnecting —
+   * exactly what registerDevice's `role: null` is there to prevent.
+   * `status`/`lastSeen` are likewise left to updateStatus.
+   */
+  updateRegistrationMetadata(id: string, input: Omit<RegisterDeviceInput, "id">): Device {
+    const device = this.devices.get(id);
+    if (!device) {
+      throw new Error(`Unknown device: ${id}`);
+    }
+
+    device.name = input.name;
+    device.type = input.type;
+    device.platform = input.platform;
+    device.agentVersion = input.agentVersion;
+    device.protocolVersion = input.protocolVersion;
+    device.capabilities = input.capabilities ?? [];
+    device.requestedRole = input.requestedRole ?? null;
+
+    this.persist(device);
+    return device;
+  }
+
   getDevice(id: string): Device | undefined {
     return this.devices.get(id);
   }
