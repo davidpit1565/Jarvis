@@ -45,6 +45,7 @@ import { redactConfigForDisplay, type JarvisConfig } from "@/config";
 import { verifyDatabaseIntegrity } from "@/backup/verifyBackupIntegrity";
 import { Logger } from "@/core/logging/Logger";
 import { computeAudioLevel } from "@/communication/phone/audioLevel";
+import { computeTurnLatencies } from "@/core/state/turnLatency";
 import {
   makeEnvelope,
   parseDeviceToCoreMessage,
@@ -1747,7 +1748,12 @@ export class JarvisWebSocketServer {
         return Response.json({ error: "limit must be a positive integer" }, { status: 400 });
       }
     }
-    return Response.json({ transitions: toolAuditLog.listRecentTransitions(sessionId, limit) });
+    const transitions = toolAuditLog.listRecentTransitions(sessionId, limit);
+    // Performance metrics (Phase 45): computed on the fly from these same
+    // already-persisted transitions — no separate tracking, see
+    // `computeTurnLatencies`'s own doc comment. Most recent turn first,
+    // matching `transitions`' own ordering.
+    return Response.json({ transitions, turnLatencies: computeTurnLatencies(transitions) });
   }
 
   /**

@@ -384,4 +384,50 @@ describe("MemoryStore", () => {
       store.close();
     });
   });
+
+  describe("Performance — bounded queries (Phase 48)", () => {
+    test("search() with an empty fragment ('list everything') is bounded by a default limit, not the whole table", () => {
+      const store = new MemoryStore(":memory:");
+      for (let i = 0; i < 10; i++) {
+        store.save({ key: `fact.${i}`, value: `value ${i}` });
+      }
+
+      const results = store.search("", 5);
+      expect(results).toHaveLength(5);
+      store.close();
+    });
+
+    test("search() still returns everything that matches when under the limit", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.name", value: "David" });
+      store.save({ key: "user.email", value: "dp@example.com" });
+
+      expect(store.search("user.")).toHaveLength(2);
+      store.close();
+    });
+
+    test("search() defaults to a bounded limit even when not passed explicitly", () => {
+      const store = new MemoryStore(":memory:");
+      for (let i = 0; i < 250; i++) {
+        store.save({ key: `fact.${i}`, value: `value ${i}` });
+      }
+
+      // Default limit (200) caps the result even for a query matching every row.
+      const results = store.search("");
+      expect(results.length).toBeLessThanOrEqual(200);
+      expect(results.length).toBeGreaterThan(0);
+      store.close();
+    });
+
+    test("getActive() is bounded by a limit, newest first", () => {
+      const store = new MemoryStore(":memory:");
+      for (let i = 0; i < 10; i++) {
+        store.save({ key: `fact.${i}`, value: `value ${i}` });
+      }
+
+      const results = store.getActive(new Date().toISOString(), 3);
+      expect(results).toHaveLength(3);
+      store.close();
+    });
+  });
 });

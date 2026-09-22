@@ -390,7 +390,7 @@ export class AgentCore {
         let result: ToolResult;
         try {
           result = await withTimeout(
-            this.deps.orchestrator.executeToolCall(task.userId, toolCall),
+            this.deps.orchestrator.executeToolCall(task.userId, toolCall, taskId),
             stepTimeoutMs,
             `Step "${step.description}" timed out after ${stepTimeoutMs}ms`
           );
@@ -401,7 +401,15 @@ export class AgentCore {
           };
         }
 
-        this.deps.auditLog.record(step.toolName, task.userId, step.input, result);
+        // Observability (Phase 43): taskId doubles as this step's runId —
+        // the same correlation key AIRouter/CostTracker's ledger already
+        // uses AgentCore's taskId for (see BrainAgentPlanner's chat calls),
+        // so a tool call and the AI plan/verify calls around it in one
+        // task correlate under one id, not two.
+        this.deps.auditLog.record(step.toolName, task.userId, step.input, result, {
+          toolCallId: toolCall.id,
+          runId: taskId,
+        });
         task = this.deps.taskStore.recordStepResult(taskId, step.id, result);
         this.deps.auditLog.recordAgentEvent(taskId, task.userId, "step.executed", {
           stepId: step.id,
@@ -439,7 +447,7 @@ export class AgentCore {
           step,
           result: step.lastResult,
           runVerificationTool: (toolName, input) =>
-            this.deps.orchestrator.executeToolCall(task.userId, { id: randomUUID(), toolName, input }),
+            this.deps.orchestrator.executeToolCall(task.userId, { id: randomUUID(), toolName, input }, taskId),
         });
 
         this.deps.auditLog.recordAgentEvent(taskId, task.userId, "step.verification", {

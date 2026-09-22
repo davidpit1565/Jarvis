@@ -58,6 +58,7 @@ describe("Observer broadcast (/observer)", () => {
       result: { success: true, data: { app: "Safari" } },
       userId: "local-user",
       input: {},
+      toolCallId: "req-123",
     });
 
     const message = await received;
@@ -68,6 +69,7 @@ describe("Observer broadcast (/observer)", () => {
       result: { success: true, data: { app: "Safari" } },
       userId: "local-user",
       input: {},
+      toolCallId: "req-123",
     });
     expect(typeof message.timestamp).toBe("string");
 

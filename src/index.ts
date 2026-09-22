@@ -1427,8 +1427,8 @@ function main() {
     }
   });
 
-  eventBus.on("tool.executed", ({ toolName, result, userId, input }) => {
-    toolAuditLog.record(toolName, userId, input, result);
+  eventBus.on("tool.executed", ({ toolName, result, userId, input, toolCallId, runId }) => {
+    toolAuditLog.record(toolName, userId, input, result, { toolCallId, runId });
     activityLog.record(`${toolName} → ${result.success ? "ok" : `failed: ${result.error}`}`);
   });
 

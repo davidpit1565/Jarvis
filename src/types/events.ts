@@ -25,6 +25,24 @@ export interface JarvisEventMap {
      * generic "done"/"failed" label rather than ever inventing a number.
      */
     resultSummary?: string;
+    /**
+     * The `ToolCallRequest.id` this execution is for — Observability
+     * (Phase 43). Distinct from `requestId` above (a fresh id minted per
+     * local-tool execution, passed to the tool's own `ToolContext`); this
+     * is the stable id the brain/conversation/audit trail already know the
+     * call by. Always set (local and device tools both know their own
+     * `toolCall.id`).
+     */
+    toolCallId: string;
+    /**
+     * The AI turn/run this tool call happened within, when known — the
+     * same id `Orchestrator.handleUserMessage` generates per chat turn
+     * (reused across that turn's `brain.chat()` calls) or `AgentCore` uses
+     * its `taskId` for. Lets a listener (e.g. `ToolAuditLog.record`)
+     * correlate "this AI call" with "these tool calls" for one turn.
+     * Omitted when no run scope is available.
+     */
+    runId?: string;
   };
   "tool.dispatched": { toolName: string; deviceId: string; requestId: string };
   /** A READ-level local tool call was served from `ToolResultCache` instead of actually re-running the tool. */
