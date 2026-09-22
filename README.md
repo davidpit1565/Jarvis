@@ -1062,6 +1062,86 @@ automated from here):
   protection), independent of the admin token, since Google's own
   redirect has no way to carry a header.
 
+## AgentMail integration (JARVIS's own email inbox)
+
+Gives JARVIS its own independent email address — e.g. `jarvis@agentmail.to`
+— via [AgentMail](https://docs.agentmail.to), a real REST API for giving
+an AI agent its own inbox. **This is NOT the user's personal Gmail and is
+not a replacement for the Calendar & Gmail integration above.** It's a
+wholly separate identity and a wholly separate integration: it never
+touches `GmailClient`, `GoogleCalendarClient`, or the linked Google
+account's OAuth tokens at all. Use it when JARVIS itself needs to send or
+receive mail as its own sender — e.g. corresponding with another service
+or agent — never to send mail that should appear to come from the user.
+
+**What it does:** lets JARVIS send a real email from its own AgentMail
+inbox, and lets it check that inbox for recent messages sent to it.
+
+**What it does NOT do:** it does not read, send, or otherwise touch the
+user's personal Gmail; it does not create or list AgentMail inboxes (the
+one inbox JARVIS operates is created once, by the user, in AgentMail's own
+dashboard/API — this integration only ever talks to that one configured
+inbox id); and it has no webhook listener for real-time new-message push
+(AgentMail's API does support webhooks for this, but JARVIS's own
+`CHECK_AGENT_INBOX` tool is a pull, not a push — the same "no dedicated
+inbound listener" shape as every other integration in this codebase that
+doesn't need one).
+
+**Setup** (done once, in AgentMail's own dashboard — this can't be
+automated from here):
+
+1. Sign up at [agentmail.to](https://agentmail.to) and create an inbox
+   (e.g. `jarvis`, giving you `jarvis@agentmail.to`) and an API key from
+   AgentMail's dashboard.
+2. Set `AGENTMAIL_API_KEY` (the API key) and `AGENTMAIL_INBOX_ID` (the
+   inbox's id, e.g. `jarvis@agentmail.to` or whatever id AgentMail's
+   dashboard shows for it) in JARVIS's environment. Both are required
+   together — setting only one throws a clear config error at startup
+   rather than half-registering the feature.
+3. Restart JARVIS. `[jarvis] AgentMail integration enabled (inbox: ...)`
+   in the startup log confirms it registered; leaving both unset means the
+   feature simply doesn't exist — no crash, no warning spam.
+
+**What's implemented:**
+
+- **`SEND_AGENT_EMAIL`** (`CONFIRM`, requires a fresh confirmation on
+  every call, same reasoning as `SEND_EMAIL`) — sends a real email from
+  JARVIS's own AgentMail inbox. A prompt-injected instruction reaching
+  `CHECK_AGENT_INBOX`'s results is exactly the same exfiltration shape
+  `SEND_EMAIL`'s own doc comment describes for Gmail — `CONFIRM` is the
+  real backstop, not the system prompt's advisory instruction alone.
+  Also enforces a config-driven daily send cap, `AGENTMAIL_MAX_SENDS_PER_DAY`
+  (default 20, `src/agentmail/AgentMailSendGuard.ts`) — the same
+  per-day-counter shape as `TwilioCostGuard` for outbound calls — so a
+  misconfigured automation rule or a runaway agent loop can't turn this
+  into an unbounded number of real sends in a day.
+- **`CHECK_AGENT_INBOX`** (`READ`) — lists the most recent messages
+  received in JARVIS's own inbox (sender, subject, preview). Bounded the
+  same way `SEARCH_EMAIL`/`MemoryStore.search` are: capped at 20 results
+  per call regardless of what's requested, never an unbounded pull of the
+  whole inbox.
+- `src/agentmail/AgentMailClient.ts` — raw `fetch` + `fetchWithRetry`
+  calls against AgentMail's REST API (`https://api.agentmail.to/v0/...`),
+  same style as `GmailClient`/`GoogleCalendarClient`/`RssNewsClient`, no
+  SDK dependency. Auth is a simple `Authorization: Bearer <api_key>`
+  header — a long-lived static key from AgentMail's dashboard, not an
+  OAuth flow, so there's no token-refresh logic like `CalendarTokenStore`
+  needs for Gmail/Calendar. The API key is never logged or included in any
+  error message or tool result; a 401/403 from AgentMail is translated
+  into a generic "check AGENTMAIL_API_KEY" message instead of the raw
+  response body.
+- `AGENTMAIL_API_KEY` is added to the same secret-redaction allowlist
+  (`KNOWN_SECRET_CONFIG_FIELDS`/`isSecretConfigField` in
+  `src/config/index.ts`) every other API key/token already goes through —
+  it's never exposed as a real value via Config Center's `GET /config`.
+
+**REQUIRES REAL VALIDATION:** the endpoint shapes in `AgentMailClient.ts`
+were verified against AgentMail's own published API reference
+(`docs.agentmail.to/api-reference/...`) during implementation, but this
+integration has never been exercised against a real AgentMail account or
+inbox — the same caveat every other freshly-added integration in this
+codebase carries until someone actually runs it end-to-end.
+
 ## "Hey JARVIS" voice (Mac agent)
 
 Lets you talk to JARVIS out loud on the Mac, like Siri/Alexa: say "Hey

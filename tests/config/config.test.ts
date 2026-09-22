@@ -68,6 +68,9 @@ const ENV_KEYS = [
   "JARVIS_STALE_COMMITMENT_DAYS",
   "JARVIS_QUIET_HOURS_START",
   "JARVIS_QUIET_HOURS_END",
+  "AGENTMAIL_API_KEY",
+  "AGENTMAIL_INBOX_ID",
+  "AGENTMAIL_MAX_SENDS_PER_DAY",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -382,6 +385,43 @@ describe("loadConfig", () => {
 
   test("throws when only JARVIS_STUDIO_SECRET is set", () => {
     process.env.JARVIS_STUDIO_SECRET = "studio-secret";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("loads AgentMail settings when both are set", () => {
+    process.env.AGENTMAIL_API_KEY = "am-key";
+    process.env.AGENTMAIL_INBOX_ID = "jarvis-inbox";
+
+    const config = loadConfig();
+    expect(config.agentMailApiKey).toBe("am-key");
+    expect(config.agentMailInboxId).toBe("jarvis-inbox");
+  });
+
+  test("leaves AgentMail settings undefined when neither is set", () => {
+    const config = loadConfig();
+    expect(config.agentMailApiKey).toBeUndefined();
+    expect(config.agentMailInboxId).toBeUndefined();
+  });
+
+  test("throws when only AGENTMAIL_API_KEY is set", () => {
+    process.env.AGENTMAIL_API_KEY = "am-key";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("throws when only AGENTMAIL_INBOX_ID is set", () => {
+    process.env.AGENTMAIL_INBOX_ID = "jarvis-inbox";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults AGENTMAIL_MAX_SENDS_PER_DAY to 20", () => {
+    const config = loadConfig();
+    expect(config.agentMailMaxSendsPerDay).toBe(20);
+  });
+
+  test("rejects a non-positive AGENTMAIL_MAX_SENDS_PER_DAY", () => {
+    process.env.AGENTMAIL_API_KEY = "am-key";
+    process.env.AGENTMAIL_INBOX_ID = "jarvis-inbox";
+    process.env.AGENTMAIL_MAX_SENDS_PER_DAY = "0";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 
@@ -931,6 +971,8 @@ describe("redactConfigForDisplay", () => {
     process.env.SPOTIFY_CLIENT_SECRET = "spotify-REAL-SECRET-VALUE";
     process.env.JARVIS_STUDIO_BASE_URL = "https://studio.example.com";
     process.env.JARVIS_STUDIO_SECRET = "studio-REAL-SECRET-VALUE";
+    process.env.AGENTMAIL_API_KEY = "agentmail-REAL-SECRET-VALUE";
+    process.env.AGENTMAIL_INBOX_ID = "jarvis-inbox";
 
     const config = loadConfig();
     const redacted = redactConfigForDisplay(config);
@@ -947,6 +989,7 @@ describe("redactConfigForDisplay", () => {
     expect(redacted.googleClientSecret).toEqual({ configured: true });
     expect(redacted.spotifyClientSecret).toEqual({ configured: true });
     expect(redacted.studioSecret).toEqual({ configured: true });
+    expect(redacted.agentMailApiKey).toEqual({ configured: true });
   });
 
   test("reports an unset secret as not configured", () => {

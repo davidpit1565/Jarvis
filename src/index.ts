@@ -117,6 +117,10 @@ import { createSendEmailTool } from "@/tools/gmail/SendEmailTool";
 import { createReplyEmailTool } from "@/tools/gmail/ReplyEmailTool";
 import { createGetEmailTool } from "@/tools/gmail/GetEmailTool";
 import { createGetUnreadEmailCountTool } from "@/tools/gmail/GetUnreadEmailCountTool";
+import { AgentMailClient } from "@/agentmail/AgentMailClient";
+import { AgentMailSendGuard } from "@/agentmail/AgentMailSendGuard";
+import { createSendAgentEmailTool } from "@/tools/agentmail/SendAgentEmailTool";
+import { createCheckAgentInboxTool } from "@/tools/agentmail/CheckAgentInboxTool";
 import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
 import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
 import { createGetWeatherForecastTool } from "@/tools/weather/GetWeatherForecastTool";
@@ -281,6 +285,22 @@ function main() {
     toolRegistry.registerTool(createGetUnreadEmailCountTool(gmailClient));
     toolRegistry.registerTool(createSendEmailTool(gmailClient));
     toolRegistry.registerTool(createReplyEmailTool(gmailClient));
+  }
+
+  // AgentMail — JARVIS's own independent email inbox, wholly separate
+  // from the Google account link above (no shared token store, no shared
+  // OAuth scope, never touches GmailClient/GoogleCalendarClient at all).
+  // Unconfigured means this simply doesn't register — no crash, no
+  // warning spam, just the one log line below when it IS configured.
+  const agentMailEnabled = Boolean(config.agentMailApiKey && config.agentMailInboxId);
+  if (agentMailEnabled) {
+    const agentMailClient = new AgentMailClient(config.agentMailApiKey!, config.agentMailInboxId!);
+    const agentMailSendGuard = new AgentMailSendGuard(config.agentMailMaxSendsPerDay);
+    toolRegistry.registerTool(
+      createSendAgentEmailTool(agentMailClient, agentMailSendGuard, () => formatDateKey(new Date(), config.timezone))
+    );
+    toolRegistry.registerTool(createCheckAgentInboxTool(agentMailClient));
+    console.log(`[jarvis] AgentMail integration enabled (inbox: ${config.agentMailInboxId})`);
   }
 
   const spotifyEnabled = Boolean(config.spotifyClientId && config.spotifyClientSecret && config.publicBaseUrl);
