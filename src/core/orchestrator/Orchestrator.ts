@@ -402,7 +402,7 @@ export class Orchestrator {
           pendingToolCalls.push(toolCall);
         }
 
-        await this.runToolCallBatch(userId, sessionId, pendingToolCalls);
+        await this.runToolCallBatch(userId, sessionId, pendingToolCalls, runId);
 
         if (liveState?.isStopRequested(sessionId)) {
           return "Stopped.";
@@ -510,7 +510,7 @@ export class Orchestrator {
 
     liveState?.transition(sessionId, userId, "EXECUTING", { reason: `fast path: running ${toolName}` });
     conversation.addAssistantMessage("", [toolCall]);
-    const result = await this.executeToolCall(userId, toolCall);
+    const result = await this.executeToolCall(userId, toolCall, runId);
     this.completeToolCall(toolCall, result);
 
     if (liveState?.isStopRequested(sessionId)) {
@@ -543,8 +543,8 @@ export class Orchestrator {
     return response.text;
   }
 
-  private async runToolCall(userId: string, toolCall: ToolCallRequest): Promise<void> {
-    const result = await this.executeToolCall(userId, toolCall);
+  private async runToolCall(userId: string, toolCall: ToolCallRequest, runId?: string): Promise<void> {
+    const result = await this.executeToolCall(userId, toolCall, runId);
     this.completeToolCall(toolCall, result);
   }
 
@@ -574,7 +574,12 @@ export class Orchestrator {
    * the existing sequential behavior where an uncaught tool error ends the
    * turn, while never leaving a sibling call's result silently dropped.
    */
-  private async runToolCallBatch(userId: string, sessionId: string, toolCalls: ToolCallRequest[]): Promise<void> {
+  private async runToolCallBatch(
+    userId: string,
+    sessionId: string,
+    toolCalls: ToolCallRequest[],
+    runId?: string
+  ): Promise<void> {
     const { toolRegistry, liveState } = this.deps;
     let index = 0;
 
@@ -588,7 +593,7 @@ export class Orchestrator {
       const isReadOnly = tool?.requiredPermission === PermissionLevel.READ;
 
       if (!isReadOnly) {
-        await this.runToolCall(userId, toolCall);
+        await this.runToolCall(userId, toolCall, runId);
         index++;
         continue;
       }
@@ -602,7 +607,7 @@ export class Orchestrator {
         index++;
       }
 
-      const settled = await Promise.allSettled(batch.map((tc) => this.runToolCall(userId, tc)));
+      const settled = await Promise.allSettled(batch.map((tc) => this.runToolCall(userId, tc, runId)));
       const firstRejection = settled.find(
         (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected"
       );
@@ -624,7 +629,7 @@ export class Orchestrator {
    * `handleUserMessage`'s own per-turn tool loop is just a thin wrapper
    * around this that also feeds the result back into conversation history.
    */
-  async executeToolCall(userId: string, toolCall: ToolCallRequest): Promise<ToolResult> {
+  async executeToolCall(userId: string, toolCall: ToolCallRequest, runId?: string): Promise<ToolResult> {
     const { toolRegistry, eventBus, lockdownService } = this.deps;
 
     eventBus.emit("tool.requested", { toolCall });
@@ -643,10 +648,10 @@ export class Orchestrator {
     }
 
     if (tool.target === "local") {
-      return this.runLocalTool(userId, tool, toolCall);
+      return this.runLocalTool(userId, tool, toolCall, runId);
     }
 
-    return this.runDeviceTool(userId, tool, toolCall);
+    return this.runDeviceTool(userId, tool, toolCall, runId);
   }
 
   /**
@@ -704,7 +709,12 @@ export class Orchestrator {
     return null;
   }
 
-  private async runLocalTool(userId: string, tool: LocalTool, toolCall: ToolCallRequest): Promise<ToolResult> {
+  private async runLocalTool(
+    userId: string,
+    tool: LocalTool,
+    toolCall: ToolCallRequest,
+    runId?: string
+  ): Promise<ToolResult> {
     const { permissionService, eventBus, toolResultCache } = this.deps;
 
     const permissionResult = permissionService.check({
@@ -756,11 +766,18 @@ export class Orchestrator {
       userId,
       input: toolCall.input,
       resultSummary: summarizeToolResult(result),
+      toolCallId: toolCall.id,
+      runId,
     });
     return result;
   }
 
-  private async runDeviceTool(userId: string, tool: DeviceTool, toolCall: ToolCallRequest): Promise<ToolResult> {
+  private async runDeviceTool(
+    userId: string,
+    tool: DeviceTool,
+    toolCall: ToolCallRequest,
+    runId?: string
+  ): Promise<ToolResult> {
     const { permissionService, eventBus, deviceRegistry, deviceConnectionManager } = this.deps;
 
     if (!deviceRegistry || !deviceConnectionManager) {
@@ -810,6 +827,8 @@ export class Orchestrator {
         userId,
         input: toolCall.input,
         resultSummary: summarizeToolResult(result),
+        toolCallId: toolCall.id,
+        runId,
       });
       return result;
     } catch (error) {

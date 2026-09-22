@@ -17,6 +17,16 @@ const DEFAULT_IMPORTANCE: MemoryImportance = 3;
 const DEFAULT_TRUST: MemoryTrust = "USER_STATED";
 /** A "temporary" memory saved with no explicit expiry gets one day — long enough to survive the rest of a session, short enough that it doesn't quietly become permanent. */
 const DEFAULT_TEMPORARY_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Performance (Phase 48): `search()`/`getActive()` had no LIMIT at all —
+ * `SEARCH_MEMORY` with an empty query ("list everything remembered so
+ * far", per its own doc comment) or a broad fragment matched every row in
+ * `memory_records` and returned the whole table, unbounded, straight into
+ * the model's context. A bounded, most-recent-first slice is what any
+ * caller (a tool call feeding the brain, or a dashboard) actually needs;
+ * see each method's own doc comment.
+ */
+const DEFAULT_QUERY_LIMIT = 200;
 
 /**
  * Memory Poisoning Defense: how much a source is trusted, highest first.
@@ -271,13 +281,18 @@ export class MemoryStore {
    *
    * Unchanged from Phase 1: still returns expired memories too. Callers
    * that want expiry-aware results use `getActive()` instead.
+   *
+   * Bounded to `limit` (most recent first, since `ORDER BY created_at
+   * DESC` already ran) — an empty `fragment` (SEARCH_MEMORY's own "list
+   * everything" shape) or a broad one otherwise matched and returned every
+   * row in the table. See `DEFAULT_QUERY_LIMIT`'s own doc comment.
    */
-  search(fragment: string): MemoryRecord[] {
+  search(fragment: string, limit: number = DEFAULT_QUERY_LIMIT): MemoryRecord[] {
     const rows = this.db
       .query(
-        `SELECT ${SELECT_COLUMNS} FROM memory_records WHERE key LIKE ? OR value LIKE ? ORDER BY created_at DESC`
+        `SELECT ${SELECT_COLUMNS} FROM memory_records WHERE key LIKE ? OR value LIKE ? ORDER BY created_at DESC LIMIT ?`
       )
-      .all(`%${fragment}%`, `%${fragment}%`) as MemoryRow[];
+      .all(`%${fragment}%`, `%${fragment}%`, limit) as MemoryRow[];
     return rows.map(rowToRecord);
   }
 
@@ -286,13 +301,15 @@ export class MemoryStore {
    * future relative to `now`), newest first. This is the expiry-aware
    * counterpart to `search()`/list-everything — mirrors how
    * `ReminderStore.list()` excludes completed reminders by default.
+   *
+   * Bounded to `limit` (most recent first), same reasoning as `search()`.
    */
-  getActive(now: string = new Date().toISOString()): MemoryRecord[] {
+  getActive(now: string = new Date().toISOString(), limit: number = DEFAULT_QUERY_LIMIT): MemoryRecord[] {
     const rows = this.db
       .query(
-        `SELECT ${SELECT_COLUMNS} FROM memory_records WHERE expires_at IS NULL OR expires_at > ? ORDER BY created_at DESC`
+        `SELECT ${SELECT_COLUMNS} FROM memory_records WHERE expires_at IS NULL OR expires_at > ? ORDER BY created_at DESC LIMIT ?`
       )
-      .all(now) as MemoryRow[];
+      .all(now, limit) as MemoryRow[];
     return rows.map(rowToRecord);
   }
 

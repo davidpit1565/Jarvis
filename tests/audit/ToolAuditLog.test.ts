@@ -164,3 +164,50 @@ describe("ToolAuditLog live-state transition history", () => {
     log.close();
   });
 });
+
+describe("ToolAuditLog — Observability correlation (toolCallId/runId)", () => {
+  test("record() persists toolCallId and runId when given", () => {
+    const log = new ToolAuditLog(":memory:");
+    log.record(
+      "get_weather",
+      "user-1",
+      {},
+      { success: true },
+      { toolCallId: "call-abc", runId: "run-xyz" }
+    );
+
+    const [entry] = log.list();
+    expect(entry?.toolCallId).toBe("call-abc");
+    expect(entry?.runId).toBe("run-xyz");
+    log.close();
+  });
+
+  test("record() without correlation defaults both fields to null", () => {
+    const log = new ToolAuditLog(":memory:");
+    log.record("get_weather", "user-1", {}, { success: true });
+
+    const [entry] = log.list();
+    expect(entry?.toolCallId).toBeNull();
+    expect(entry?.runId).toBeNull();
+    log.close();
+  });
+
+  test("listByRunId returns only rows for that run, oldest first", () => {
+    const log = new ToolAuditLog(":memory:");
+    log.record("tool_a", "user-1", {}, { success: true }, { toolCallId: "c1", runId: "run-1" });
+    log.record("tool_b", "user-1", {}, { success: true }, { toolCallId: "c2", runId: "run-2" });
+    log.record("tool_c", "user-1", {}, { success: true }, { toolCallId: "c3", runId: "run-1" });
+
+    const run1 = log.listByRunId("run-1");
+    expect(run1.map((e) => e.toolName)).toEqual(["tool_a", "tool_c"]);
+    expect(run1.every((e) => e.runId === "run-1")).toBe(true);
+    log.close();
+  });
+
+  test("listByRunId returns an empty array for an unknown runId", () => {
+    const log = new ToolAuditLog(":memory:");
+    log.record("tool_a", "user-1", {}, { success: true }, { runId: "run-1" });
+    expect(log.listByRunId("run-does-not-exist")).toEqual([]);
+    log.close();
+  });
+});

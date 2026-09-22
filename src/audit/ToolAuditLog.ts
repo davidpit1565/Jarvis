@@ -19,6 +19,23 @@ export interface ToolAuditEntry {
   success: boolean;
   error: string | null;
   timestamp: string;
+  /**
+   * The specific `ToolCallRequest.id` this row is for, when known —
+   * Observability (Phase 43): lets a support/debugging view correlate
+   * "this exact tool call" back to the `tool.requested`/`tool.executed`
+   * events and (via `runId`) to the AI turn that triggered it. `null` for
+   * rows written before this column existed.
+   */
+  toolCallId: string | null;
+  /**
+   * The turn/run this tool call happened within — the same `runId`
+   * `Orchestrator.handleUserMessage` generates per chat turn and
+   * `AgentCore` uses its `taskId` for, and the same id `CostTracker`'s
+   * ledger (`getRunLedger`) already correlates AI calls by. `null` when no
+   * run scope was available (e.g. a tool executed outside any tracked
+   * turn/task) or for rows written before this column existed.
+   */
+  runId: string | null;
 }
 
 const MAX_ROWS = 5000;
@@ -126,6 +143,26 @@ export class ToolAuditLog {
       )
     `);
     this.db.run(`CREATE INDEX IF NOT EXISTS idx_live_state_transitions_session_id ON live_state_transitions(session_id)`);
+
+    // Observability (Phase 43): correlate a tool-audit row back to the
+    // specific ToolCallRequest and the AI turn/task run it happened
+    // within, so a support/debugging view can answer "which tool calls
+    // belong to this AI call" — previously these lived in two
+    // disconnected systems (CostTracker's ledger knew a call's `runId`;
+    // ToolAuditLog didn't know either id at all). Additive, same
+    // best-effort "ignore if already there" migration pattern as
+    // MemoryStore uses for its own columns.
+    for (const ddl of [
+      `ALTER TABLE tool_audit_log ADD COLUMN tool_call_id TEXT`,
+      `ALTER TABLE tool_audit_log ADD COLUMN run_id TEXT`,
+    ]) {
+      try {
+        this.db.run(ddl);
+      } catch {
+        // already exists
+      }
+    }
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_tool_audit_log_run_id ON tool_audit_log(run_id)`);
   }
 
   /** Persists one `jarvis.liveState.changed` event — see `LiveStateTransitionEntry`. */
@@ -198,12 +235,27 @@ export class ToolAuditLog {
     return rows;
   }
 
-  record(toolName: string, userId: string, input: Record<string, unknown>, result: ToolResult): void {
+  record(
+    toolName: string,
+    userId: string,
+    input: Record<string, unknown>,
+    result: ToolResult,
+    correlation: { toolCallId?: string; runId?: string } = {}
+  ): void {
     this.db
       .query(
-        `INSERT INTO tool_audit_log (tool_name, user_id, input, success, error, timestamp) VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO tool_audit_log (tool_name, user_id, input, success, error, timestamp, tool_call_id, run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(toolName, userId, JSON.stringify(input), result.success ? 1 : 0, result.error ?? null, new Date().toISOString());
+      .run(
+        toolName,
+        userId,
+        JSON.stringify(input),
+        result.success ? 1 : 0,
+        result.error ?? null,
+        new Date().toISOString(),
+        correlation.toolCallId ?? null,
+        correlation.runId ?? null
+      );
 
     // Bounded like ActivityLog/ConversationHistoryStore — a durable audit
     // trail with real limits, not an unbounded log file in disguise.
@@ -218,15 +270,31 @@ export class ToolAuditLog {
     const rows = options.toolName
       ? (this.db
           .query(
-            `SELECT id, tool_name as toolName, user_id as userId, input, success, error, timestamp FROM tool_audit_log WHERE tool_name = ? ORDER BY id DESC LIMIT ?`
+            `SELECT id, tool_name as toolName, user_id as userId, input, success, error, timestamp, tool_call_id as toolCallId, run_id as runId FROM tool_audit_log WHERE tool_name = ? ORDER BY id DESC LIMIT ?`
           )
           .all(options.toolName, limit) as Array<Omit<ToolAuditEntry, "success"> & { success: number }>)
       : (this.db
           .query(
-            `SELECT id, tool_name as toolName, user_id as userId, input, success, error, timestamp FROM tool_audit_log ORDER BY id DESC LIMIT ?`
+            `SELECT id, tool_name as toolName, user_id as userId, input, success, error, timestamp, tool_call_id as toolCallId, run_id as runId FROM tool_audit_log ORDER BY id DESC LIMIT ?`
           )
           .all(limit) as Array<Omit<ToolAuditEntry, "success"> & { success: number }>);
 
+    return rows.map((row) => ({ ...row, success: row.success === 1 }));
+  }
+
+  /**
+   * Every tool-audit row recorded within one AI run/turn (the same `runId`
+   * CostTracker's ledger correlates AI calls by), oldest first — the
+   * concrete "which tool calls belong to this AI call" query Observability
+   * (Phase 43) asks for. Empty for a `runId` that was never recorded (e.g.
+   * predates this column, or the tool call ran outside any tracked run).
+   */
+  listByRunId(runId: string): ToolAuditEntry[] {
+    const rows = this.db
+      .query(
+        `SELECT id, tool_name as toolName, user_id as userId, input, success, error, timestamp, tool_call_id as toolCallId, run_id as runId FROM tool_audit_log WHERE run_id = ? ORDER BY id ASC`
+      )
+      .all(runId) as Array<Omit<ToolAuditEntry, "success"> & { success: number }>;
     return rows.map((row) => ({ ...row, success: row.success === 1 }));
   }
 

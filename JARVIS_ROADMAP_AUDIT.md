@@ -1653,3 +1653,235 @@ Baseline was 1800 passing / 0 failing / 0 typecheck errors; this batch
 added 15 tests, bringing the suite to 1815 passing / 0 failing / 0
 typecheck errors (`bun run typecheck` and `bun test` both re-run clean
 after this pass, including every test from batches 1-3).
+
+## Premium Agent Intelligence/Security Upgrade — batch 5 (observability correlation IDs, performance audit, DB safety verification, turn-latency metrics)
+
+Final content batch of this 50-phase prompt. Scope: Phase 43
+(observability correlation IDs), Phase 48 (avoid redundant work), Phase 47
+(database safety audit — verification pass), Phase 45 (user-facing
+performance metrics in the Command Center). Baseline before this pass:
+1846 tests passing, 0 failing, 0 typecheck errors. After this pass: **1863
+tests passing, 0 failing, 0 typecheck errors** (17 new tests, 0
+regressions).
+
+### 1. Observability — correlation IDs — NEEDS_UPGRADE (threaded runId through, no new tracing system)
+
+Confirmed `ToolCallRequest.id` already exists (`src/types/conversation.ts`)
+and is genuinely stable per call. Confirmed the actual gap: `runId`
+(`Orchestrator.handleUserMessage`'s per-turn id, already used by
+`AIRouter`/`CostTracker`'s ledger since batch 1/3) and `AgentCore`'s
+`taskId` never reached `Orchestrator.executeToolCall` at all — its
+signature was `(userId, toolCall)`, no run-scope parameter — and
+`ToolAuditLog.record()` didn't persist even the tool call's own `id`,
+let alone a run id. So "this AI call" and "these tool calls" genuinely
+lived in two disconnected systems for one user turn, exactly as
+suspected: `CostTracker.getRunLedger(runId)` could already answer "which
+AI calls happened in this run," but nothing could answer "which tool
+calls happened in this run."
+
+**Fixed, minimally — one field threaded through, not a new tracing
+system:**
+- `Orchestrator.executeToolCall(userId, toolCall, runId?)` gained an
+  optional third parameter, threaded into `runLocalTool`/`runDeviceTool`
+  and included on both of their `tool.executed` emissions as `runId`, plus
+  a new always-present `toolCallId: toolCall.id` field (distinct from the
+  event's pre-existing `requestId`, which for a local tool is a fresh id
+  minted per execution for the tool's own `ToolContext` — unrelated,
+  unchanged).
+- `handleUserMessage`'s tool-call loop (`runToolCall`/`runToolCallBatch`)
+  and the Fast Path handler (`runFastPath`) now pass the turn's existing
+  `runId` through to `executeToolCall` — the exact same id already used
+  for that turn's `brain.chat()` calls.
+- `AgentCore` now passes its `taskId` as `executeToolCall`'s `runId` for
+  both a plan step and a verification tool call — the same correlation key
+  `BrainAgentPlanner` already uses as `taskId`/`runId` for its own
+  `chat()`/`chatWithEscalation` calls (batch 1), so one agent task's AI
+  calls and tool calls now correlate under one id too.
+- `ToolAuditLog`'s `tool_audit_log` table gained two additive columns,
+  `tool_call_id`/`run_id` (same best-effort `ALTER TABLE ... ADD COLUMN` +
+  try/catch pattern `MemoryStore` already established, plus an index on
+  `run_id`), `record()` gained an optional `{ toolCallId?, runId? }` third
+  argument, and a new `listByRunId(runId)` — the concrete "which tool
+  calls belong to this AI call" query a support/debugging view needs.
+  `src/index.ts`'s `tool.executed` listener now passes both fields
+  through.
+
+Left alone, deliberately: `AgentCore`'s own explicit
+`auditLog.record(step.toolName, ...)` call (which exists because
+`executeToolCall`'s early-return paths — unknown tool, lockdown,
+permission denied, confirmation declined — never themselves emit
+`tool.executed`, so without it a denied agent step would never reach the
+audit log at all). This does mean a *successful* agent-step tool call is
+still recorded twice today (once via the `tool.executed` event listener,
+once via this explicit call) — a real, pre-existing quirk, noted here
+rather than silently left unmentioned, but out of this batch's scope to
+fix: doing so safely means also fixing the audit-log gap for denied plain
+chat-turn tool calls (which don't get this explicit-call treatment at
+all), a materially bigger, cross-cutting change than "thread one id
+through."
+
+Tests: `tests/audit/ToolAuditLog.test.ts` (new `describe` block, 4 tests:
+`record()`/`listByRunId` with and without correlation fields), extended
+`tests/integration/orchestrator.test.ts` (new `describe` block, 2 tests:
+the full-path and Fast Path `tool.executed` events both carry the turn's
+real `runId`, matching the same id the brain saw), extended
+`tests/integration/observerBroadcast.test.ts` (updated to include the now-
+required `toolCallId` field on its hand-emitted `tool.executed` event).
+
+### 2. Performance — avoid redundant work
+
+**(a) Unbounded full-table loads — NEEDS_UPGRADE, fixed in MemoryStore.**
+`MemoryStore.search(fragment)` and `getActive()` had no `LIMIT` at all.
+`SEARCH_MEMORY`'s own doc comment says an empty query means "list
+everything remembered so far" — so `search("")` (`key LIKE '%%' OR value
+LIKE '%%'`) matched and returned literally every row in `memory_records`,
+unbounded, straight into the model's context on every such call. This is
+exactly the "load an entire table when a bounded slice would do" pattern
+the phase names. Fixed: both methods gained an optional `limit` parameter
+(default 200), added as `LIMIT ?` on the existing `ORDER BY created_at
+DESC` query — so a caller that doesn't pass one still gets a real, bounded
+result, newest-first, instead of the whole table. `getActive()` was fixed
+too for the same reason even though nothing calls it in production today
+(only tests) — bounding it now means whoever wires it up later inherits
+the fix instead of reintroducing the same bug.
+
+**(b) Repeated provider-availability discovery — ALREADY_EXISTS_AND_GOOD.**
+Read `AIProviderRegistry` in full: it is already a plain, static in-memory
+`Map` populated once at startup by `src/index.ts` (its own doc comment
+says so explicitly — "does not construct anything itself"). Every
+`AIRouter` routing decision (`resolvePrimary`, `resolveFallback`,
+`effectiveCircuitState`) reads only cheap in-memory Map lookups/counters
+per call — no health-check network call, no re-discovery of configuration,
+anywhere in the routing path. Nothing to fix.
+
+**(c) N+1-style repeated DB queries in a loop — ALREADY_EXISTS_AND_GOOD,
+none found.** Audited every `for`/`forEach` loop in `src/` that touches a
+store or `db.query` call (scheduler due-item loops in `src/index.ts`,
+`CostTracker`'s breakdown methods, `AgentTaskStore`, `PairingService`,
+`DeviceRegistry`). Every per-item DB write found inside a loop (e.g.
+`reminderStore.markNotified(reminder.id, ...)` for each due reminder) is a
+genuinely distinct per-row mutation on a small, naturally-bounded list
+(a user's own due reminders/alarms/automation rules at one tick), not a
+query that could instead be answered with a single batched read — there
+is no repeated *read* of the same or similar data across iterations
+anywhere in this set. `ConversationHistoryStore`/`ToolAuditLog`/
+`CostTracker`'s own list/breakdown queries are already single bounded
+queries, not loops. No fix made; none was needed.
+
+### 3. Database safety audit (Phase 47) — ALREADY_EXISTS_AND_GOOD, verified
+
+`grep`'d every `ALTER TABLE`/`CREATE TABLE` in `src/` (batches 1-4 plus
+everything that predates them): every `CREATE TABLE` uses `IF NOT EXISTS`,
+every `ALTER TABLE ... ADD COLUMN` is either wrapped in the established
+best-effort try/catch-ignore pattern (`MemoryStore`, `ReminderStore`,
+`CommitmentStore`, `AgentTaskStore`, and this batch's own two new
+`ToolAuditLog` columns) or gated by a `PRAGMA table_info` existence check
+(`CostTracker`'s ledger columns) — additive and idempotent either way,
+safe to run against an existing populated database. `grep`'d separately
+for `DROP TABLE`, `DROP COLUMN`, and `RENAME` anywhere in `src/`: zero
+matches, repo-wide. No fresh-database assumption or destructive migration
+was found anywhere. No fix needed; this batch's own new columns
+(`tool_call_id`, `run_id` on `tool_audit_log`) follow the exact same
+verified-safe pattern.
+
+### 4. User-facing performance metrics in the Command Center (Phase 45) — MISSING, now built (smallest additive piece)
+
+Confirmed what already exists: `CostTracker`'s per-call `latencyMs`
+(AI-call latency, batch 3) and cache-hit rate (batch 3) were already
+real and already surfaced in the Cost Analytics/Cache Effectiveness
+panels. `tool.executed`'s own latency isn't separately tracked anywhere
+(a genuine, narrower gap not fixed here — out of scope; AI latency and
+total turn time already cover the two numbers that matter most). "Time to
+first response" and "time to first progress event" specifically were
+**not** computable from anything already exposed via HTTP — but *were*
+fully computable from data already being persisted:
+`JarvisLiveStateTracker`'s transitions (`ToolAuditLog.recordLiveStateTransition`
+/`listRecentTransitions`, batch 1) already timestamp every LISTENING ->
+THINKING -> EXECUTING/WAITING/VERIFYING/PLANNING -> SPEAKING -> IDLE step
+of every turn, for every channel — no new tracking needed, only a
+computation over what was already there.
+
+**Built:** `src/core/state/turnLatency.ts`, `computeTurnLatencies(transitions)`
+— a pure function that groups one session's transition history (as
+`listRecentTransitions` already returns it) into per-turn boundaries (a
+turn is any `IDLE -> ... -> IDLE` sequence, which covers a plain chat
+turn, a Fast Path hit, and the status-query/why-query fast paths alike,
+since all of them still drive the same live-state transitions) and
+computes, per turn: `timeToFirstProgressMs` (turn start -> first
+EXECUTING/VERIFYING/PLANNING/WAITING transition, `undefined` when the turn
+never did one, e.g. a plain reply with no tool call), `timeToFirstResponseMs`
+(turn start -> first SPEAKING transition, `undefined` if the turn never
+reached one, e.g. stopped/errored first), `totalExecutionMs` (turn start ->
+turn end), and `endedVia` (`"normal" | "error" | "stopped"`, from the
+transition immediately before the final IDLE). A turn whose start is
+visible but whose end falls outside the (bounded) transition window is
+dropped rather than reported as a wrong/partial turn.
+
+Wired into the existing `GET /agent-recent-activity` endpoint
+(`JarvisWebSocketServer`) as a new `turnLatencies` field alongside its
+existing `transitions` field — extended, not a new endpoint. Surfaced in
+the Command Center's existing Live Agent Monitor "Live execution timeline"
+panel (the same one batch 3 built): a new line under the timeline showing
+the most recently completed turn's time-to-first-progress, time-to-first-
+response, and total-turn-time in milliseconds, plus how the turn ended
+when not normal — hidden entirely when there's no completed turn yet.
+No new panel; the existing panel's own description text was extended by
+one sentence to describe the new numbers.
+
+Tests: `tests/core/turnLatency.test.ts` (new, 7 tests: a normal tool-using
+turn's three metrics, a plain no-tool-call reply leaves
+`timeToFirstProgressMs` undefined, an ERROR-ended turn is marked
+`endedVia: "error"` with no `timeToFirstResponseMs`, a STOPPED-ended turn
+is marked `endedVia: "stopped"`, multiple turns come back most-recent-
+first, a turn with no visible IDLE end is dropped rather than guessed,
+empty input returns an empty array).
+
+### Files touched this pass
+
+Changed: `src/types/conversation.ts` (read-only, no change — confirmed
+`ToolCallRequest.id` already existed), `src/audit/ToolAuditLog.ts`
+(`tool_call_id`/`run_id` columns + migration + index, `record()`'s new
+correlation argument, `listByRunId`), `src/types/events.ts`
+(`tool.executed` gained `toolCallId`/`runId`), `src/core/orchestrator/
+Orchestrator.ts` (`runId` threaded through `executeToolCall`/
+`runLocalTool`/`runDeviceTool`/`runToolCall`/`runToolCallBatch`/
+`runFastPath`), `src/agent/AgentCore.ts` (`taskId` passed as `runId` to
+`executeToolCall` for both a step and its verification call, plus the
+existing explicit `auditLog.record` call's new correlation fields),
+`src/index.ts` (`tool.executed` listener passes `toolCallId`/`runId`
+through), `src/memory/MemoryStore.ts` (`search()`/`getActive()` gained a
+bounded default `limit`), `src/communication/websocket/
+JarvisWebSocketServer.ts` (`GET /agent-recent-activity` gained
+`turnLatencies`), `ui/command-center/index.html` (Live Agent Monitor
+timeline panel: new "last turn" performance line, extended description
+text).
+
+New file: `src/core/state/turnLatency.ts`.
+
+New tests: `tests/core/turnLatency.test.ts` (new, 7 tests), extended
+`tests/audit/ToolAuditLog.test.ts` (new `describe` block, 4 tests),
+extended `tests/integration/orchestrator.test.ts` (new `describe` block,
+2 tests), extended `tests/memory/MemoryStore.test.ts` (new `describe`
+block, 4 tests), updated `tests/integration/observerBroadcast.test.ts`
+(added the now-required `toolCallId` field to its hand-emitted event —
+no assertion on meaning changed). `ui/command-center/index.html`'s own
+JS change has no automated test harness (same documented limitation as
+batches 3-4) — verified to parse (`new Function()` over the extracted
+`<script>` body) and traced manually against the real
+`/agent-recent-activity` response shape it now consumes.
+
+Not touched, per the hard constraints: `ui/hologram/index.html`'s
+visuals, `src/communication/websocket/dashboard.ts`'s visuals, no shell/
+AppleScript/arbitrary-execution tool was added, no secrets exposed
+(everything added is ids, enum-shaped strings, and millisecond durations).
+No new panel was added to the Command Center — the existing Live Agent
+Monitor panel was extended in place, same as batches 3-4. No speculative
+optimization was added anywhere item 2 investigated and found already
+sound (AIProviderRegistry, the scheduler due-item loops, the DB-query
+loops) — only the one genuinely unbounded query pattern found
+(`MemoryStore.search`/`getActive`) was fixed.
+
+Baseline was 1846 passing / 0 failing / 0 typecheck errors; this batch
+added 17 tests, bringing the suite to 1863 passing / 0 failing / 0
+typecheck errors (`bun run typecheck` and `bun test` both re-run clean
+after this pass, including every test from batches 1-4).

@@ -1003,6 +1003,56 @@ describe("Orchestrator READ-tool result caching", () => {
     });
   });
 
+  describe("Observability — runId correlation (Phase 43)", () => {
+    test("the tool.executed event for a full-path tool call carries the same runId the brain.chat call used", async () => {
+      const weatherTool = makeEchoTool("GET_WEATHER");
+      const seenRunIds: (string | undefined)[] = [];
+      class CapturingBrain implements Brain {
+        private calls = 0;
+        constructor(private readonly responses: BrainResponse[]) {}
+        async chat(request: BrainRequest): Promise<BrainResponse> {
+          seenRunIds.push(request.runId);
+          const response = this.responses[this.calls]!;
+          this.calls++;
+          return response;
+        }
+      }
+      const brain = new CapturingBrain([
+        { text: "", toolCalls: [{ id: "call-1", toolName: "get_weather", input: {} }], stopReason: "tool_use" },
+        { text: "Sunny.", toolCalls: [], stopReason: "end_turn" },
+      ]);
+      const { orchestrator, eventBus } = setup(brain, [weatherTool]);
+      const executed: Array<{ toolCallId: string; runId?: string }> = [];
+      eventBus.on("tool.executed", (payload) => executed.push({ toolCallId: payload.toolCallId, runId: payload.runId }));
+
+      await orchestrator.handleUserMessage("user-1", "weather in Tel Aviv?");
+
+      // Both brain.chat calls this turn shared one runId (Denial-of-wallet
+      // protection, batch 1) — and the tool call in between used that exact
+      // same runId, so a support view could correlate them.
+      expect(seenRunIds).toHaveLength(2);
+      expect(seenRunIds[0]).toBeDefined();
+      expect(seenRunIds[0]).toBe(seenRunIds[1]);
+      expect(executed).toHaveLength(1);
+      expect(executed[0]!.toolCallId).toBe("call-1");
+      expect(executed[0]!.runId).toBe(seenRunIds[0]);
+    });
+
+    test("Fast Path's tool.executed event also carries the turn's runId", async () => {
+      const weatherTool = makeEchoTool("GET_WEATHER");
+      const brain = new ScriptedBrain([{ text: "Sunny.", toolCalls: [], stopReason: "end_turn" }]);
+      const { orchestrator, eventBus } = setup(brain, [weatherTool]);
+      const executed: Array<{ toolCallId: string; runId?: string }> = [];
+      eventBus.on("tool.executed", (payload) => executed.push({ toolCallId: payload.toolCallId, runId: payload.runId }));
+
+      await orchestrator.handleUserMessage("user-1", "what's the weather?");
+
+      expect(executed).toHaveLength(1);
+      expect(executed[0]!.runId).toBeDefined();
+      expect(typeof executed[0]!.toolCallId).toBe("string");
+    });
+  });
+
   describe("Parallel Tool Execution", () => {
     function makeTimedReadTool(id: string, delayMs: number, order: string[]): LocalTool {
       return {

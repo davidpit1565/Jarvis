@@ -156,10 +156,12 @@
         <code>tool.executed</code> / <code>ai.providerFallback</code> / <code>ai.escalation</code> events arrive over
         <code>/observer</code>. Provider switches show their real decision reason inline (e.g. "budget-exceeded",
         "escalation-retry") — a closed set of enum values, never free text. Every step shown here really happened —
-        nothing on this list is simulated or guessed.
+        nothing on this list is simulated or guessed. The most recent completed turn's measured latencies (time to
+        first progress, time to first response, total turn time) are computed from this same transition history.
       </div>
       <ul class="timeline" id="timelineList"></ul>
       <div id="timelineEmpty" class="timeline-empty">No activity recorded for this session yet.</div>
+      <div id="timelinePerf" style="font-size:11px;color:var(--dim);margin-top:6px;display:none;"></div>
       <div id="timelineLiveStatus" style="font-size:11px;color:var(--dim);margin-top:6px;"></div>
     </div>
     <div id="providerFallbackPanel" style="display:none;margin-top:12px;">
@@ -501,6 +503,32 @@
     });
   }
 
+  // Performance (Phase 45): the most recent completed turn's real,
+  // measured latencies — time to first progress (first EXECUTING/
+  // VERIFYING/PLANNING/WAITING step), time to first response (SPEAKING),
+  // and total turn time — computed server-side from the same persisted
+  // transition history above (`computeTurnLatencies`), never guessed or
+  // simulated. Hidden when there's no completed turn to report yet.
+  function renderTimelinePerf(turnLatencies) {
+    const el = $("timelinePerf");
+    const latest = turnLatencies[0];
+    if (!latest) {
+      el.style.display = "none";
+      return;
+    }
+    const parts = [];
+    if (typeof latest.timeToFirstProgressMs === "number") {
+      parts.push("Time to first progress: " + Math.round(latest.timeToFirstProgressMs) + "ms");
+    }
+    if (typeof latest.timeToFirstResponseMs === "number") {
+      parts.push("Time to first response: " + Math.round(latest.timeToFirstResponseMs) + "ms");
+    }
+    parts.push("Total turn time: " + Math.round(latest.totalExecutionMs) + "ms");
+    if (latest.endedVia !== "normal") parts.push("(ended via " + latest.endedVia + ")");
+    el.textContent = "Last turn — " + parts.join(" · ");
+    el.style.display = "block";
+  }
+
   function appendTimelineStep(cls, icon, label, detail) {
     const list = $("timelineList");
     // A fresh live event means the previously-"current" step is now done —
@@ -629,6 +657,7 @@
     try {
       const data = await api("/agent-recent-activity?sessionId=" + encodeURIComponent(sessionId) + "&limit=30");
       renderTimelineSeed(data.transitions || [], openTimelineLang);
+      renderTimelinePerf(data.turnLatencies || []);
     } catch (e) {
       errEl.textContent = "Could not load timeline seed: " + e.message;
     }
