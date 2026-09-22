@@ -287,6 +287,54 @@ export class AIRouter implements Brain {
   }
 
   /**
+   * Streaming variant of `chat` — resolves this request's primary provider
+   * exactly the same way `chat` does (free-first, budget/circuit-breaker
+   * checks, cost recording), but calls that provider's own `chatStream`
+   * when it has one (today: only `ClaudeBrain`), forwarding `onTextDelta`
+   * as real incremental chunks. A provider with no `chatStream` (Groq,
+   * Cloudflare, OpenRouter, Ollama, any test double) still works through
+   * this same call site — it just calls plain `chat()` and fires
+   * `onTextDelta` once with the whole reply at the end, so a caller never
+   * has to check provider capability itself; it just gets either real
+   * streaming or a single "delta" that's the full answer.
+   *
+   * Deliberately no cross-provider fallback here, unlike `chat`/
+   * `chatWithEscalation` — see `ClaudeBrain.chatStream`'s own doc comment
+   * for why a stream that's already emitted partial output to the caller
+   * must never be silently retried against a different provider. A
+   * failure here propagates to the caller exactly like any other failed
+   * brain call; provider fallback still applies to the *next* turn's
+   * `chat`/`chatStream` call, same as any other outage.
+   */
+  async chatStream(request: BrainRequest, onTextDelta: (text: string) => void): Promise<BrainResponse> {
+    const resolved = this.resolvePrimaryWithReason(request);
+    const decisionRef: DecisionRef = { value: resolved.reason };
+    const provider = this.applyBudget(resolved.provider, request, undefined, decisionRef);
+    if (this.effectiveCircuitState(provider) === "open") {
+      throw new Error(`Provider ${provider} is currently unavailable (circuit open)`);
+    }
+
+    const brain = this.registry.get(provider)!;
+    const wasHalfOpenTrial = this.effectiveCircuitState(provider) === "half-open";
+    const start = performance.now();
+    try {
+      const response = brain.chatStream
+        ? await brain.chatStream(request, onTextDelta)
+        : await brain.chat(request).then((full) => {
+            if (full.text) onTextDelta(full.text);
+            return full;
+          });
+      const latencyMs = performance.now() - start;
+      this.recordOutcome(provider, true, latencyMs, wasHalfOpenTrial);
+      this.recordCost(provider, response, request, latencyMs, false, decisionRef.value);
+      return response;
+    } catch (err) {
+      this.recordOutcome(provider, false, performance.now() - start, wasHalfOpenTrial);
+      throw err;
+    }
+  }
+
+  /**
    * Model Escalation: calls `chat()` normally, then — only if `isValid`
    * (a caller-supplied, deterministic check: schema validation, non-empty
    * response, tool-call parse success — never "ask another AI call to

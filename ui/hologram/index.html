@@ -2948,6 +2948,16 @@
     // the message handler reaching into voice-mode internals directly,
     // since that block may not exist at all (Safari).
     let onAssistantMessage = null;
+    // Streaming TTS — set by the SpeechRecognitionCtor block below,
+    // called with each incremental `assistant_delta` chunk as it arrives
+    // (real streaming: a long reply starts being spoken sentence by
+    // sentence while the rest is still being generated, instead of
+    // waiting for the whole thing). Chat-log rendering deliberately stays
+    // untouched by streaming — only the final `assistant` frame (handled
+    // exactly as before) ever appends to the visible log, so the existing,
+    // well-tested rendering (image panel routing, markdown stripping)
+    // never has to deal with partial/incomplete text.
+    let onAssistantDelta = null;
     // Set by the SpeechRecognitionCtor block below when voice mode is
     // supported, so closing the panel can reliably stop it without the
     // outer scope needing to know whether that block ran at all.
@@ -3118,6 +3128,8 @@
           if (data.type === "assistant") {
             appendMessage("JARVIS", data.text, "jarvis");
             if (onAssistantMessage) onAssistantMessage(data.text);
+          } else if (data.type === "assistant_delta") {
+            if (onAssistantDelta) onAssistantDelta(data.text);
           } else if (data.type === "error") {
             appendMessage("SYSTEM", data.message || "Error", "error");
             if (onAssistantMessage) onAssistantMessage(null);
@@ -3355,29 +3367,99 @@
         return /[֐-׿]/.test(text) ? "he-IL" : navigator.language || "en-US";
       }
 
-      function speak(text) {
+      /* -----------------------------------------------------------
+       * Streaming TTS speech queue — a reply speaks sentence by
+       * sentence as each one streams in (onAssistantDelta below),
+       * instead of only ever starting once the entire reply text has
+       * arrived. `speechSynthesis.speak()` already queues additional
+       * utterances on its own, but this app-level queue is still
+       * needed to track "is JARVIS still speaking ANY part of this
+       * reply" across multiple chunks — the old single-utterance
+       * `speak()` fired its "done speaking, resume listening" cleanup
+       * on every chunk's own onend, which would have prematurely
+       * flipped back to LISTENING mid-reply.
+       * ----------------------------------------------------------- */
+      let utteranceQueue = [];
+
+      function enqueueSpeech(text) {
+        if (!text) return;
+        utteranceQueue.push(text);
+        if (utteranceQueue.length === 1) pumpSpeechQueue();
+      }
+
+      function pumpSpeechQueue() {
+        const text = utteranceQueue[0];
+        if (text === undefined) {
+          speaking = false;
+          delete voiceBtn.dataset.speaking;
+          if (voiceModeOn && !awaitingReply && !recognitionActive) startListening();
+          return;
+        }
         speaking = true;
         voiceBtn.dataset.speaking = "1";
         setStatus("SPEAKING…", "live");
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = pickSpeechLang(text);
         utterance.onend = utterance.onerror = () => {
-          speaking = false;
-          delete voiceBtn.dataset.speaking;
-          if (voiceModeOn && !awaitingReply && !recognitionActive) startListening();
+          utteranceQueue.shift();
+          pumpSpeechQueue();
         };
         speechSynthesis.speak(utterance);
         // Keep listening while JARVIS talks (barge-in) — the 'result'
-        // handler below cancels the utterance the moment the user says
-        // anything, rather than making them wait for JARVIS to finish.
+        // handler below cancels the utterance (and clears this queue)
+        // the moment the user says anything, rather than making them
+        // wait for JARVIS to finish.
         startListening();
       }
+
+      // Backward-compatible single-shot alias — used for the
+      // non-streaming fallback path (a provider with no chatStream
+      // support, or a Fast Path reply that skipped streaming) where the
+      // whole reply arrives at once with nothing to chunk.
+      function speak(text) {
+        enqueueSpeech(text);
+      }
+
+      // Sentence boundaries for streaming speech — "." "!" "?" followed by
+      // whitespace or end of string. Deliberately simple (no abbreviation
+      // handling like "Dr." or "e.g.") — an occasional early split just
+      // means one shorter spoken chunk, never wrong or garbled speech.
+      const SENTENCE_BOUNDARY_PATTERN = /[.!?]+(\s|$)/;
+      let deltaBuffer = "";
+      let streamedAnythingThisTurn = false;
+
+      function extractCompleteSentences(buffer) {
+        const sentences = [];
+        let rest = buffer;
+        let match;
+        while ((match = SENTENCE_BOUNDARY_PATTERN.exec(rest))) {
+          const end = match.index + match[0].length;
+          sentences.push(rest.slice(0, end).trim());
+          rest = rest.slice(end);
+        }
+        return { sentences, remainder: rest };
+      }
+
+      onAssistantDelta = (delta) => {
+        if (!voiceModeOn) return;
+        deltaBuffer += delta;
+        const { sentences, remainder } = extractCompleteSentences(deltaBuffer);
+        deltaBuffer = remainder;
+        for (const sentence of sentences) {
+          if (!sentence) continue;
+          streamedAnythingThisTurn = true;
+          enqueueSpeech(sentence);
+        }
+      };
 
       recognition.addEventListener("result", (ev) => {
         const text = ev.results[ev.results.length - 1][0].transcript.trim();
         recognitionActive = false;
         if (!text) return;
-        if (speaking) speechSynthesis.cancel(); // barge-in: stop talking, this is now the user's turn
+        if (speaking) {
+          speechSynthesis.cancel(); // barge-in: stop talking, this is now the user's turn
+          utteranceQueue = []; // clear any not-yet-spoken queued sentences from the reply being interrupted
+        }
         // A spoken stop phrase ("ok done", "thank you", "bye"...) ends the
         // hands-free loop instead of being sent as a chat message — the
         // voice equivalent of clicking VOICE MODE off.
@@ -3411,11 +3493,24 @@
       // Speak JARVIS's real replies back only while voice mode is on —
       // otherwise this is silent, unchanged text-only chat behavior.
       // `text` is null on an error frame (nothing to speak); still need
-      // to clear awaitingReply and resume listening in that case.
+      // to clear awaitingReply and resume listening in that case. When
+      // this turn already streamed sentences via onAssistantDelta above,
+      // only the leftover fragment that never reached a sentence
+      // boundary (deltaBuffer) still needs speaking — speaking the full
+      // `text` again here would repeat everything already said.
       onAssistantMessage = (text) => {
         awaitingReply = false;
-        if (voiceModeOn && text) speak(text);
-        else if (voiceModeOn) startListening();
+        if (voiceModeOn && text) {
+          if (streamedAnythingThisTurn) {
+            enqueueSpeech(deltaBuffer.trim());
+          } else {
+            enqueueSpeech(text);
+          }
+        } else if (voiceModeOn) {
+          startListening();
+        }
+        deltaBuffer = "";
+        streamedAnythingThisTurn = false;
       };
 
       // Shared by the button click and the "Hey JARVIS" wake listener —
@@ -3437,6 +3532,9 @@
         voiceBtn.textContent = "🎙️ VOICE MODE";
         try { recognition.stop(); } catch (e) {}
         speechSynthesis.cancel();
+        utteranceQueue = [];
+        deltaBuffer = "";
+        streamedAnythingThisTurn = false;
         speaking = false;
         delete voiceBtn.dataset.speaking;
         startWakeListening(); // resume listening for "Hey JARVIS" now that the mic is free again

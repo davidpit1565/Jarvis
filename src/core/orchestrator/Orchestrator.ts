@@ -258,7 +258,25 @@ export class Orchestrator {
     }
   }
 
-  async handleUserMessage(userId: string, content: string, images?: UserMessageImage[]): Promise<string> {
+  /**
+   * `onTextDelta`, when given, receives each incremental chunk of the
+   * FINAL reply's plain text as it streams in (real streaming TTS/typing
+   * effect for a caller that wants it — the browser voice mode, e.g. —
+   * instead of only ever getting the complete text once the whole turn
+   * resolves). Purely additive: every existing caller (Telegram, SMS,
+   * voice, AgentCore, every test) omits it and behaves exactly as before.
+   * Only takes effect when `brain.chatStream` exists (today: AIRouter,
+   * which itself only genuinely streams through ClaudeBrain and falls
+   * back to a single whole-text "delta" for every other provider) — a
+   * caller that passes this callback against a brain without streaming
+   * support still gets a correct reply, just without incremental deltas.
+   */
+  async handleUserMessage(
+    userId: string,
+    content: string,
+    images?: UserMessageImage[],
+    onTextDelta?: (text: string) => void
+  ): Promise<string> {
     const { brain, conversation, toolRegistry, eventBus, channelContext, contextProvider, liveState } = this.deps;
     const extraContext = [channelContext, await contextProvider?.()].filter(Boolean).join("\n\n");
     const systemPrompt = extraContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${extraContext}` : JARVIS_SYSTEM_PROMPT;
@@ -395,13 +413,17 @@ export class Orchestrator {
 
         eventBus.emit("brain.request", { messageCount: conversation.getMessages().length });
 
-        const response = await brain.chat({
+        const brainRequest = {
           messages: conversation.getMessagesForBrain(),
           tools: toolRegistry.toToolDefinitions(scopedTools),
           context: systemPrompt,
           runId,
           taskType: "chat",
-        });
+        };
+        const response =
+          onTextDelta && brain.chatStream
+            ? await brain.chatStream(brainRequest, onTextDelta)
+            : await brain.chat(brainRequest);
 
         eventBus.emit("brain.response", {
           text: response.text,

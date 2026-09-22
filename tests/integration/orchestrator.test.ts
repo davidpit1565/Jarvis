@@ -102,7 +102,60 @@ class MockDeviceConnection implements DeviceConnection {
   }
 }
 
+/** A ScriptedBrain that also streams — fires the given deltas via onTextDelta before resolving each scripted response. */
+class StreamingScriptedBrain implements Brain {
+  private calls = 0;
+  constructor(private readonly responses: Array<{ response: BrainResponse; deltas: string[] }>) {}
+
+  async chat(_request: BrainRequest): Promise<BrainResponse> {
+    const entry = this.responses[this.calls];
+    this.calls++;
+    if (!entry) throw new Error("StreamingScriptedBrain ran out of scripted responses");
+    return entry.response;
+  }
+
+  async chatStream(_request: BrainRequest, onTextDelta: (text: string) => void): Promise<BrainResponse> {
+    const entry = this.responses[this.calls];
+    this.calls++;
+    if (!entry) throw new Error("StreamingScriptedBrain ran out of scripted responses");
+    for (const delta of entry.deltas) onTextDelta(delta);
+    return entry.response;
+  }
+}
+
 describe("Orchestrator integration", () => {
+  test("streams the final reply's text via onTextDelta when the brain supports chatStream", async () => {
+    const brain = new StreamingScriptedBrain([
+      { response: { text: "Hello, world.", toolCalls: [], stopReason: "end_turn" }, deltas: ["Hel", "lo, ", "world."] },
+    ]);
+    const { orchestrator } = setup(brain);
+
+    const received: string[] = [];
+    const reply = await orchestrator.handleUserMessage("user-1", "hi", undefined, (delta) => received.push(delta));
+
+    expect(reply).toBe("Hello, world.");
+    expect(received).toEqual(["Hel", "lo, ", "world."]);
+  });
+
+  test("omitting onTextDelta behaves exactly as before (no streaming, plain chat())", async () => {
+    let chatStreamCalls = 0;
+    const brain: Brain = {
+      async chat(): Promise<BrainResponse> {
+        return { text: "ok", toolCalls: [], stopReason: "end_turn" };
+      },
+      async chatStream(_request, onTextDelta): Promise<BrainResponse> {
+        chatStreamCalls++;
+        onTextDelta("should never fire");
+        return { text: "ok", toolCalls: [], stopReason: "end_turn" };
+      },
+    };
+    const { orchestrator } = setup(brain);
+
+    const reply = await orchestrator.handleUserMessage("user-1", "hi");
+    expect(reply).toBe("ok");
+    expect(chatStreamCalls).toBe(0);
+  });
+
   test("rejects an oversized message before it ever reaches the brain or conversation history", async () => {
     const brain = new ScriptedBrain([]); // would throw if ever called — proves the brain is never reached
     const { orchestrator, conversation } = setup(brain);
