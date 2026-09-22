@@ -38,7 +38,7 @@ describe("StudioClient.listReels", () => {
 });
 
 describe("StudioClient.getInstagramStats", () => {
-  test("returns the stats payload as-is", async () => {
+  test("returns the stats payload reshaped to the declared fields", async () => {
     global.fetch = (async () =>
       new Response(JSON.stringify({ connected: true, username: "actuallyworks", followers: 100, mediaCount: 5, media: [] }), {
         status: 200,
@@ -46,6 +46,132 @@ describe("StudioClient.getInstagramStats", () => {
 
     const stats = await makeClient().getInstagramStats();
     expect(stats).toEqual({ connected: true, username: "actuallyworks", followers: 100, mediaCount: 5, media: [] });
+  });
+
+  test("returns connected: false as-is, without trying to reshape media", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ connected: false, reason: "not linked" }), { status: 200 })) as unknown as typeof fetch;
+
+    const stats = await makeClient().getInstagramStats();
+    expect(stats).toEqual({ connected: false, reason: "not linked" });
+  });
+
+  test("strips undeclared debug/status fields the studio's real API includes per post", async () => {
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          connected: true,
+          username: "actuallyworks",
+          followers: 100,
+          mediaCount: 1,
+          media: [
+            {
+              id: "1",
+              caption: "hi",
+              permalink: "https://instagram.com/p/1",
+              timestamp: "2026-01-01T00:00:00Z",
+              mediaType: "VIDEO",
+              views: 10,
+              reach: 8,
+              saves: 1,
+              shares: 0,
+              likes: 2,
+              comments: 0,
+              metricStatus: { views: "AVAILABLE" },
+              reachByFollowerTypeStatus: "NOT_AVAILABLE",
+              reachByFollowerTypeDebug: '{"error":{"message":"boom"}}',
+              watchAvgSeconds: null,
+              watchTotalSeconds: null,
+              watchReplays: null,
+              watchPlays: null,
+              watchStatus: "NOT_AVAILABLE",
+            },
+          ],
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const stats = await makeClient().getInstagramStats();
+    expect(stats).toEqual({
+      connected: true,
+      username: "actuallyworks",
+      followers: 100,
+      mediaCount: 1,
+      media: [
+        {
+          id: "1",
+          caption: "hi",
+          permalink: "https://instagram.com/p/1",
+          timestamp: "2026-01-01T00:00:00Z",
+          mediaType: "VIDEO",
+          views: 10,
+          reach: 8,
+          saves: 1,
+          shares: 0,
+          likes: 2,
+          comments: 0,
+        },
+      ],
+    });
+  });
+
+  test("caps the media list to the 10 most recent posts", async () => {
+    const media = Array.from({ length: 25 }, (_, i) => ({
+      id: `${i}`,
+      caption: `post ${i}`,
+      permalink: null,
+      timestamp: null,
+      mediaType: null,
+      views: null,
+      reach: null,
+      saves: null,
+      shares: null,
+      likes: null,
+      comments: null,
+    }));
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ connected: true, username: "u", followers: 1, mediaCount: 25, media }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+
+    const stats = await makeClient().getInstagramStats();
+    if (!stats.connected) throw new Error("expected connected: true");
+    expect(stats.media).toHaveLength(10);
+    expect(stats.media[0]?.id).toBe("0");
+  });
+
+  test("truncates long captions instead of passing full hashtag-laden text through", async () => {
+    const longCaption = "a".repeat(500);
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          connected: true,
+          username: "u",
+          followers: 1,
+          mediaCount: 1,
+          media: [
+            {
+              id: "1",
+              caption: longCaption,
+              permalink: null,
+              timestamp: null,
+              mediaType: null,
+              views: null,
+              reach: null,
+              saves: null,
+              shares: null,
+              likes: null,
+              comments: null,
+            },
+          ],
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const stats = await makeClient().getInstagramStats();
+    if (!stats.connected) throw new Error("expected connected: true");
+    expect(stats.media[0]?.caption.length).toBeLessThan(longCaption.length);
+    expect(stats.media[0]?.caption.endsWith("…")).toBe(true);
   });
 
   test("throws on a non-2xx response", async () => {

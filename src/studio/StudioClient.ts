@@ -1,5 +1,14 @@
 import type { StudioInstagramStats, StudioPublishResult, StudioReel } from "@/types/studio";
 
+/** Most recent posts kept when reporting Instagram stats — see getInstagramStats()'s doc comment for why this exists. */
+const MAX_INSTAGRAM_MEDIA_ITEMS = 10;
+/** Caption length kept per post — full captions/hashtags are the single biggest contributor to response size. */
+const MAX_CAPTION_LENGTH = 200;
+
+function truncateCaption(caption: string): string {
+  return caption.length > MAX_CAPTION_LENGTH ? `${caption.slice(0, MAX_CAPTION_LENGTH)}…` : caption;
+}
+
 /**
  * Talks to David's separate "actually-works" video studio project
  * (a Next.js app, repo davidpit1565/videos-ai) over its own small set of
@@ -34,13 +43,46 @@ export class StudioClient {
     return data.reels ?? [];
   }
 
-  /** Real account stats: followers, and per-post views/reach/saves/shares/likes/comments. */
+  /**
+   * Real account stats: followers, and per-post views/reach/saves/shares/likes/comments.
+   *
+   * The studio's own API returns far more than `StudioInstagramStats` declares — extra
+   * debug/status fields per post (e.g. `metricStatus`, `reachByFollowerTypeDebug`, raw
+   * watch-time breakdowns) that were never meant for JARVIS to see, plus every post the
+   * account has ever made. Blindly casting the raw JSON to `StudioInstagramStats` (as this
+   * used to do) let all of that through at runtime despite the type claiming otherwise —
+   * found the hard way: 43 real posts' full captions/hashtags plus that debug noise pushed
+   * one request to ~13k tokens, well past Groq's free-tier per-minute limit for the
+   * follow-up call that has to read the tool result. Explicitly reshaping the response to
+   * only the declared fields, capping the post list, and trimming captions keeps this
+   * genuinely small regardless of how many posts/fields the studio's API adds later.
+   */
   async getInstagramStats(): Promise<StudioInstagramStats> {
     const response = await fetch(new URL("/api/jarvis/instagram", this.baseUrl), { headers: this.headers() });
     if (!response.ok) {
       throw new Error(`Studio Instagram request failed (${response.status}): ${await response.text().catch(() => "")}`);
     }
-    return (await response.json()) as StudioInstagramStats;
+    const raw = (await response.json()) as StudioInstagramStats;
+    if (!raw.connected) return raw;
+    return {
+      connected: true,
+      username: raw.username,
+      followers: raw.followers,
+      mediaCount: raw.mediaCount,
+      media: raw.media.slice(0, MAX_INSTAGRAM_MEDIA_ITEMS).map((post) => ({
+        id: post.id,
+        caption: truncateCaption(post.caption),
+        permalink: post.permalink,
+        timestamp: post.timestamp,
+        mediaType: post.mediaType,
+        views: post.views,
+        reach: post.reach,
+        saves: post.saves,
+        shares: post.shares,
+        likes: post.likes,
+        comments: post.comments,
+      })),
+    };
   }
 
   /**
