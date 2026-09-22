@@ -258,4 +258,42 @@ describe("BrainAgentPlanner.verify", () => {
 
     expect(result.verified).toBe(false);
   });
+
+  test("still defines tools on the final-verdict call, since its messages carry tool_use/tool_result blocks", async () => {
+    // Anthropic's real API rejects any request whose messages contain a
+    // tool_use/tool_result block but whose `tools` array is empty — the
+    // exact shape this second brain.chat() call in `verify()` builds after
+    // running a verification tool call. This stub throws that real error
+    // to prove the fix, rather than a mock that would silently accept
+    // whatever shape verify() happens to send.
+    class AnthropicShapeCheckingBrain implements Brain {
+      private calls = 0;
+      async chat(request: BrainRequest): Promise<BrainResponse> {
+        this.calls++;
+        if (this.calls === 1) {
+          return { text: "", toolCalls: [{ id: "call-1", toolName: "check_thing", input: {} }], stopReason: "tool_use" };
+        }
+        const hasToolBlocks = request.messages.some((m) => ("toolCalls" in m && m.toolCalls) || m.role === "tool");
+        if (hasToolBlocks && request.tools.length === 0) {
+          throw new Error(
+            "400 invalid_request_error: messages.1: `tool_use` ids were found without `tool_result` blocks immediately after: call-1. Each `tool_use` block must have a corresponding `tool_result` block in the next message, and `tools` must be defined."
+          );
+        }
+        expect(request.tools.map((t) => t.name)).toEqual(["check_thing"]);
+        return { text: '{"verified":true,"reason":"confirmed"}', toolCalls: [], stopReason: "end_turn" };
+      }
+    }
+
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.registerTool(makeReadTool("check_thing"));
+    const planner = new BrainAgentPlanner(new AnthropicShapeCheckingBrain(), toolRegistry);
+
+    const result = await planner.verify({
+      step: { id: "s1", description: "d", toolName: "create_thing", input: {}, status: "succeeded" },
+      result: { success: true, data: {} },
+      runVerificationTool: async () => ({ success: true }),
+    });
+
+    expect(result).toEqual({ verified: true, reason: "confirmed" });
+  });
 });

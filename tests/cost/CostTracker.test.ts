@@ -7,6 +7,13 @@ describe("estimateCostUsd", () => {
     expect(estimateCostUsd("groq", { inputTokens: 100_000, outputTokens: 50_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 })).toBe(0);
   });
 
+  test("is always exactly $0 for openrouter, regardless of usage — OpenRouterBrain only ever runs :free models", () => {
+    expect(estimateCostUsd("openrouter")).toBe(0);
+    expect(
+      estimateCostUsd("openrouter", { inputTokens: 100_000, outputTokens: 50_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 })
+    ).toBe(0);
+  });
+
   test("estimates anthropic cost from usage using the documented approximate per-token rates", () => {
     const cost = estimateCostUsd("anthropic", {
       inputTokens: 1_000_000,
