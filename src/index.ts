@@ -13,6 +13,7 @@ import { CostTracker } from "@/core/cost/CostTracker";
 import type { Brain } from "@/types/brain";
 import { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { ToolResultCache } from "@/core/cache/ToolResultCache";
+import { OllamaEmbeddingsClient } from "@/core/embeddings/OllamaEmbeddingsClient";
 import { ConfirmationService, type ConfirmationRequest } from "@/core/confirmation/ConfirmationService";
 import { ToolRegistry } from "@/tools/registry/ToolRegistry";
 import { PermissionService } from "@/permissions/PermissionService";
@@ -206,6 +207,16 @@ function main() {
   // GET /agent-status / POST /agent/stop — JARVIS_ROADMAP_AUDIT.md
   // #187/#195/#196 (Live Agent Monitor / live status / Stop button).
   const liveStateTracker = new JarvisLiveStateTracker(eventBus);
+  // Semantic Memory Search / Semantic Result Cache (additive, opt-in —
+  // JARVIS_ROADMAP_AUDIT.md #60): only constructed when
+  // OLLAMA_EMBEDDING_MODEL is set, so every existing exact-match code path
+  // (MemoryStore.search LIKE matching, ToolResultCache's exact-match
+  // cache) has zero dependency on Ollama when this is unset, the default.
+  // See README's "Semantic memory & caching (optional, local-only)"
+  // section.
+  const embeddingsClient = config.ollamaEmbeddingModel
+    ? new OllamaEmbeddingsClient({ baseUrl: config.ollamaBaseUrl, model: config.ollamaEmbeddingModel })
+    : undefined;
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
   const reminderStore = new ReminderStore(config.remindersDbPath, config.timezone);
@@ -364,8 +375,8 @@ function main() {
   toolRegistry.registerTool(listMacRemindersTool);
   toolRegistry.registerTool(createMacReminderTool);
   toolRegistry.registerTool(completeMacReminderTool);
-  toolRegistry.registerTool(createSaveMemoryTool(memoryStore));
-  toolRegistry.registerTool(createSearchMemoryTool(memoryStore));
+  toolRegistry.registerTool(createSaveMemoryTool(memoryStore, embeddingsClient));
+  toolRegistry.registerTool(createSearchMemoryTool(memoryStore, embeddingsClient));
   toolRegistry.registerTool(createDeleteMemoryTool(memoryStore, undoStore));
   toolRegistry.registerTool(createCreateReminderTool(reminderStore));
   toolRegistry.registerTool(createListRemindersTool(reminderStore));
@@ -568,6 +579,7 @@ function main() {
     contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
     lockdownService,
     toolResultCache,
+    embeddingsClient,
     maxToolCallsPerRun: config.maxToolCallsPerRun,
     localToolTimeoutMs: config.localToolTimeoutMs,
     liveState: liveStateTracker,
@@ -633,6 +645,7 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      embeddingsClient,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -678,6 +691,7 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      embeddingsClient,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -749,6 +763,7 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      embeddingsClient,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -781,6 +796,7 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      embeddingsClient,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -864,6 +880,7 @@ function main() {
       contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
       lockdownService,
       toolResultCache,
+      embeddingsClient,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,

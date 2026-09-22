@@ -71,6 +71,29 @@ interface BaseTool {
    * don't consult this field.
    */
   timeoutMs?: number;
+  /**
+   * Semantic Result Cache (additive, opt-in — see `ToolResultCache`'s own
+   * doc comment on its semantic layer): when true AND embeddings are
+   * configured (OLLAMA_EMBEDDING_MODEL set), a cache miss on this tool's
+   * exact input also gets compared, by embedding similarity, against this
+   * SAME tool's own recently-cached inputs — so "AI news today" and
+   * "today's AI news" can hit the same cache entry despite not matching
+   * character-for-character. Left undefined/false (the default, and the
+   * only possibility when embeddings aren't configured at all) means this
+   * tool only ever gets exact-match caching, exactly as before this
+   * feature existed.
+   *
+   * Deliberately per-tool, not global: this only makes sense for a tool
+   * whose input is a loosely-phrased natural-language query where two
+   * different phrasings plausibly deserve the exact same real-world
+   * answer within the cache's TTL (e.g. a news/RSS search) — never for a
+   * tool where a small difference in input changes the correct answer
+   * (a specific date, a specific city, a specific person). Never applies
+   * above READ permission regardless of this flag — ToolResultCache/
+   * Orchestrator only ever consult ANY cache (exact or semantic) for
+   * READ-level local tools in the first place.
+   */
+  semanticCacheable?: boolean;
 }
 
 export interface LocalTool<TInput extends Record<string, unknown> = Record<string, unknown>> extends BaseTool {

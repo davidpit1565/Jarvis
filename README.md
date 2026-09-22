@@ -197,6 +197,77 @@ memory store (`src/memory/MemoryStore.ts`) that survives restarts:
 This is the first real step toward "JARVIS knows things about you between
 conversations" rather than only within a single session.
 
+## Semantic memory & caching (optional, local-only)
+
+Everything above (`SEARCH_MEMORY`, `ToolResultCache`) is exact/substring
+matching by default and stays that way forever unless you explicitly opt
+in — nothing below changes any existing behavior on its own.
+
+**What this unlocks.** With a locally-run [Ollama](https://ollama.com)
+server serving an embedding model, JARVIS can also match by *meaning*:
+
+- **Semantic memory search** — `SEARCH_MEMORY` can find a memory that
+  shares no words with your query at all. Ask "what did I say about the
+  dentist" and it can surface a fact saved as "appointment with Dr. Cohen"
+  — `LIKE` matching alone would miss this entirely, since neither the key
+  nor the value contains the word "dentist."
+- **Semantic result caching** — a handful of tools that take a
+  loosely-phrased natural-language query (currently just `SEARCH_NEWS`; see
+  `Tool.semanticCacheable` in `src/types/tools.ts`) can serve a cached
+  answer for a *differently worded* but equivalent question — "AI news
+  today" and "today's AI news" hit the same cache entry instead of two
+  separate real lookups.
+
+**What stays exact-match-only, always.** `MemoryStore.search()`'s `LIKE`
+behavior is completely unchanged (see "Persistent memory" above) and
+remains the default/fallback — semantic results, when available, are only
+ever *appended* after exact matches, never instead of them. Every other
+tool's caching stays exact-input-only; a tool must explicitly set
+`semanticCacheable: true` to be eligible at all, and none above
+`PermissionLevel.READ` ever is, regardless of that flag. If Ollama isn't
+running or the embedding model isn't pulled, every one of these features
+falls back to its exact-match behavior silently — nothing errors, nothing
+degrades except losing the fuzzy-match extra.
+
+**Why this exists now.** A previous pass (see `JARVIS_ROADMAP_AUDIT.md`,
+item #60) explicitly skipped semantic search/caching because building it
+would have required a *paid* embeddings API call — spending money to build
+a cost-saving/UX feature contradicted this project's zero-cost mandate.
+Ollama serving embedding models locally (e.g. `nomic-embed-text`) removes
+that blocker entirely: genuinely free, runs on your own machine, no API
+key, no per-call cost.
+
+**Setup.**
+
+1. Install and run [Ollama](https://ollama.com) (`ollama serve`, or use its
+   default background service).
+2. Pull an embedding model: `ollama pull nomic-embed-text`.
+3. Set two environment variables:
+   - `OLLAMA_BASE_URL` — where Ollama is reachable. Optional; defaults to
+     `http://localhost:11434` (Ollama's own standard local address).
+   - `OLLAMA_EMBEDDING_MODEL` — the pulled model's name, e.g.
+     `nomic-embed-text`. **Required to enable any of this** — leaving it
+     unset (the default) keeps every code path above exact-match-only,
+     with zero dependency on Ollama being installed at all.
+
+This is the same `OLLAMA_BASE_URL` a local Ollama *chat* provider
+(`OllamaBrain`, if configured — see its own docs) also reads, so one
+running Ollama server backs both chat and embeddings without duplicating
+config.
+
+**Implementation notes, for the curious.** `OllamaEmbeddingsClient`
+(`src/core/embeddings/OllamaEmbeddingsClient.ts`) is a small wrapper around
+Ollama's `POST /api/embeddings` endpoint. `src/core/embeddings/similarity.ts`
+is a dependency-free cosine-similarity function — no vector database, no
+external library, no indexing: at personal-assistant scale (dozens to
+low-thousands of memories/cached queries) a linear scan in JS is
+effectively instant, and building real vector-search infrastructure for
+that scale would be pure over-engineering. `MemoryStore` gained one new
+nullable `embedding` column (additive migration, same
+`PRAGMA table_info`/`ALTER TABLE` pattern as every other column it's grown
+over time) and one new method, `searchSemantic()`, alongside — not instead
+of — `search()`.
+
 ## JARVIS knows what time it actually is
 
 A real gap found in this session's own research: JARVIS never told Claude
@@ -1989,11 +2060,11 @@ never cached. `JARVIS_TOOL_RESULT_CACHE_TTL_MS` controls the TTL (default
 the shared `EventBus`.
 
 A real embedding-based semantic cache (catching near-identical, not just
-identical, prompts/tool calls) was deliberately not built — JARVIS has no
-embeddings infrastructure, and adding one would mean either a new paid API
-call (spending money to build a *cost-saving* feature) or an unreliable
-zero-cost text-similarity heuristic that risks serving a stale answer to a
-materially different question.
+identical, tool calls) is now available, opt-in, at zero cost — see
+"Semantic memory & caching (optional, local-only)" below. It only activates
+per-tool (`Tool.semanticCacheable`) and only once a local Ollama embeddings
+model is configured; without that, `ToolResultCache` behaves exactly as
+described above, unchanged.
 
 ## Free ($0) hosting: Cloudflare Tunnel instead of Fly.io
 

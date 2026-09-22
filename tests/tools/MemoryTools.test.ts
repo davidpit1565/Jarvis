@@ -50,6 +50,34 @@ describe("SAVE_MEMORY tool", () => {
     const result = await tool.execute({ key: "user.name", value: "" }, context);
     expect(result.success).toBe(false);
   });
+
+  describe("embedding computation (opt-in, additive)", () => {
+    test("with no embeddings client, no embedding is stored (identical to before this feature existed)", async () => {
+      const tool = createSaveMemoryTool(store);
+      await tool.execute({ key: "user.name", value: "David" }, context);
+
+      expect(store.searchSemantic([1, 0])).toEqual([]);
+    });
+
+    test("with an embeddings client, the computed embedding is stored and later semantically searchable", async () => {
+      const fakeClient = { embed: async (text: string) => (text.includes("Cohen") ? [1, 0] : [0, 1]) };
+      const tool = createSaveMemoryTool(store, fakeClient);
+      await tool.execute({ key: "appointments.dentist", value: "appointment with Dr. Cohen" }, context);
+
+      const results = store.searchSemantic([1, 0]);
+      expect(results).toHaveLength(1);
+      expect(results[0]?.key).toBe("appointments.dentist");
+    });
+
+    test("an unreachable embeddings client never fails the save itself", async () => {
+      const throwingClient = { embed: async () => { throw new Error("Ollama unreachable"); } };
+      const tool = createSaveMemoryTool(store, throwingClient);
+      const result = await tool.execute({ key: "user.name", value: "David" }, context);
+
+      expect(result.success).toBe(true);
+      expect(store.getByKey("user.name")?.value).toBe("David");
+    });
+  });
 });
 
 describe("SEARCH_MEMORY tool", () => {
@@ -86,6 +114,64 @@ describe("SEARCH_MEMORY tool", () => {
 
     expect(result.success).toBe(true);
     expect(result.data).toEqual([]);
+  });
+
+  describe("semantic search (opt-in, additive)", () => {
+    test("with no embeddings client, behavior is byte-for-byte identical to exact-match-only search", async () => {
+      store.save({ key: "appointments.medical", value: "appointment with Dr. Cohen" });
+      const withoutClient = createSearchMemoryTool(store);
+
+      const result = await withoutClient.execute({ query: "dentist" }, context);
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual([]); // no word "dentist" in either the key or value fragment
+
+      // Sanity check: an embeddings-client tool with the client always
+      // throwing behaves identically to no client at all, further proving
+      // the fallback path is exact-match-only, not "empty".
+      const throwingClient = { embed: async () => { throw new Error("unreachable"); } };
+      const withThrowingClient = createSearchMemoryTool(store, throwingClient);
+      const resultWithThrowingClient = await withThrowingClient.execute({ query: "dentist" }, context);
+      expect(resultWithThrowingClient).toEqual(result);
+    });
+
+    test("finds a semantically similar memory that shares no words with the query, when an embeddings client is given", async () => {
+      // Simulate a real embeddings client with hand-picked vectors: the
+      // "dentist" query embedding is close to the stored memory's saved
+      // embedding, even though the text shares no words.
+      const fakeClient = {
+        embed: async (text: string) => (text === "dentist" ? [1, 0, 0] : [0, 0, 1]),
+      };
+      store.save({ key: "appointments.medical", value: "appointment with Dr. Cohen", embedding: [1, 0.1, 0] });
+
+      const tool = createSearchMemoryTool(store, fakeClient);
+      const result = await tool.execute({ query: "dentist" }, context);
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual([{ key: "appointments.medical", value: "appointment with Dr. Cohen", savedAt: expect.any(String) }]);
+    });
+
+    test("exact matches come first, semantic matches are appended without duplicates", async () => {
+      store.save({ key: "user.dentist_note", value: "dentist is closed on Mondays", embedding: [1, 0] });
+      store.save({ key: "appointments.medical", value: "appointment with Dr. Cohen", embedding: [0.9, 0.1] });
+
+      const fakeClient = { embed: async () => [1, 0] };
+      const tool = createSearchMemoryTool(store, fakeClient);
+      const result = await tool.execute({ query: "dentist" }, context);
+
+      const keys = (result.data as Array<{ key: string }>).map((r) => r.key);
+      expect(keys).toEqual(["user.dentist_note", "appointments.medical"]); // exact match first, semantic-only second
+    });
+
+    test("an empty query never triggers the embeddings client (nothing meaningful to embed)", async () => {
+      let embedCalls = 0;
+      const fakeClient = { embed: async () => { embedCalls++; return [1, 0]; } };
+      store.save({ key: "a", value: "a", embedding: [1, 0] });
+
+      const tool = createSearchMemoryTool(store, fakeClient);
+      await tool.execute({}, context);
+
+      expect(embedCalls).toBe(0);
+    });
   });
 });
 

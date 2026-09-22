@@ -2,6 +2,7 @@ import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 import type { MemoryStore } from "@/memory/MemoryStore";
 import type { MemoryCategory, MemoryImportance, MemoryTrust } from "@/types/memory";
+import type { EmbeddingsClientLike } from "@/tools/memory/SearchMemoryTool";
 
 const MEMORY_CATEGORIES: MemoryCategory[] = ["fact", "preference", "commitment", "temporary"];
 // EXTERNAL_CONTENT deliberately excluded from what the model may self-declare
@@ -33,8 +34,22 @@ export interface SaveMemoryInput extends Record<string, unknown> {
  * conversation ends. SAFE_ACTION (not READ) because it mutates state;
  * granted to the local user by default in index.ts since this is a
  * single-user personal assistant, not a multi-tenant system.
+ *
+ * Semantic Memory Search (additive, opt-in): when `embeddingsClient` is
+ * given (only true when OLLAMA_EMBEDDING_MODEL is configured — see
+ * src/index.ts), this also computes and stores an embedding for the saved
+ * value alongside it, so SEARCH_MEMORY can later find it semantically (see
+ * SearchMemoryTool's own doc comment). Omitted (the default), or if Ollama
+ * happens to be unreachable for this one call, the memory is still saved
+ * normally — it just isn't semantically searchable until a future save
+ * recomputes its embedding. An embedding failure NEVER fails the save
+ * itself; SAVE_MEMORY's core job (persist the fact) always succeeds
+ * regardless of Ollama's availability.
  */
-export function createSaveMemoryTool(memoryStore: MemoryStore): LocalTool<SaveMemoryInput> {
+export function createSaveMemoryTool(
+  memoryStore: MemoryStore,
+  embeddingsClient?: EmbeddingsClientLike
+): LocalTool<SaveMemoryInput> {
   return {
     id: "SAVE_MEMORY",
     name: "save_memory",
@@ -102,6 +117,17 @@ export function createSaveMemoryTool(memoryStore: MemoryStore): LocalTool<SaveMe
         return { success: false, error: `source must be one of: ${MEMORY_SOURCES.join(", ")}` };
       }
 
+      let embedding: number[] | undefined;
+      if (embeddingsClient) {
+        try {
+          embedding = await embeddingsClient.embed(input.value);
+        } catch {
+          // Ollama unreachable/misconfigured for this one call — the save
+          // itself must still succeed; it just won't be semantically
+          // searchable until a later save recomputes the embedding.
+        }
+      }
+
       const record = memoryStore.save({
         key: input.key,
         value: input.value,
@@ -109,6 +135,7 @@ export function createSaveMemoryTool(memoryStore: MemoryStore): LocalTool<SaveMe
         importance: input.importance,
         expiresAt: input.expiresAt,
         source: input.source,
+        embedding,
       });
 
       if (record.conflict) {

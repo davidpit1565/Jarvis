@@ -2002,3 +2002,115 @@ Baseline for this pass was 1867 passing / 0 failing / 0 typecheck errors;
 this pass added 35 tests, bringing the suite to 1902 passing / 0 failing
 / 0 typecheck errors (`bun run typecheck` and `bun test` both re-run
 clean after this pass).
+
+---
+
+## 2026-09-22 update — Semantic Cache (#60) unblocked: local Ollama embeddings
+
+Item #60 above ("Semantic Cache") was marked `NOT_WORTH_IMPLEMENTING` in
+the original audit specifically because a real semantic cache needs an
+embeddings model to compare similarity, and this codebase had no
+embeddings infrastructure — building one would have meant either a new
+*paid* embeddings API call (spending money to build a cost-saving feature,
+directly against ZERO_COST_MODE) or an unreliable zero-cost text-overlap
+heuristic. `MemoryStore.search()` was, and by default still is, plain SQL
+`LIKE` matching for the same underlying reason (no free embeddings
+source).
+
+A parallel pass added `OllamaBrain`, a chat provider talking to a
+locally-run [Ollama](https://ollama.com) server — genuinely free,
+unlimited, no API key, at a configurable base URL. Ollama also serves
+embedding models (e.g. `nomic-embed-text`) over its own `/api/embeddings`
+endpoint, which removes the exact blocker #60 cited. This pass builds a
+semantic layer on top of that, as a clean additive extension alongside
+(never replacing) the existing exact-match systems:
+
+- **`src/core/embeddings/OllamaEmbeddingsClient.ts`** (new) — a small
+  client for `POST /api/embeddings`, using the same `fetchWithRetry`
+  helper every other JARVIS HTTP client uses. Throws a typed
+  `OllamaEmbeddingsError` (never a crash) when Ollama is unreachable or
+  the response is unusable, mirroring how `OllamaBrain` reports its own
+  connection failures.
+- **`src/core/embeddings/similarity.ts`** (new) — a dependency-free
+  cosine-similarity function, real unit tests against known vectors
+  (identical/orthogonal/opposite/scaled/hand-computed) and edge cases
+  (zero vectors, mismatched lengths). Deliberately no vector database, no
+  external library, no indexing — at personal-assistant scale (dozens to
+  low-thousands of memories/cached queries), a linear scan in JS is
+  effectively instant; building real vector-search infrastructure for
+  that scale would be pure over-engineering. Considered and explicitly
+  rejected building more here.
+- **`MemoryStore`** (extended, additive) — one new nullable `embedding`
+  TEXT column (same `PRAGMA table_info`/try-catch `ALTER TABLE ADD COLUMN`
+  migration pattern the class already uses for every other column it's
+  grown), and a new `searchSemantic(queryEmbedding, limit)` method
+  alongside — not replacing — `search()`. `search()`'s `LIKE` behavior and
+  every existing caller are untouched; proven with a byte-for-byte
+  identical-behavior test in `tests/tools/MemoryTools.test.ts`.
+  `SEMANTIC_MEMORY_SIMILARITY_THRESHOLD = 0.5` (see the constant's own doc
+  comment for the reasoning: this is *search*, results are skimmed by a
+  human/Claude rather than blindly trusted, so it deliberately errs toward
+  recall over precision — low enough to catch "dentist" ↔ "Dr. Cohen"
+  paraphrases, still high enough to exclude merely-same-topic noise).
+- **`SearchMemoryTool`/`SaveMemoryTool`** (extended, additive) — both take
+  an optional embeddings-client parameter. `SaveMemoryTool` computes and
+  stores an embedding for a saved value when one is configured (never
+  fails the save itself if Ollama is unreachable). `SearchMemoryTool`
+  additionally embeds the query and calls `searchSemantic()`, merging
+  exact matches first, then not-already-included semantic matches after —
+  never reordering or hiding the existing exact-match results. With no
+  embeddings client (the default, unset `OLLAMA_EMBEDDING_MODEL`),
+  behavior is byte-for-byte identical to before this feature existed.
+- **`ToolResultCache`** (extended, additive) — a new
+  `Tool.semanticCacheable?: boolean` flag (default unset/false) lets a
+  tool opt in to semantic caching; `ToolResultCache.set()` takes an
+  optional embedding, and a new `getSemantic()` matches only within the
+  SAME tool's own recently-cached, non-expired entries, only for tools
+  that opted in. `SEMANTIC_CACHE_SIMILARITY_THRESHOLD = 0.92` — much
+  higher than memory search's 0.5, because a cache hit is served silently
+  with no human in the loop to notice a near-miss; this only matches true
+  near-paraphrases, never merely-related-topic queries. `Orchestrator`
+  wires this in: a READ-tool exact-cache-miss for a `semanticCacheable`
+  tool, only when an `embeddingsClient` dependency is configured, also
+  tries the semantic cache before actually running the tool, and stores
+  the computed embedding alongside the exact-match entry on a real miss.
+  Never applies above `PermissionLevel.READ` regardless of the flag (the
+  existing cacheable-permission gate is untouched). `tool.cacheHit` gained
+  an optional `semantic: true` field for a semantic hit specifically.
+  **Only `SEARCH_NEWS` was found genuinely appropriate** for
+  `semanticCacheable: true` — a loosely-phrased natural-language query
+  over one time-bounded feed, where "AI news today" and "today's AI news"
+  plausibly deserve the same real answer within the cache's TTL.
+  `GET_NEWS` has no query text at all to compare (nothing to be "similar"
+  to), and every other existing READ tool takes a precise input (a
+  specific city/date/person/id) where a near-miss match would silently
+  answer a different question — none of them were marked
+  `semanticCacheable`, deliberately.
+- **Config** (`src/config/index.ts`) — `OLLAMA_BASE_URL` (default
+  `http://localhost:11434`, matching what `OllamaBrain` reads) and
+  `OLLAMA_EMBEDDING_MODEL` (unset by default — the single flag that
+  enables this entire feature). `src/index.ts` constructs one shared
+  `OllamaEmbeddingsClient` when `OLLAMA_EMBEDDING_MODEL` is set and wires
+  it into every channel's `Orchestrator` plus `SAVE_MEMORY`/`SEARCH_MEMORY`.
+- **README** — new "Semantic memory & caching (optional, local-only)"
+  section: what this unlocks (semantic memory search, semantic result
+  caching for `SEARCH_NEWS`), what stays exact-match-only always
+  (`MemoryStore.search()`, every non-opted-in tool's caching, anything
+  above READ), and setup (`ollama pull nomic-embed-text` +
+  `OLLAMA_EMBEDDING_MODEL`). The stale note under "Prompt caching and
+  tool-result caching" claiming semantic caching would need a paid API is
+  corrected to point here.
+
+**Hard constraints respected:** no vector database, no new npm
+dependency, no premature indexing (explicitly called out above and in the
+new code's own doc comments); `ui/hologram/index.html` and `dashboard.ts`
+visuals untouched; no shell/AppleScript tool added; every existing
+exact-match code path (`MemoryStore.search()`, `ToolResultCache`'s
+exact-match behavior, `SearchMemoryTool`/`SaveMemoryTool` with no
+embeddings client, every tool without `semanticCacheable`) is provably
+unchanged — each has a dedicated "identical to before" test.
+
+Baseline for this pass was 1902 passing / 0 failing / 0 typecheck errors;
+this pass added 45 tests, bringing the suite to 1947 passing / 0 failing
+/ 0 typecheck errors (`bun run typecheck` and `bun test` both re-run
+clean after this pass).
