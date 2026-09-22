@@ -2,7 +2,13 @@ import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { ConversationMessage, ToolCallRequest } from "@/types/conversation";
 import type { ToolDefinition } from "@/types/tools";
 
-export const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
+// llama-3.3-70b-versatile was decommissioned by Groq (confirmed live against
+// api.groq.com/openai/v1/models on 2026-09-22 — it no longer appears there
+// and requests for it now fail with a 400 model_not_found). Verified
+// openai/gpt-oss-120b is currently listed and genuinely tool-calling
+// capable (a live request with a `tools` array returned a real
+// `tool_calls` response) before switching the default to it.
+export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
 const DEFAULT_MAX_TOKENS = 1024;
 const GROQ_API_BASE_URL = "https://api.groq.com/openai/v1";
 const MAX_RETRIES = 2;
