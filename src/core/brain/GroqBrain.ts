@@ -1,6 +1,6 @@
 import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { ConversationMessage, ToolCallRequest } from "@/types/conversation";
-import type { ToolDefinition } from "@/types/tools";
+import type { ToolDefinition, ToolInputSchema } from "@/types/tools";
 
 // llama-3.3-70b-versatile was decommissioned by Groq (confirmed live against
 // api.groq.com/openai/v1/models on 2026-09-22 — it no longer appears there
@@ -149,8 +149,59 @@ function toOpenAIMessages(messages: ConversationMessage[], systemContext?: strin
 function toOpenAITools(tools: ToolDefinition[]) {
   return tools.map((tool) => ({
     type: "function" as const,
-    function: { name: tool.name, description: tool.description, parameters: tool.input_schema },
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: acceptNullForOptionalParams(tool.input_schema),
+    },
   }));
+}
+
+/**
+ * Groq validates the model's own tool calls against the schema we sent and
+ * fails the whole completion with a 400 when they disagree, so a schema the
+ * model can't satisfy is fatal rather than merely sloppy.
+ *
+ * The models served here routinely spell "I'm omitting this optional
+ * parameter" as an explicit null — `{"deviceId": null}` — which
+ * `"type": "string"` does not admit, producing:
+ *
+ *   Tool call validation failed: parameters for tool get_active_application
+ *   did not match schema: errors: [`/deviceId`: expected string, but got null]
+ *
+ * Every device tool takes an optional `deviceId`, so on Groq that made the
+ * entire device-control surface unreachable: the model would pick the right
+ * tool and the request would die server-side, where no retry or fallback
+ * provider can rescue it.
+ *
+ * Widening only the *optional* parameters to also accept null keeps required
+ * parameters strict, and costs nothing downstream — a null already reads as
+ * "not supplied" everywhere Core consumes these (see the
+ * `typeof input.deviceId === "string"` check in Orchestrator). This lives
+ * here rather than in the shared tool definitions because it is a quirk of
+ * this provider's validator, not something to inflict on every other brain.
+ */
+export function acceptNullForOptionalParams(schema: ToolInputSchema): ToolInputSchema {
+  const required = new Set(schema.required ?? []);
+  const properties: Record<string, unknown> = {};
+  let widened = false;
+
+  for (const [name, property] of Object.entries(schema.properties)) {
+    const type = (property as { type?: unknown } | null)?.type;
+
+    // Only plain single-type properties need this. A property that is already
+    // a union (`["string", "null"]`) or uses anyOf/oneOf is left exactly as
+    // its author wrote it.
+    if (required.has(name) || typeof type !== "string" || type === "null") {
+      properties[name] = property;
+      continue;
+    }
+
+    properties[name] = { ...(property as object), type: [type, "null"] };
+    widened = true;
+  }
+
+  return widened ? { ...schema, properties } : schema;
 }
 
 interface OpenAIChatCompletionResponse {

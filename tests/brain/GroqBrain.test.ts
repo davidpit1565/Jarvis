@@ -1,5 +1,10 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { GroqBrain, DEFAULT_GROQ_MODEL, fromOpenAIResponse } from "@/core/brain/GroqBrain";
+import {
+  GroqBrain,
+  DEFAULT_GROQ_MODEL,
+  fromOpenAIResponse,
+  acceptNullForOptionalParams,
+} from "@/core/brain/GroqBrain";
 import type { ConversationMessage } from "@/types/conversation";
 
 const originalFetch = global.fetch;
@@ -188,5 +193,84 @@ describe("GroqBrain.chat", () => {
     await brain.chat({ messages: [{ role: "user", content: "hi" }], tools: [] });
 
     expect(capturedBody?.model).toBe("llama-3.1-8b-instant");
+  });
+});
+
+describe("acceptNullForOptionalParams", () => {
+  test("widens an optional parameter so an explicit null passes Groq's validator", () => {
+    // Groq rejects the entire completion with a 400 when the model answers
+    // "no deviceId" with `{"deviceId": null}` against `"type": "string"`,
+    // which took every device tool (all of which have an optional deviceId)
+    // out of service on this provider.
+    const widened = acceptNullForOptionalParams({
+      type: "object",
+      properties: { deviceId: { type: "string", description: "Defaults to the primary device." } },
+    });
+
+    expect(widened.properties.deviceId).toEqual({
+      type: ["string", "null"],
+      description: "Defaults to the primary device.",
+    });
+  });
+
+  test("leaves required parameters strict", () => {
+    const widened = acceptNullForOptionalParams({
+      type: "object",
+      properties: { query: { type: "string" }, limit: { type: "number" } },
+      required: ["query"],
+    });
+
+    expect(widened.properties.query).toEqual({ type: "string" });
+    expect(widened.properties.limit).toEqual({ type: ["number", "null"] });
+    expect(widened.required).toEqual(["query"]);
+  });
+
+  test("returns the original schema untouched when there is nothing to widen", () => {
+    const schema = {
+      type: "object" as const,
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    };
+
+    expect(acceptNullForOptionalParams(schema)).toBe(schema);
+  });
+
+  test("preserves a property that already expresses its own nullability", () => {
+    const widened = acceptNullForOptionalParams({
+      type: "object",
+      properties: {
+        union: { type: ["string", "null"] },
+        composed: { anyOf: [{ type: "string" }, { type: "number" }] },
+      },
+    });
+
+    expect(widened.properties.union).toEqual({ type: ["string", "null"] });
+    expect(widened.properties.composed).toEqual({ anyOf: [{ type: "string" }, { type: "number" }] });
+  });
+
+  test("sends the widened schema on the wire", async () => {
+    let capturedBody: Record<string, unknown> | undefined;
+    global.fetch = (async (_url: unknown, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const brain = new GroqBrain("gsk-test-key");
+    await brain.chat({
+      messages: [{ role: "user", content: "which app is frontmost?" }],
+      tools: [
+        {
+          name: "get_active_application",
+          description: "Returns the frontmost application.",
+          input_schema: { type: "object", properties: { deviceId: { type: "string" } } },
+        },
+      ],
+    });
+
+    const tools = capturedBody?.tools as Array<{ function: { parameters: { properties: Record<string, unknown> } } }>;
+    expect(tools[0]?.function.parameters.properties.deviceId).toEqual({ type: ["string", "null"] });
   });
 });
