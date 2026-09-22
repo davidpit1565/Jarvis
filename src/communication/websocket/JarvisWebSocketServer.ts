@@ -1955,8 +1955,15 @@ export class JarvisWebSocketServer {
     }
     this.pendingOAuthStates.delete(state);
 
+    let linkedEmail: string;
     try {
-      await calendarClient.exchangeCodeForTokens(code);
+      // Additive: exchangeCodeForTokens identifies the Google account via
+      // its own userinfo endpoint and upserts only THAT account's row —
+      // re-running this flow and picking a different account at Google's
+      // consent screen links a second/third account without touching
+      // whichever was linked before; picking the SAME account again just
+      // refreshes its tokens in place.
+      linkedEmail = await calendarClient.exchangeCodeForTokens(code);
     } catch (err) {
       console.error("[jarvis] Google Calendar OAuth exchange failed:", err instanceof Error ? err.message : String(err));
       return new Response("Failed to complete Google Calendar linking. Check the server logs for details.", {
@@ -1964,9 +1971,11 @@ export class JarvisWebSocketServer {
       });
     }
 
-    return new Response("Google Calendar linked successfully. You can close this tab.", {
-      headers: { "Content-Type": "text/plain" },
-    });
+    return new Response(
+      `Google account ${linkedEmail} linked successfully. To link another account, visit ` +
+        "/calendar/oauth/start again and choose a different account at Google's consent screen. You can close this tab.",
+      { headers: { "Content-Type": "text/plain" } }
+    );
   }
 
   /**

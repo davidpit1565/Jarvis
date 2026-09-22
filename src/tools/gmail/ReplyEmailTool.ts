@@ -5,6 +5,8 @@ import type { GmailClient } from "@/gmail/GmailClient";
 export interface ReplyEmailInput extends Record<string, unknown> {
   messageId: string;
   body: string;
+  /** Which linked Google account the original message is on, by email. Only needed if it can't be found automatically (e.g. more than one account is linked and the message's account isn't already known). */
+  account?: string;
 }
 
 /**
@@ -38,6 +40,11 @@ export function createReplyEmailTool(gmailClient: GmailClient): LocalTool<ReplyE
       properties: {
         messageId: { type: "string", description: "The Gmail message id of the message to reply to." },
         body: { type: "string", description: "Plain-text reply body." },
+        account: {
+          type: "string",
+          description:
+            "Which linked Google account the original message is on, by email. Usually not needed — resolved automatically from the message id; only pass this if the automatic lookup fails.",
+        },
       },
       required: ["messageId", "body"],
     },
@@ -53,10 +60,13 @@ export function createReplyEmailTool(gmailClient: GmailClient): LocalTool<ReplyE
       if (!body.trim()) {
         return { success: false, error: "body must be a non-empty string" };
       }
+      if (input.account !== undefined && typeof input.account !== "string") {
+        return { success: false, error: "account must be a string" };
+      }
 
       try {
-        const result = await gmailClient.replyToMessage(messageId, body);
-        return { success: true, data: { messageId: result.id, inReplyTo: messageId } };
+        const result = await gmailClient.replyToMessage(messageId, body, input.account);
+        return { success: true, data: { messageId: result.id, inReplyTo: messageId, account: result.account } };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }

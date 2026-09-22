@@ -12,9 +12,9 @@ function makeClient(tokenStore = new CalendarTokenStore(":memory:")) {
   return { client: new GmailClient("client-id", "client-secret", tokenStore), tokenStore };
 }
 
-function makeLinkedTokenStore(): CalendarTokenStore {
+function makeLinkedTokenStore(email = "me@example.com"): CalendarTokenStore {
   const tokenStore = new CalendarTokenStore(":memory:");
-  tokenStore.save({ refreshToken: "r1", accessToken: "valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
+  tokenStore.save(email, { refreshToken: "r1", accessToken: "valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
   return tokenStore;
 }
 
@@ -26,7 +26,7 @@ describe("GmailClient.searchMessages", () => {
 
   test("refreshes an expired access token before searching", async () => {
     const tokenStore = new CalendarTokenStore(":memory:");
-    tokenStore.save({ refreshToken: "refresh-1", accessToken: "expired", accessTokenExpiresAt: Date.now() - 1000 });
+    tokenStore.save("me@example.com", { refreshToken: "refresh-1", accessToken: "expired", accessTokenExpiresAt: Date.now() - 1000 });
 
     const calls: string[] = [];
     global.fetch = (async (url: string, init?: RequestInit) => {
@@ -42,10 +42,10 @@ describe("GmailClient.searchMessages", () => {
     await client.searchMessages("from:x");
 
     expect(calls[0]).toContain("oauth2.googleapis.com");
-    expect(tokenStore.get()?.accessToken).toBe("refreshed-token");
+    expect(tokenStore.get("me@example.com")?.accessToken).toBe("refreshed-token");
   });
 
-  test("fetches metadata for each matching message and maps it into EmailSummary", async () => {
+  test("fetches metadata for each matching message and maps it into EmailSummary, tagged with the account", async () => {
     global.fetch = (async (url: string) => {
       if (url.includes("/messages?")) {
         return new Response(JSON.stringify({ messages: [{ id: "m1" }, { id: "m2" }] }), { status: 200 });
@@ -76,8 +76,8 @@ describe("GmailClient.searchMessages", () => {
     const messages = await client.searchMessages("is:unread");
 
     expect(messages).toEqual([
-      { id: "m1", subject: "Checking in", from: "alice@example.com", date: "Mon, 1 Jan 2026 10:00:00 +0000", snippet: "Hey, just checking in..." },
-      { id: "m2", subject: "(no subject)", from: "", date: "", snippet: "No subject here" },
+      { id: "m1", subject: "Checking in", from: "alice@example.com", date: "Mon, 1 Jan 2026 10:00:00 +0000", snippet: "Hey, just checking in...", account: "me@example.com" },
+      { id: "m2", subject: "(no subject)", from: "", date: "", snippet: "No subject here", account: "me@example.com" },
     ]);
   });
 
@@ -104,6 +104,58 @@ describe("GmailClient.searchMessages", () => {
     const { client } = makeClient(makeLinkedTokenStore());
     await expect(client.searchMessages("is:unread")).rejects.toThrow(/400/);
   });
+
+  test("aggregates results across every linked account, merged newest-first and capped, each tagged with its own account", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string>)?.Authorization;
+      const isWork = auth === "Bearer work-token";
+      if (url.includes("/messages?")) {
+        return new Response(JSON.stringify({ messages: [{ id: isWork ? "w1" : "p1" }] }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          id: isWork ? "w1" : "p1",
+          snippet: "hi",
+          payload: {
+            headers: [
+              { name: "Subject", value: isWork ? "Work thing" : "Personal thing" },
+              { name: "From", value: "someone@example.com" },
+              { name: "Date", value: isWork ? "Mon, 1 Jan 2026 09:00:00 +0000" : "Mon, 1 Jan 2026 10:00:00 +0000" },
+            ],
+          },
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    const messages = await client.searchMessages("is:unread");
+
+    expect(messages.map((m) => m.id)).toEqual(["p1", "w1"]); // 10:00 (personal) newer than 09:00 (work)
+    expect(messages.find((m) => m.id === "p1")?.account).toBe("personal@example.com");
+    expect(messages.find((m) => m.id === "w1")?.account).toBe("work@example.com");
+  });
+
+  test("a single explicit account is scoped to just that account", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    const capturedAuths: string[] = [];
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedAuths.push((init?.headers as Record<string, string>)?.Authorization ?? "");
+      return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    await client.searchMessages("is:unread", 5, "work@example.com");
+
+    expect(capturedAuths).toEqual(["Bearer work-token"]);
+  });
 });
 
 describe("GmailClient.getMessageBody", () => {
@@ -112,7 +164,7 @@ describe("GmailClient.getMessageBody", () => {
     await expect(client.getMessageBody("m1")).rejects.toThrow(/no google account linked/i);
   });
 
-  test("decodes a text/plain body directly on the payload", async () => {
+  test("decodes a text/plain body directly on the payload, tagged with the account", async () => {
     const bodyText = "Hello, this is the email body.";
     global.fetch = (async () =>
       new Response(
@@ -138,6 +190,7 @@ describe("GmailClient.getMessageBody", () => {
       from: "alice@example.com",
       date: "Mon, 1 Jan 2026 10:00:00 +0000",
       body: bodyText,
+      account: "me@example.com",
     });
   });
 
@@ -223,6 +276,26 @@ describe("GmailClient.getMessageBody", () => {
 
     expect(message.body).toBe(shortBody);
   });
+
+  test("with more than one linked account and no explicit account, probes each and finds it wherever it actually is", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string>)?.Authorization;
+      if (auth === "Bearer work-token") return new Response("not found", { status: 404 });
+      return new Response(
+        JSON.stringify({ payload: { mimeType: "text/plain", body: { data: Buffer.from("hi", "utf8").toString("base64url") }, headers: [] } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    const message = await client.getMessageBody("p1");
+
+    expect(message.account).toBe("personal@example.com");
+  });
 });
 
 describe("GmailClient.getMessageCount", () => {
@@ -274,6 +347,21 @@ describe("GmailClient.getMessageCount", () => {
     expect(count).toBe(3);
     expect(fetchCalls).toBe(2);
   });
+
+  test("sums the count across every linked account", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string>)?.Authorization;
+      const n = auth === "Bearer work-token" ? 4 : 9;
+      return new Response(JSON.stringify({ resultSizeEstimate: n }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    expect(await client.getMessageCount("is:unread")).toBe(13);
+  });
 });
 
 describe("GmailClient.sendMessage rate handling", () => {
@@ -288,7 +376,7 @@ describe("GmailClient.sendMessage rate handling", () => {
     const { client } = makeClient(makeLinkedTokenStore());
     const result = await client.sendMessage("to@example.com", "Subject", "Body");
 
-    expect(result).toEqual({ id: "sent-1" });
+    expect(result).toEqual({ id: "sent-1", account: "me@example.com" });
     expect(fetchCalls).toBe(2);
   });
 
@@ -302,5 +390,48 @@ describe("GmailClient.sendMessage rate handling", () => {
     const { client } = makeClient(makeLinkedTokenStore());
     await expect(client.sendMessage("to@example.com", "Subject", "Body")).rejects.toThrow("connection reset");
     expect(fetchCalls).toBe(1);
+  });
+});
+
+describe("GmailClient.sendMessage account targeting", () => {
+  test("sends from the primary (first-linked) account when none is given", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    let capturedAuth: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedAuth = (init?.headers as Record<string, string>)?.Authorization;
+      return new Response(JSON.stringify({ id: "sent-1" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    const result = await client.sendMessage("to@example.com", "Subject", "Body");
+
+    expect(capturedAuth).toBe("Bearer work-token");
+    expect(result.account).toBe("work@example.com");
+  });
+
+  test("sends from the explicitly given account instead of the primary", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    let capturedAuth: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedAuth = (init?.headers as Record<string, string>)?.Authorization;
+      return new Response(JSON.stringify({ id: "sent-2" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    const result = await client.sendMessage("to@example.com", "Subject", "Body", "personal@example.com");
+
+    expect(capturedAuth).toBe("Bearer personal-token");
+    expect(result.account).toBe("personal@example.com");
+  });
+
+  test("throws a clear error when the explicit account isn't linked", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.sendMessage("to@example.com", "Subject", "Body", "nobody@example.com")).rejects.toThrow(/nobody@example\.com/);
   });
 });

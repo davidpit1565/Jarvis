@@ -13,7 +13,7 @@ afterEach(() => {
 
 function makeClient() {
   const tokenStore = new CalendarTokenStore(":memory:");
-  tokenStore.save({ refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
+  tokenStore.save("me@example.com", { refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
   return new GmailClient("client-id", "client-secret", tokenStore);
 }
 
@@ -46,7 +46,7 @@ describe("GET_EMAIL tool", () => {
     const result = await tool.execute({ messageId: "m1" }, context);
 
     expect(result.success).toBe(true);
-    expect(result.data).toEqual({ subject: "Hello", from: "bob@example.com", date: "", body: "full body text" });
+    expect(result.data).toEqual({ subject: "Hello", from: "bob@example.com", date: "", body: "full body text", account: "me@example.com" });
   });
 
   test("returns a failure result (not a throw) when no account is linked", async () => {

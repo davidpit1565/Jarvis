@@ -13,7 +13,7 @@ afterEach(() => {
 
 function makeClient() {
   const tokenStore = new CalendarTokenStore(":memory:");
-  tokenStore.save({ refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
+  tokenStore.save("me@example.com", { refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
   return new GmailClient("client-id", "client-secret", tokenStore);
 }
 
@@ -52,7 +52,7 @@ describe("SEND_EMAIL tool", () => {
     const result = await tool.execute({ to: "bob@example.com", subject: "Hi", body: "Hello there" }, context);
 
     expect(result.success).toBe(true);
-    expect(result.data).toEqual({ messageId: "sent-1", to: "bob@example.com", subject: "Hi" });
+    expect(result.data).toEqual({ messageId: "sent-1", to: "bob@example.com", subject: "Hi", account: "me@example.com" });
     const raw = Buffer.from((capturedBody as { raw: string }).raw, "base64url").toString("utf8");
     expect(raw).toContain("To: bob@example.com");
     expect(raw).toContain("Subject: Hi");

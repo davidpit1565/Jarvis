@@ -980,8 +980,10 @@ actual Google Calendar, lets reminders/wake-up calls reference real
 meetings instead of only what's been manually typed in, lets you actually
 ask it to add or remove events — "add a dentist appointment tomorrow at
 3pm" really puts it on your calendar — and lets it search your real Gmail
-inbox ("did I get an email from the bank today"), all from one linked
-Google account.
+inbox ("did I get an email from the bank today"). Links **up to several
+Google accounts at once** (work, personal, whatever you actually use) —
+see "Multiple linked accounts" below for how reads/writes behave once
+more than one is linked.
 
 **Setup** (Google Cloud Console, one-time, done manually — this can't be
 automated from here):
@@ -1002,10 +1004,49 @@ automated from here):
    Calendar is configured — see "Security controls" below).
 5. Visit `<JARVIS_PUBLIC_BASE_URL>/calendar/oauth/start?token=<JARVIS_ADMIN_TOKEN>`
    in a browser, approve Google's consent screen — the same one-time
-   consent screen covers both Calendar and Gmail read access, requested
+   consent screen covers both Calendar and Gmail access, requested
    together — and you're linked. `LIST_CALENDAR_EVENTS`, `SEARCH_EMAIL`,
    and the proactive calendar context below all start working immediately,
    no restart needed.
+
+**Multiple linked accounts:** JARVIS isn't limited to one Google account.
+To link a second (or third, ...) account, just visit
+`/calendar/oauth/start?token=...` again and pick a **different** account
+at Google's own consent screen (its own "use another account" option —
+nothing JARVIS-specific needed). Re-approving the **same** account instead
+just refreshes its tokens in place; it's never duplicated. Each linked
+account is keyed by its own email, fetched once via Google's userinfo
+endpoint right after linking, and stored in `CalendarTokenStore`
+(`src/calendar/CalendarTokenStore.ts`) as its own row — linking a new
+account never touches an existing one's tokens.
+
+- **Reads/searches** (`LIST_CALENDAR_EVENTS`, `SEARCH_CALENDAR_EVENTS`,
+  `GET_CALENDAR_EVENT`, `SEARCH_EMAIL`, `GET_EMAIL`,
+  `GET_UNREAD_EMAIL_COUNT`) query **every linked account by default** and
+  merge the results (events sorted soonest-first, emails newest-first,
+  unread counts summed) — you never have to say which account you mean.
+  Every returned event/email carries an `account` field naming which
+  linked account it came from, so JARVIS can say "in your work account"
+  when it's relevant, without being asked.
+- **Writes** (`CREATE_CALENDAR_EVENT`, `UPDATE_CALENDAR_EVENT`,
+  `DELETE_CALENDAR_EVENT`, `SEND_EMAIL`, `REPLY_EMAIL`) always go to
+  exactly one account: an optional `account` parameter (the account's
+  email) targets a specific one — "add it to my work calendar," "send
+  that from my personal email" — and omitting it uses whichever account
+  was linked **first** (the "primary" account). `UPDATE`/`DELETE_CALENDAR_EVENT`
+  and `REPLY_EMAIL` don't usually need `account` at all: since a prior
+  `list`/`search` result already carries which account an event/email
+  belongs to, updating or deleting it by id resolves the right account
+  automatically (probing each linked account in turn if that context
+  wasn't available).
+- **`UNLINK_CALENDAR`** takes an optional `account` too — required once
+  more than one account is linked (it lists the linked accounts rather
+  than guessing which to disconnect), optional and unambiguous with
+  exactly one.
+- A pre-existing single-account installation is migrated automatically,
+  losslessly, the first time it starts up on this version — see
+  `CalendarTokenStore`'s own migration and
+  `GoogleCalendarClient.backfillLegacyAccountEmails()`.
 
 **What's implemented:**
 
@@ -1042,8 +1083,9 @@ automated from here):
   exactly this reason — the permission-level check at the tool layer is
   what actually gates when writes happen, not the OAuth scope.
   **`UNLINK_CALENDAR`** (`DANGEROUS`, like `CLEAR_CONVERSATION_HISTORY`)
-  actually disconnects the linked account on request — before this, the
-  only way to undo a link was manually deleting the SQLite file.
+  actually disconnects a linked account on request — before this, the
+  only way to undo a link was manually deleting the SQLite file. Takes an
+  optional `account` (see "Multiple linked accounts" above).
   `CREATE_CALENDAR_EVENT` always creates the event even if it overlaps an
   existing one — this is never a blocking gate — but checks first and
   returns a non-empty `conflicts` field when it does, so Claude can
@@ -1111,10 +1153,11 @@ automated from here):
   `REPLY_EMAIL` only ever add a new sent message, never touch an existing
   one.
 - OAuth tokens (the refresh token and current access token) are persisted
-  to their own SQLite database (`src/calendar/CalendarTokenStore.ts`,
-  `JARVIS_CALENDAR_TOKEN_DB_PATH`) — access tokens are refreshed
-  automatically (a minute before actual expiry) whenever a request needs
-  one, with no manual re-linking required afterward.
+  to their own SQLite database, one row per linked account keyed by its
+  email (`src/calendar/CalendarTokenStore.ts`, `JARVIS_CALENDAR_TOKEN_DB_PATH`)
+  — access tokens are refreshed automatically (a minute before actual
+  expiry) whenever a request needs one, per account, with no manual
+  re-linking required afterward.
 - Upcoming events are woven into the same proactive context mechanism as
   due reminders (`src/calendar/todayCalendarNote.ts`, composed in
   `buildContextNote`) — including into wake-up calls, so "you have a 9am

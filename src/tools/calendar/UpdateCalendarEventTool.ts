@@ -9,6 +9,8 @@ export interface UpdateCalendarEventInput extends Record<string, unknown> {
   start?: string;
   end?: string;
   location?: string | null;
+  /** Which linked Google account the event is on, by email. Only needed if it can't be found automatically (e.g. more than one account is linked and the event wasn't just listed/searched). */
+  account?: string;
 }
 
 function isValidIsoDate(value: string): boolean {
@@ -47,6 +49,11 @@ export function createUpdateCalendarEventTool(
         start: { type: "string", description: "New ISO 8601 start timestamp. Omit to leave unchanged." },
         end: { type: "string", description: "New ISO 8601 end timestamp. Omit to leave unchanged." },
         location: { type: "string", description: "New location, or null to clear it. Omit to leave unchanged." },
+        account: {
+          type: "string",
+          description:
+            "Which linked Google account the event is on, by email. Usually not needed — resolved automatically from the event id; only pass this if the automatic lookup fails (multiple accounts linked and the event's account isn't already known).",
+        },
       },
       required: ["eventId"],
     },
@@ -69,9 +76,12 @@ export function createUpdateCalendarEventTool(
       if (input.location !== undefined && input.location !== null && typeof input.location !== "string") {
         return { success: false, error: "location must be a string or null" };
       }
+      if (input.account !== undefined && typeof input.account !== "string") {
+        return { success: false, error: "account must be a string" };
+      }
 
       try {
-        const eventBeforeUpdate = await calendarClient.getEvent(input.eventId).catch(() => null);
+        const eventBeforeUpdate = await calendarClient.getEvent(input.eventId, input.account).catch(() => null);
 
         const effectiveStart = input.start ?? eventBeforeUpdate?.start;
         const effectiveEnd = input.end ?? eventBeforeUpdate?.end;
@@ -83,12 +93,20 @@ export function createUpdateCalendarEventTool(
           return { success: false, error: "end must be after start" };
         }
 
-        const event = await calendarClient.updateEvent(input.eventId, {
-          summary: input.summary,
-          start: input.start,
-          end: input.end,
-          location: input.location,
-        });
+        // Prefer the account discovered by the pre-fetch above (when it
+        // succeeded) over re-resolving from scratch — avoids a redundant
+        // probe across every linked account when there's more than one.
+        const targetAccount = input.account ?? eventBeforeUpdate?.account;
+        const event = await calendarClient.updateEvent(
+          input.eventId,
+          {
+            summary: input.summary,
+            start: input.start,
+            end: input.end,
+            location: input.location,
+          },
+          targetAccount
+        );
 
         if (eventBeforeUpdate) {
           undoStore?.record({

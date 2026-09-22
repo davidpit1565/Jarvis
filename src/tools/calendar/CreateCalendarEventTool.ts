@@ -8,6 +8,8 @@ export interface CreateCalendarEventInput extends Record<string, unknown> {
   start: string;
   end: string;
   location?: string;
+  /** Which linked Google account to create the event on, by email. Omit to use whichever account was linked first. */
+  account?: string;
 }
 
 function isValidIsoDate(value: string): boolean {
@@ -55,6 +57,11 @@ export function createCreateCalendarEventTool(
         start: { type: "string", description: "ISO 8601 timestamp the event starts at." },
         end: { type: "string", description: "ISO 8601 timestamp the event ends at." },
         location: { type: "string", description: "Optional location." },
+        account: {
+          type: "string",
+          description:
+            "Which linked Google account to create the event on, by email. Omit to use whichever account was linked first — only needed when the user explicitly names a specific account (e.g. \"add it to my work calendar\").",
+        },
       },
       required: ["summary", "start", "end"],
     },
@@ -77,12 +84,18 @@ export function createCreateCalendarEventTool(
       if (input.location !== undefined && typeof input.location !== "string") {
         return { success: false, error: "location must be a string" };
       }
+      if (input.account !== undefined && typeof input.account !== "string") {
+        return { success: false, error: "account must be a string" };
+      }
 
       try {
         // Checked before creating so a conflict lookup failure never
         // blocks the actual create — this is a nice-to-have warning, not
-        // a gate on the action itself.
-        const conflicts = await calendarClient.listEventsInRange(input.start, input.end).catch(() => []);
+        // a gate on the action itself. Scoped to the target account when
+        // one was given explicitly; otherwise checked across every linked
+        // account, which is the more useful warning anyway (a duplicate
+        // in another linked account is still worth flagging).
+        const conflicts = await calendarClient.listEventsInRange(input.start, input.end, input.account).catch(() => []);
         // Same reasoning as conflicts above: a near-identical existing
         // event is a warning, never a gate — SAFE_ACTION tools shouldn't
         // second-guess the user by refusing to create what they asked
@@ -98,12 +111,15 @@ export function createCreateCalendarEventTool(
               Math.abs(Date.parse(existing.start) - inputStartMs) <= DUPLICATE_START_WINDOW_MS
           ) ?? null;
 
-        const event = await calendarClient.createEvent({
-          summary: input.summary,
-          start: input.start,
-          end: input.end,
-          location: input.location ?? null,
-        });
+        const event = await calendarClient.createEvent(
+          {
+            summary: input.summary,
+            start: input.start,
+            end: input.end,
+            location: input.location ?? null,
+          },
+          input.account
+        );
         undoStore?.record({ type: "calendar_event_created", eventId: event.id, summary: event.summary });
         return { success: true, data: { event, conflicts, duplicate } };
       } catch (error) {
