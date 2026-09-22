@@ -7,3 +7,7 @@ build/
 data/*.sqlite
 data/*.sqlite-journal
 .claude/
+.env.save
+data/*.sqlite-shm
+data/*.sqlite-wal
+agents/imac/JarvisAgent/.build/
