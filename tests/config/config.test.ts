@@ -966,4 +966,16 @@ describe("redactConfigForDisplay", () => {
     expect(redacted.timezone).toBe("Asia/Jerusalem");
     expect(redacted.port).toBe(5555);
   });
+
+  test("passes *Path fields through unchanged even though their name contains 'token'", () => {
+    const config = loadConfig();
+    const redacted = redactConfigForDisplay(config);
+
+    expect(typeof redacted.tokenUsageDbPath).toBe("string");
+    expect(redacted.tokenUsageDbPath).toBe(config.tokenUsageDbPath);
+    expect(typeof redacted.calendarTokenDbPath).toBe("string");
+    expect(redacted.calendarTokenDbPath).toBe(config.calendarTokenDbPath);
+    expect(typeof redacted.spotifyTokenDbPath).toBe("string");
+    expect(redacted.spotifyTokenDbPath).toBe(config.spotifyTokenDbPath);
+  });
 });

@@ -883,6 +883,16 @@ const KNOWN_SECRET_CONFIG_FIELDS: ReadonlySet<keyof JarvisConfig> = new Set([
 const SECRET_FIELD_NAME_PATTERN = /token|secret|apikey|api_key|password|credential/i;
 
 function isSecretConfigField(field: string): boolean {
+  // A field ending in "Path" is a filesystem path (e.g. tokenUsageDbPath,
+  // calendarTokenDbPath, spotifyTokenDbPath) — never a credential value
+  // itself, even though its name happens to contain "token"/"secret". The
+  // fallback pattern below is for secret *values* (API keys, auth tokens),
+  // so path fields must be excluded from it or a real path silently turns
+  // into a useless {"configured": true} in the config viewer, defeating
+  // the whole point of showing paths unredacted (see doc comment above).
+  if (field.endsWith("Path")) {
+    return false;
+  }
   return KNOWN_SECRET_CONFIG_FIELDS.has(field as keyof JarvisConfig) || SECRET_FIELD_NAME_PATTERN.test(field);
 }
 

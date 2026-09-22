@@ -134,13 +134,19 @@ export class BrainAgentPlanner implements AgentPlanner {
       observation = { success: false, error: error instanceof Error ? error.message : "Verification tool call failed" };
     }
 
+    // These messages carry a real tool_use/tool_result pair (the
+    // verification tool call just run above), so `tools` can't be empty —
+    // Anthropic's API rejects any request with tool_use/tool_result blocks
+    // but no tools defined. Expose exactly the one tool that was called,
+    // the same fix as Orchestrator.runFastPath's identical shape.
+    const calledTool = readOnlyTools.find((tool) => tool.name === call.toolName);
     const second = await this.brain.chat({
       messages: [
         { role: "user", content: resultSummary },
         { role: "assistant", content: "", toolCalls: [call] },
         { role: "tool", toolCallId: call.id, toolName: call.toolName, content: JSON.stringify(observation) },
       ],
-      tools: [],
+      tools: calledTool ? [calledTool] : readOnlyTools,
       context: VERIFY_SYSTEM_PROMPT,
       runId: request.taskId,
       taskType: "agent-verify",

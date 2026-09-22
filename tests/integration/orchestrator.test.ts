@@ -1051,6 +1051,45 @@ describe("Orchestrator READ-tool result caching", () => {
       expect(executed[0]!.runId).toBeDefined();
       expect(typeof executed[0]!.toolCallId).toBe("string");
     });
+
+    // Regression: Fast Path's finalize call used to pass `tools: []` while
+    // the messages it sends already contain the tool_use block and its
+    // tool_result. `ClaudeBrain` omits the `tools` parameter entirely for
+    // an empty array, and Anthropic's Messages API rejects such a request
+    // with a 400 ("Requests which include tool_use or tool_result blocks
+    // must define tools"), so every Fast Path turn would have failed
+    // against the real API while passing against a scripted Brain. This
+    // asserts the same invariant the API enforces.
+    test("Fast Path's finalize brain call still defines tools, since its messages carry tool_use/tool_result blocks", async () => {
+      const weatherTool = makeEchoTool("GET_WEATHER");
+      const seenRequests: BrainRequest[] = [];
+      const brain: Brain = {
+        async chat(request) {
+          seenRequests.push(request);
+          const carriesToolBlocks = request.messages.some(
+            (message) =>
+              message.role === "tool" || (message.role === "assistant" && (message.toolCalls?.length ?? 0) > 0)
+          );
+          if (carriesToolBlocks && request.tools.length === 0) {
+            // Mirrors Anthropic's own 400 for this exact request shape.
+            throw new Error("Requests which include tool_use or tool_result blocks must define tools");
+          }
+          return { text: "It's sunny.", toolCalls: [], stopReason: "end_turn" };
+        },
+      };
+      const { orchestrator, eventBus } = setup(brain, [weatherTool]);
+      const hits: Array<{ toolName: string }> = [];
+      eventBus.on("fastPath.hit", (payload) => hits.push({ toolName: payload.toolName }));
+
+      const reply = await orchestrator.handleUserMessage("user-1", "what's the weather?");
+
+      expect(reply).toBe("It's sunny.");
+      expect(hits).toHaveLength(1);
+      expect(seenRequests).toHaveLength(1);
+      // Exactly the one tool that already ran — never the whole registry,
+      // which would reintroduce the tool-selection round-trip Fast Path exists to skip.
+      expect(seenRequests[0]!.tools.map((t) => t.name)).toEqual(["get_weather"]);
+    });
   });
 
   describe("Parallel Tool Execution", () => {
