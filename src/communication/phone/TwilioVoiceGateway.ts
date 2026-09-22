@@ -43,42 +43,39 @@ const CALL_LIMIT_HE = "השיחה הזו נמשכת כבר זמן רב — נמ�
 const MAX_CALL_TURNS = 40;
 
 /**
- * Amazon Polly's *Standard* (non-Neural) engine for <Say> — deliberately
- * NOT the more natural-sounding Neural voice used previously. The user
- * explicitly asked for JARVIS's phone voice to sound like a distinct
- * machine/AI, quiet and deep, not a real person and not "cute" — never his
- * own voice, and never mistakable for a human. The Standard engine's more
- * synthetic cadence, combined with the pitch/rate SSML below, gets closer
- * to that than any Neural voice can: AWS Neural voices only support
- * `<prosody rate>` over SSML, not `<prosody pitch>`, so a Neural voice
- * can be slowed down but never actually deepened. Overridable via the
- * TWILIO_VOICE env var if a better voice becomes available on the account
- * this actually runs on.
+ * Amazon Polly's *Neural* engine for <Say> — reversed from an earlier
+ * decision (Polly's Standard engine) that deliberately went for a
+ * synthetic, distinct-machine/AI sound. That's no longer what's wanted:
+ * the voice should read as a real, natural human, not "AI-ish." Neural
+ * voices are Polly's most natural-sounding tier — this is the direct
+ * opposite tradeoff from the Standard choice's own reasoning. Overridable
+ * via the TWILIO_VOICE env var if a different voice sounds better on the
+ * account this actually runs on — REQUIRES REAL VALIDATION, never
+ * exercised against a live Twilio account (Twilio isn't configured yet).
  */
-const DEFAULT_VOICE = "Polly.Matthew";
+const DEFAULT_VOICE = "Polly.Matthew-Neural";
 
 /**
- * Google's *Standard* (non-WaveNet) Hebrew voice — Polly has no Hebrew
- * voice at all, so Hebrew speech always goes through Twilio's Google TTS
- * integration regardless of what English voice is configured. Standard,
- * not WaveNet, for the same "sound like a machine, not a person" reason
- * DEFAULT_VOICE is Polly's Standard engine. Overridable via
- * TWILIO_VOICE_HEBREW for the same reason TWILIO_VOICE is overridable.
+ * Google's *WaveNet* Hebrew voice — Polly has no Hebrew voice at all, so
+ * Hebrew speech always goes through Twilio's Google TTS integration
+ * regardless of what English voice is configured. WaveNet (not Standard)
+ * for the same "sound like a real person" reason DEFAULT_VOICE is now
+ * Polly's Neural engine. Overridable via TWILIO_VOICE_HEBREW.
  */
-const DEFAULT_HEBREW_VOICE = "Google.he-IL-Standard-D";
+const DEFAULT_HEBREW_VOICE = "Google.he-IL-Wavenet-C";
 
 /**
- * SSML <prosody> applied around every spoken line to make the voice sit
- * lower and land more deliberately — quiet and deep, not a chirpy
- * assistant. Pitch lowering only takes effect on Polly's Standard engine
- * and on Twilio's Google voices (both used above); it's silently ignored
- * by Neural voices, which is one more reason not to use one here.
- * Overridable via TWILIO_VOICE_PITCH / TWILIO_VOICE_RATE if a different
- * balance sounds better on a real call — never validated against a real
- * Twilio account.
+ * SSML <prosody> applied around every spoken line. Neutral now (no pitch
+ * lowering, natural pace) — the previous deliberately-lowered/slowed
+ * values existed specifically to sound more synthetic, which is exactly
+ * what's no longer wanted. AWS Neural voices only honor `<prosody rate>`
+ * over SSML, not `<prosody pitch>` (silently ignored), so pitch is left
+ * at its neutral default rather than removed outright — harmless on
+ * Neural, and still meaningful for the Hebrew Google WaveNet voice, which
+ * does honor it. Overridable via TWILIO_VOICE_PITCH / TWILIO_VOICE_RATE.
  */
-const DEFAULT_VOICE_PITCH = "-15%";
-const DEFAULT_VOICE_RATE = "92%";
+const DEFAULT_VOICE_PITCH = "0%";
+const DEFAULT_VOICE_RATE = "100%";
 
 /**
  * Twilio's <Gather> only recognizes one language per request UNLESS you opt
