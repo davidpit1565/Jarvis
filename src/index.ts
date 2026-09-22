@@ -7,6 +7,7 @@ import { ConversationManager } from "@/core/conversation/ConversationManager";
 import { ClaudeBrain, DEFAULT_MODEL } from "@/core/brain/ClaudeBrain";
 import { GroqBrain } from "@/core/brain/GroqBrain";
 import { OpenRouterBrain, OpenRouterPaidModelError } from "@/core/brain/OpenRouterBrain";
+import { OllamaBrain } from "@/core/brain/OllamaBrain";
 import { AIProviderRegistry } from "@/core/brain/AIProviderRegistry";
 import { AIRouter } from "@/core/brain/AIRouter";
 import { CostTracker } from "@/core/cost/CostTracker";
@@ -500,6 +501,20 @@ function main() {
         throw error;
       }
     }
+  }
+  // Ollama is a fourth, independent free-tier provider: a user-run local
+  // model server, not a hosted account. It only activates when
+  // OLLAMA_MODEL is explicitly set — OLLAMA_BASE_URL defaulting to
+  // Ollama's real default port is not itself a reason to assume the user
+  // has a model pulled and running. Always registered as "free": there is
+  // no paid-tier concept for a locally-run model at all, unlike
+  // OpenRouter's mixed marketplace, so no per-model gate is needed here.
+  if (config.ollamaModel) {
+    aiRegistry.register(
+      "ollama",
+      new OllamaBrain(config.ollamaApiKey, { model: config.ollamaModel, baseUrl: config.ollamaBaseUrl }),
+      "free"
+    );
   }
   if (config.anthropicApiKey) {
     aiRegistry.register(

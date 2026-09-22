@@ -77,6 +77,21 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
       "but genuinely free). See OpenRouterBrain's own doc comment for why JARVIS only ever calls \":free\" models " +
       "through this provider.",
   },
+  {
+    id: "ollama-local",
+    provider: "ollama",
+    label: "Ollama (local model, user-chosen)",
+    costTier: "free",
+    capabilities: { toolCalling: true, vision: false, quality: "good" },
+    notes:
+      "A generic placeholder entry, not one specific model id — the actual model (Qwen2.5/Qwen3, gpt-oss, Llama, etc.) " +
+      "is whatever the user has pulled locally via `ollama pull <model>` and set as OLLAMA_MODEL, so there's no single " +
+      "real model id to catalog here the way there is for Groq/OpenRouter's fixed defaults. toolCalling assumes a " +
+      "reasonably modern model (Qwen2.5/Qwen3, Llama 3.x-class, gpt-oss) with real function-calling support in " +
+      "Ollama's OpenAI-compatible layer; vision is left false since it isn't verified for an arbitrary user-chosen " +
+      "model — set it per-deployment if the user's specific model is known to support it. Always genuinely $0: there " +
+      "is no paid tier for a model running on hardware the user already owns.",
+  },
 ] as const;
 
 /** Looks up a catalog entry by its exact model id, or undefined if this id isn't in the catalog. */

@@ -1968,6 +1968,77 @@ status endpoint or task-aware router to read from one place instead of
 re-deriving this from scattered model-id string literals. It's descriptive
 metadata only; it doesn't drive routing today.
 
+## Ollama: a genuinely $0, unlimited, local AI provider
+
+[Ollama](https://ollama.com) is free, open-source software you install and
+run yourself — on your own Mac (or wherever JARVIS's backend is deployed),
+not a hosted account JARVIS signs up for. It serves an OpenAI-compatible
+`chat/completions` API for whatever model you've pulled locally
+(Qwen2.5/Qwen3, `gpt-oss`, Llama, and others with real tool-calling
+support), with **no rate limit, no request quota, and no per-token cost of
+any kind** — the only "cost" is the compute your own machine spends running
+it.
+
+Setup (on the machine you want to run inference on):
+
+```bash
+# Install Ollama — see https://ollama.com for platform-specific instructions.
+ollama pull qwen2.5        # or gpt-oss, llama3.3, or any tool-calling-capable model you prefer
+ollama serve                # starts the local server on :11434 (often already running as a background service)
+```
+
+Then point JARVIS at it:
+
+```
+OLLAMA_MODEL=qwen2.5                        # required — enables OllamaBrain; no default, since JARVIS can't guess what you pulled
+OLLAMA_BASE_URL=http://localhost:11434      # optional — this is already the default (Ollama's own default port)
+OLLAMA_API_KEY=some-token                   # optional — only needed if you've put Ollama behind a reverse proxy that requires auth
+```
+
+`src/index.ts` only registers `OllamaBrain` (`src/core/brain/OllamaBrain.ts`)
+when `OLLAMA_MODEL` is explicitly set — `OLLAMA_BASE_URL` defaulting to
+Ollama's real default port is never itself a reason to assume a model is
+actually pulled and running. Once registered, it's a fourth `free`-tier
+`AIProviderRegistry` provider next to Groq/OpenRouter/Anthropic, participates
+in `AIRouter`'s free-first routing/fallback/circuit-breaker exactly like the
+others, and `CostTracker`'s `estimateCostUsd` always returns exactly `$0` for
+it — there's no `:free`-suffix-style gate the way `OpenRouterBrain` needs,
+because there is no paid tier for a model running on hardware you already
+own. `ZERO_COST_MODE` treats it as just another free provider.
+
+Message/tool-call translation reuses the exact same OpenAI-compatible shape
+`GroqBrain`/`OpenRouterBrain` already implement (the same
+`toOpenAIMessages`/`toOpenAITools`/`fromOpenAIResponse` logic, duplicated
+per-file the way those two already are — this class changes nothing about
+that existing pattern). The only real differences: no API key is ever
+required (Ollama's default local setup has no auth at all — the optional
+`OLLAMA_API_KEY` above exists only for a proxied setup, never as a hard
+dependency), and a much longer default request timeout (30s via
+`fetchWithRetry`, vs. `fetchWithRetry`'s own 10s default) — local inference
+on modest hardware can genuinely take much longer than a hosted API call.
+
+**IMPORTANT — this only works out of the box when JARVIS's backend and
+Ollama run on the same machine or the same local network.** `localhost`
+always means "wherever this process is running," never "the user's
+computer" from the process's own point of view. If JARVIS's backend is
+deployed to a cloud host (e.g. Fly.io) and Ollama runs on your Mac at home,
+`OLLAMA_BASE_URL=http://localhost:11434` will simply fail to connect — it
+resolves to Fly.io's own container, which has no Ollama server on it.
+Bridging a cloud deployment to a home machine (for example, via
+[Tailscale](https://tailscale.com) or [ngrok](https://ngrok.com) so
+`OLLAMA_BASE_URL` points at a reachable tunnel/VPN address instead of
+`localhost`) is entirely your own setup responsibility — JARVIS does not
+implement or manage that bridging itself. The straightforward, "just works"
+case is running JARVIS's backend directly on the same Mac that runs
+`ollama serve`.
+
+Ollama being unreachable (not started, or not reachable over the network) is
+a much more likely real-world failure mode for this provider than for a
+hosted one — `OllamaBrain` surfaces a clear, actionable error naming the
+configured base URL rather than crashing, and `AIRouter`'s existing circuit
+breaker (see below) opens after repeated failures and routes around it
+without blocking any other configured provider.
+
 ## Prompt caching and tool-result caching
 
 `ClaudeBrain` sends the system prompt and tool definitions with Anthropic's

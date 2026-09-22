@@ -32,6 +32,38 @@ export interface JarvisConfig {
    */
   openrouterModel?: string;
   /**
+   * Base URL of a user-run Ollama server (https://ollama.com) — software
+   * the user installs and starts themselves (`ollama serve`), never a
+   * hosted account JARVIS signs up for. Defaults to
+   * "http://localhost:11434" (Ollama's own default port) when unset, but
+   * that default only matters once OLLAMA_MODEL is also set (see
+   * `ollamaModel` below) — this base URL alone never activates the
+   * feature. IMPORTANT: "localhost" only resolves to wherever JARVIS's own
+   * backend process is running — if that's a cloud host (e.g. Fly.io) and
+   * Ollama runs on the user's own Mac, this default does NOT reach it;
+   * set OLLAMA_BASE_URL to a network address JARVIS's backend can actually
+   * reach (e.g. a Tailscale/ngrok address for the Mac) instead. See
+   * README's Ollama section.
+   */
+  ollamaBaseUrl: string;
+  /**
+   * Model id the user has already pulled locally (`ollama pull <model>`)
+   * — e.g. "qwen2.5", "gpt-oss", "llama3.3". Required to actually register
+   * `OllamaBrain`: unlike `ollamaBaseUrl`, this deliberately has no
+   * default, since JARVIS has no way to guess which model (if any) the
+   * user has pulled — defaulting it would risk pointing at a model that
+   * was never downloaded. Unset means Ollama support is simply inactive,
+   * exactly like an unconfigured Groq/OpenRouter key.
+   */
+  ollamaModel?: string;
+  /**
+   * Optional bearer token for a proxied Ollama setup (e.g. behind a
+   * reverse proxy that adds its own auth) — Ollama's own default local
+   * setup has no authentication at all, so this is never required and
+   * `OllamaBrain` never sends an Authorization header when it's unset.
+   */
+  ollamaApiKey?: string;
+  /**
    * Enables Anthropic prompt caching (`cache_control: ephemeral`) on the
    * system prompt and tool definitions ClaudeBrain sends. A pure cost
    * optimization with no behavior change, so it defaults to on; set
@@ -456,6 +488,13 @@ export function loadConfig(): JarvisConfig {
   const groqModel = process.env.JARVIS_GROQ_MODEL?.trim() || undefined;
   const openrouterApiKey = process.env.OPENROUTER_API_KEY?.trim() || undefined;
   const openrouterModel = process.env.JARVIS_OPENROUTER_MODEL?.trim() || undefined;
+  // Ollama support only actually activates once OLLAMA_MODEL is set —
+  // OLLAMA_BASE_URL alone defaulting to the real Ollama default port
+  // would otherwise silently assume the user has a model pulled, which
+  // JARVIS has no way to verify. See ollamaModel's own doc comment.
+  const ollamaBaseUrl = process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434";
+  const ollamaModel = process.env.OLLAMA_MODEL?.trim() || undefined;
+  const ollamaApiKey = process.env.OLLAMA_API_KEY?.trim() || undefined;
 
   const promptCachingRaw = process.env.JARVIS_PROMPT_CACHING?.trim().toLowerCase();
   const promptCachingEnabled = promptCachingRaw === undefined || promptCachingRaw === "" ? true : promptCachingRaw === "true";
@@ -813,6 +852,9 @@ export function loadConfig(): JarvisConfig {
     groqModel,
     openrouterApiKey,
     openrouterModel,
+    ollamaBaseUrl,
+    ollamaModel,
+    ollamaApiKey,
     promptCachingEnabled,
     aiFreeFirst,
     aiFallbackProvider,
@@ -910,6 +952,7 @@ const KNOWN_SECRET_CONFIG_FIELDS: ReadonlySet<keyof JarvisConfig> = new Set([
   "anthropicApiKey",
   "groqApiKey",
   "openrouterApiKey",
+  "ollamaApiKey",
   "twilioAuthToken",
   "telegramBotToken",
   "telegramWebhookSecret",

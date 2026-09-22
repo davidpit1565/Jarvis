@@ -14,6 +14,13 @@ describe("estimateCostUsd", () => {
     ).toBe(0);
   });
 
+  test("is always exactly $0 for ollama, regardless of usage — a locally-run model has no paid tier at all", () => {
+    expect(estimateCostUsd("ollama")).toBe(0);
+    expect(
+      estimateCostUsd("ollama", { inputTokens: 100_000, outputTokens: 50_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 })
+    ).toBe(0);
+  });
+
   test("estimates anthropic cost from usage using the documented approximate per-token rates", () => {
     const cost = estimateCostUsd("anthropic", {
       inputTokens: 1_000_000,

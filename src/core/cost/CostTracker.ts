@@ -25,10 +25,10 @@ const ANTHROPIC_OUTPUT_COST_PER_MILLION_TOKENS_USD = 15;
  */
 const PAID_PROVIDER_FLAT_FALLBACK_COST_USD = 0.01;
 
-/** Groq's free tier, and OpenRouter (OpenRouterBrain refuses to construct against any model id that isn't ":free"): genuinely $0, not an estimate. */
+/** Groq's free tier, OpenRouter (OpenRouterBrain refuses to construct against any model id that isn't ":free"), and Ollama (a user-run local model — there is no paid tier at all): genuinely $0, not an estimate. */
 const FREE_PROVIDER_COST_USD = 0;
 
-const KNOWN_FREE_PROVIDERS = new Set(["groq", "openrouter"]);
+const KNOWN_FREE_PROVIDERS = new Set(["groq", "openrouter", "ollama"]);
 
 /**
  * Approximates a single brain call's cost in USD. Free providers (Groq)
