@@ -397,6 +397,18 @@ export class AIRouter implements Brain {
     providerUsedOut?: { value?: ProviderName },
     decisionRef?: DecisionRef
   ): Promise<BrainResponse> {
+    // Log the real reason a provider was skipped — without this, a
+    // fallback that ultimately also fails (e.g. every provider is out of
+    // quota/unreachable) leaves only the LAST provider's error visible in
+    // logs, hiding why the router left the primary in the first place.
+    // This was a genuine blind spot: debugging a real production failure
+    // (Groq silently failing on a tool-result round trip, 2026-09-22)
+    // required manually reproducing the request against Groq's API by
+    // hand, since nothing here ever printed the actual primaryError.
+    if (reason === "call-failed") {
+      console.error(`[jarvis] AIRouter: ${primary} call failed, falling back:`, errorIfUnusable);
+    }
+
     const fallback = this.resolveFallback(primary, request);
     if (!fallback) throw errorIfUnusable;
 
