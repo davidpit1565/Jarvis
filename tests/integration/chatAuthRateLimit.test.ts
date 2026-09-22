@@ -48,6 +48,48 @@ describe("ws(s)://.../chat auth", () => {
     expect(res.status).toBe(401);
   });
 
+  test("rejects an upgrade that carries no token at all", async () => {
+    // The case that actually matters on a LAN: Core listens on every
+    // interface, so anything on the same Wi-Fi can reach /chat. Without
+    // this, an omitted token read as "" would have to be compared against
+    // the real one rather than waved through.
+    const { handle, port } = setupServer("secret-token");
+    activeHandle = handle;
+
+    const res = await fetch(`http://localhost:${port}/chat`, {
+      headers: { Upgrade: "websocket", Connection: "Upgrade" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("does not exempt loopback callers from the token check", async () => {
+    // Every request in this suite already comes from 127.0.0.1, so a
+    // "trust local connections" shortcut would silently pass all of the
+    // above. Pinning it: being local is not a credential.
+    const { handle, port } = setupServer("secret-token");
+    activeHandle = handle;
+
+    const res = await fetch(`http://127.0.0.1:${port}/chat`, {
+      headers: { Upgrade: "websocket", Connection: "Upgrade" },
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("accepts an upgrade carrying the right token", async () => {
+    const { handle, port } = setupServer("secret-token");
+    activeHandle = handle;
+
+    const res = await fetch(`http://localhost:${port}/chat?token=secret-token`, {
+      headers: {
+        Upgrade: "websocket",
+        Connection: "Upgrade",
+        "Sec-WebSocket-Version": "13",
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+      },
+    });
+    expect(res.status).toBe(101);
+  });
+
   test("throttles repeated wrong-token upgrade attempts from the same caller", async () => {
     const { handle, port } = setupServer("secret-token");
     activeHandle = handle;

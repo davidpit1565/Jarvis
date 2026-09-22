@@ -2213,6 +2213,32 @@
   function readAdminToken() {
     try { return localStorage.getItem(ADMIN_TOKEN_KEY) || ""; } catch (e) { return ""; }
   }
+  function writeAdminToken(value) {
+    try {
+      if (value) localStorage.setItem(ADMIN_TOKEN_KEY, value);
+      else localStorage.removeItem(ADMIN_TOKEN_KEY);
+    } catch (e) { /* private mode — the token just won't persist */ }
+  }
+
+  // GET /status is the only thing this page calls on load that is both
+  // token-gated and plain HTTP, so it's the only one that can actually
+  // *see* a 401 — a rejected WebSocket upgrade reaches the page as a bare
+  // close event with no status. That makes it the right place to notice
+  // "this Core wants a token" and ask for one, instead of leaving a phone
+  // on the LAN staring at a dead dashboard and an empty activity feed
+  // until someone thinks to open the menu. The observer socket retries
+  // every 5s and the chat reads the same key, so both pick the token up
+  // on their own once it's saved — nothing here has to reconnect them.
+  let adminTokenPrompted = false;
+  function promptForAdminTokenOnce() {
+    if (adminTokenPrompted) return;
+    adminTokenPrompted = true; // one prompt per page load, not one per poll
+    const entered = prompt(
+      "JARVIS Core at " + coreOrigin("http") + " requires an admin token.\n\n" +
+      "Paste it to connect (blank to cancel — use the menu's \u201cSet / clear admin token\u201d later):"
+    );
+    if (entered && entered.trim()) writeAdminToken(entered.trim());
+  }
 
   function setPanelStatus(isLive) {
     for (const id of ["status-indicator-left", "status-indicator-right"]) {
@@ -2236,6 +2262,10 @@
       if (token) statusUrl.searchParams.set("token", token);
       const res = await fetch(statusUrl, { signal: controller.signal });
       clearTimeout(timeout);
+      // 401 means Core is up and reachable and simply doesn't accept what
+      // we sent — a different situation from the network failures the
+      // catch below handles, and the only one the user can fix.
+      if (res.status === 401) promptForAdminTokenOnce();
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
 
