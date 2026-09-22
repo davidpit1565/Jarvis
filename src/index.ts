@@ -250,13 +250,6 @@ function main() {
   const activityLog = new ActivityLog(config.activityLogDbPath);
   const toolAuditLog = new ToolAuditLog(config.toolAuditLogDbPath);
   const tokenUsageStore = new TokenUsageStore(config.tokenUsageDbPath);
-  const costAlertMonitor = config.costAlertThresholdUsd
-    ? new CostAlertMonitor(config.costAlertThresholdUsd, (stagePercent, costUsd, thresholdUsd) => {
-        const message = `Estimated cost has reached ${Math.round(stagePercent * 100)}% of your $${thresholdUsd} threshold ($${costUsd.toFixed(2)} so far, all-time).`;
-        console.warn(`[jarvis] COST ALERT: ${message}`);
-        activityLog.record(message);
-      })
-    : undefined;
   const webAuthnStore = new WebAuthnStore(config.webauthnDbPath);
   const webAuthnService = new WebAuthnService(webAuthnStore);
   const sessionStore = new SessionStore();
@@ -893,6 +886,26 @@ function main() {
     toolRegistry.registerTool(createShareFileToPhoneTool(telegramGateway, config.telegramOwnerChatId));
     permissionService.grant(DEFAULT_USER_ID, "SHARE_FILE_TO_PHONE");
   }
+
+  // Staged cost alerts (75%/90%/100% of JARVIS_COST_ALERT_THRESHOLD_USD)
+  // used to only log to console/ActivityLog — invisible unless someone
+  // was actively watching `flyctl logs` or the dashboard. Pushed to the
+  // owner's phone via Telegram now, the same channel every other
+  // proactive notification (alarms, check-ins, morning briefing) already
+  // uses, so a real spend spike is actually noticed in time to act on it
+  // instead of being discovered after the fact.
+  const costAlertMonitor = config.costAlertThresholdUsd
+    ? new CostAlertMonitor(config.costAlertThresholdUsd, (stagePercent, costUsd, thresholdUsd) => {
+        const message = `💰 Estimated cost has reached ${Math.round(stagePercent * 100)}% of your $${thresholdUsd} threshold ($${costUsd.toFixed(2)} so far, all-time).`;
+        console.warn(`[jarvis] COST ALERT: ${message}`);
+        activityLog.record(message);
+        if (telegramGateway && config.telegramOwnerChatId) {
+          telegramGateway.sendMessage(config.telegramOwnerChatId, message).catch((error) => {
+            console.error("[jarvis] Failed to push cost alert to Telegram:", error);
+          });
+        }
+      })
+    : undefined;
 
   // Always registered, unlike the Telegram-only tools above — the
   // generated image's URL is useful on any channel (the tool result
