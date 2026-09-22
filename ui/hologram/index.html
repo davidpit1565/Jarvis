@@ -2865,6 +2865,10 @@
     const TOKEN_KEY = "jarvis_admin_token";
     let socket = null;
     let opened = false;
+    // Whether the attempt that is in flight carried a token — the close
+    // handler needs it to tell "rejected" from "none was offered", and by
+    // then readToken() may already have been cleared.
+    let sentToken = false;
     // Set by the SpeechRecognitionCtor block below (only when voice mode
     // is actually supported) so the socket's "message" handler can speak
     // a real assistant reply back — kept as one shared hook rather than
@@ -2914,13 +2918,84 @@
       log.scrollTop = log.scrollHeight;
     }
 
-    function setStatus(text, cls) {
+    function setStatus(text, cls, detail) {
       statusEl.textContent = text;
       statusEl.className = cls;
+      // Which Core this panel is actually talking to is the single most
+      // useful thing to know when it won't connect, and it is otherwise
+      // invisible: the page infers it from its own origin, so a hologram
+      // opened from a deployed URL quietly talks to the deployed Core and
+      // not the one running on this machine. Always in the tooltip;
+      // spelled out in the log when something fails.
+      statusEl.title = (detail ? detail + "\n" : "") + "Core: " + coreOrigin("http") + "\nClick to reconnect.";
     }
 
     function readToken() {
       try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; }
+    }
+
+    function writeToken(value) {
+      try {
+        if (value) localStorage.setItem(TOKEN_KEY, value);
+        else localStorage.removeItem(TOKEN_KEY);
+      } catch (e) { /* private mode — the token just won't persist */ }
+    }
+
+    /**
+     * Works out why the socket closed before it ever opened.
+     *
+     * A WebSocket close event deliberately exposes nothing about the HTTP
+     * response that refused the upgrade — 401, 404, 429 and a dead server
+     * all arrive here identically. So ask the same origin a question it
+     * *can* answer: /health needs no token and no upgrade.
+     *
+     *   /health unreachable   -> the Core isn't there (down, wrong origin,
+     *                            or blocked as mixed content from https)
+     *   /health fine, token   -> the token was rejected
+     *   /health fine, no token-> a token is required and none was set
+     */
+    async function diagnoseFailedConnect(usedToken) {
+      let coreReachable = false;
+      try {
+        const res = await fetch(coreOrigin("http") + "/health", { cache: "no-store" });
+        coreReachable = res.ok;
+      } catch (e) { coreReachable = false; }
+
+      if (!coreReachable) {
+        setStatus("CORE UNREACHABLE", "error");
+        appendMessage(
+          "SYSTEM",
+          "Can't reach JARVIS Core at " + coreOrigin("http") + ". Is it running? " +
+          "Click the status label to retry.",
+          "error"
+        );
+        return;
+      }
+
+      // Only now is discarding the saved token the right move: the Core
+      // answered, so the close really was the upgrade being refused, not
+      // the server being away. Clearing it on any failed connect — which
+      // is what this used to do — threw away a perfectly good token every
+      // time Core restarted.
+      if (usedToken) {
+        writeToken("");
+        setStatus("TOKEN REJECTED", "error");
+        appendMessage(
+          "SYSTEM",
+          "JARVIS Core at " + coreOrigin("http") + " rejected that admin token. " +
+          "Click the status label to enter a different one.",
+          "error"
+        );
+        return;
+      }
+
+      setStatus("TOKEN REQUIRED", "error");
+      appendMessage(
+        "SYSTEM",
+        "JARVIS Core at " + coreOrigin("http") + " requires its JARVIS_ADMIN_TOKEN. " +
+        "Click the status label to enter it.",
+        "error"
+      );
     }
 
     function connect() {
@@ -2928,6 +3003,7 @@
       const url = coreOrigin("ws") + "/chat" + (token ? "?token=" + encodeURIComponent(token) : "");
       setStatus("CONNECTING…", "demo");
       opened = false;
+      sentToken = !!token;
       socket = new WebSocket(url);
       socket.addEventListener("open", () => {
         opened = true;
@@ -2954,33 +3030,46 @@
         } catch (e) { /* ignore a malformed frame rather than crash the socket */ }
       });
       socket.addEventListener("close", () => {
-        // A close before ever reaching "open", when a token is configured
-        // server-side, almost always means a missing/wrong token (the
-        // server 401s the upgrade before it can become a WebSocket at
-        // all) — clear it so the NEXT open re-prompts instead of
-        // silently retrying with the same bad value forever.
         if (!opened) {
-          try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
-          setStatus("NOT AVAILABLE / WRONG TOKEN", "error");
+          diagnoseFailedConnect(sentToken);
           return;
         }
-        setStatus("DISCONNECTED", "error");
+        setStatus("DISCONNECTED", "error", "Click to reconnect.");
       });
-      socket.addEventListener("error", () => setStatus("CONNECTION ERROR", "error"));
+      // Fires alongside close for a refused upgrade, and close is where
+      // the diagnosis happens — so this only has to avoid overwriting it
+      // with something less specific.
+      socket.addEventListener("error", () => {
+        if (opened) setStatus("CONNECTION ERROR", "error");
+      });
+    }
+
+    function promptForToken() {
+      const entered = prompt(
+        "Admin token for JARVIS Core at " + coreOrigin("http") + "\n\n" +
+        "This is the server's JARVIS_ADMIN_TOKEN. Leave blank if that Core " +
+        "doesn't have one set."
+      );
+      if (entered === null) return false;
+      writeToken(entered.trim());
+      return true;
     }
 
     function ensureTokenThenConnect() {
-      if (!readToken()) {
-        const entered = prompt(
-          "If this JARVIS server requires a JARVIS_ADMIN_TOKEN, enter it here " +
-          "(leave blank if you don't know of one being set):"
-        );
-        if (entered && entered.trim()) {
-          try { localStorage.setItem(TOKEN_KEY, entered.trim()); } catch (e) {}
-        }
-      }
+      if (!readToken()) promptForToken();
       connect();
     }
+
+    // The status label is the retry. Before this there was none: a failed
+    // connect left the panel dead until it was closed and reopened, and
+    // even that only re-prompted for a token by accident — because the
+    // failure path had deleted the old one.
+    statusEl.style.cursor = "pointer";
+    statusEl.addEventListener("click", () => {
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+      promptForToken();
+      connect();
+    });
 
     toggleBtn.addEventListener("click", () => {
       panel.classList.remove("hidden");
@@ -3000,7 +3089,12 @@
 
     function sendText(text, image) {
       if (!socket || socket.readyState !== WebSocket.OPEN) {
-        appendMessage("SYSTEM", "Not connected yet — wait a moment and try again.", "error");
+        // Reconnect instead of only complaining: the common case for
+        // typing into a closed socket is that Core restarted, and asking
+        // the user to "try again" without anything retrying in the
+        // background means it never will.
+        if (!socket || socket.readyState === WebSocket.CLOSED) connect();
+        appendMessage("SYSTEM", "Not connected — reconnecting to " + coreOrigin("http") + ". Send it again in a moment.", "error");
         return;
       }
       // A data: URL here, not image.previewUrl's blob: URL — clearPendingImage()
