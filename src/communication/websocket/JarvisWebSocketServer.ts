@@ -964,8 +964,19 @@ export class JarvisWebSocketServer {
       return;
     }
 
+    // Streaming TTS: each incremental chunk of the final reply is pushed
+    // as its own `assistant_delta` frame as soon as it's generated, ahead
+    // of the existing (unchanged) final `assistant` frame — a client that
+    // doesn't understand `assistant_delta` simply never sees it (this
+    // `ws.send` call is new, the final frame below is identical to
+    // before), so this is additive, not a protocol break. Real value: a
+    // long reply can start being displayed/spoken well before the whole
+    // thing has been generated, instead of only ever finding out once
+    // it's all done.
     webChatOrchestrator
-      .handleUserMessage(defaultUserId ?? "local-user", text, images)
+      .handleUserMessage(defaultUserId ?? "local-user", text, images, (delta) => {
+        ws.send(JSON.stringify({ type: "assistant_delta", text: delta }));
+      })
       .then((response) => {
         ws.send(JSON.stringify({ type: "assistant", text: response }));
       })

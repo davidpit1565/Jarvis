@@ -61,4 +61,21 @@ export interface TokenUsage {
  */
 export interface Brain {
   chat(request: BrainRequest): Promise<BrainResponse>;
+  /**
+   * Same contract as `chat` — same request, same eventual `BrainResponse` —
+   * but calls `onTextDelta` with each incremental chunk of plain-text reply
+   * content as it arrives, before the full response resolves. Lets a
+   * caller start speaking/displaying a reply sentence by sentence instead
+   * of waiting for the whole thing (real streaming TTS, not just a fast
+   * chat reply). Never fires for a tool-call-only response — there's no
+   * plain text to stream in that case, same as `BrainResponse.text` being
+   * empty there today.
+   *
+   * Optional: a provider with no real incremental API (or a plain test
+   * double) can omit this entirely. Callers that want streaming when
+   * available, and a graceful one-shot fallback otherwise, should call
+   * through `chatStreamOrFallback` (see AIRouter) rather than checking
+   * for this method themselves at every call site.
+   */
+  chatStream?(request: BrainRequest, onTextDelta: (text: string) => void): Promise<BrainResponse>;
 }

@@ -341,3 +341,79 @@ describe("ClaudeBrain.chat prompt caching", () => {
     expect(sent.system).toBeUndefined();
   });
 });
+
+describe("ClaudeBrain.chatStream", () => {
+  /** Minimal fake of the SDK's MessageStream — just enough surface for chatStream: .on("text", ...) and .finalMessage(). */
+  function makeFakeStream(textDeltas: string[], finalResponse: Anthropic.Message) {
+    const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+    return {
+      on(event: string, listener: (...args: unknown[]) => void) {
+        (listeners[event] ??= []).push(listener);
+        return this;
+      },
+      async finalMessage() {
+        for (const delta of textDeltas) {
+          for (const listener of listeners.text ?? []) listener(delta);
+        }
+        return finalResponse;
+      },
+    };
+  }
+
+  function stubStreamingClient(brain: ClaudeBrain, textDeltas: string[], finalResponse: Anthropic.Message) {
+    const calls: unknown[] = [];
+    const fakeClient = {
+      messages: {
+        stream: (params: unknown) => {
+          calls.push(params);
+          return makeFakeStream(textDeltas, finalResponse);
+        },
+      },
+      baseURL: "https://api.anthropic.com",
+    };
+    (brain as unknown as { client: unknown }).client = fakeClient;
+    return { calls };
+  }
+
+  test("calls onTextDelta for each incremental chunk, in order", async () => {
+    const brain = new ClaudeBrain("sk-ant-test-key");
+    stubStreamingClient(brain, ["Hel", "lo, ", "world."], makeResponse([{ type: "text", text: "Hello, world." }]));
+
+    const received: string[] = [];
+    const result = await brain.chatStream({ messages: [{ role: "user", content: "hi" }], tools: [] }, (delta) =>
+      received.push(delta)
+    );
+
+    expect(received).toEqual(["Hel", "lo, ", "world."]);
+    expect(result.text).toBe("Hello, world.");
+  });
+
+  test("resolves with the same shape as chat() — toolCalls, usage, model all populated from the final message", async () => {
+    const brain = new ClaudeBrain("sk-ant-test-key");
+    stubStreamingClient(
+      brain,
+      [],
+      makeResponse(
+        [{ type: "tool_use", id: "call-1", name: "get_weather", input: { city: "Tel Aviv" } }],
+        { input_tokens: 20, output_tokens: 8 },
+        "claude-sonnet-4-5-20250929"
+      )
+    );
+
+    const result = await brain.chatStream({ messages: [{ role: "user", content: "weather?" }], tools: [] }, () => {});
+
+    expect(result.toolCalls).toEqual([{ id: "call-1", toolName: "get_weather", input: { city: "Tel Aviv" } }]);
+    expect(result.usage).toEqual({ inputTokens: 20, outputTokens: 8, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 });
+    expect(result.model).toBe("claude-sonnet-4-5-20250929");
+  });
+
+  test("sends the same request shape (system/tools/prompt caching) as the non-streaming chat()", async () => {
+    const brain = new ClaudeBrain("sk-ant-test-key");
+    const { calls } = stubStreamingClient(brain, [], makeResponse([{ type: "text", text: "ok" }]));
+
+    await brain.chatStream({ messages: [{ role: "user", content: "hi" }], tools: [], context: "You are JARVIS." }, () => {});
+
+    const sent = calls[0] as { system: unknown };
+    expect(sent.system).toEqual([{ type: "text", text: "You are JARVIS.", cache_control: { type: "ephemeral" } }]);
+  });
+});

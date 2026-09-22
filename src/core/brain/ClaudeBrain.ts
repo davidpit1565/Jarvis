@@ -153,6 +153,42 @@ export class ClaudeBrain implements Brain {
     }
   }
 
+  /**
+   * Streaming variant of `chat` — see `Brain.chatStream`'s own doc comment
+   * for the contract. Uses the SDK's own `MessageStream` (`.on("text", ...)`
+   * fires per plain-text delta, ignoring tool-input JSON deltas — nothing
+   * meant for a tool call is ever handed to `onTextDelta`) and resolves
+   * with the same shape `fromAnthropicResponse` already produces for the
+   * non-streaming path, built from `.finalMessage()` once the stream ends.
+   *
+   * Deliberately no fallback-model retry here (unlike `chat`): once a
+   * stream has already emitted partial text to the caller (which may
+   * already be mid-sentence, on its way to speaking it), silently
+   * restarting against a different model would mean either replaying
+   * already-spoken/displayed text or producing a response that
+   * contradicts what the user already saw/heard. A stream error is
+   * surfaced as-is; the caller's own fallback (AIRouter's provider
+   * fallback) handles it exactly like any other failed brain call.
+   */
+  async chatStream(request: BrainRequest, onTextDelta: (text: string) => void): Promise<BrainResponse> {
+    const messages = toAnthropicMessages(request.messages);
+    const tools = this.buildTools(request.tools);
+    const system = this.buildSystem(request.context);
+    if (this.promptCachingEnabled) markLastToolCacheable(tools);
+
+    const stream = this.client.messages.stream({
+      model: this.model,
+      max_tokens: this.maxTokens,
+      system,
+      messages,
+      tools: tools.length > 0 ? tools : undefined,
+    });
+    stream.on("text", (delta) => onTextDelta(delta));
+
+    const finalMessage = await stream.finalMessage();
+    return fromAnthropicResponse(finalMessage);
+  }
+
   private buildTools(tools: ToolDefinition[]): Anthropic.ToolUnion[] {
     return buildAnthropicTools(
       tools,

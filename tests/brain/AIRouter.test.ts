@@ -56,6 +56,68 @@ function scriptedBrain(script: Array<"ok" | "fail">): Brain {
   };
 }
 
+function streamingBrain(text: string, deltas: string[]): Brain {
+  return {
+    async chat(): Promise<BrainResponse> {
+      return { text, toolCalls: [], stopReason: "stop" };
+    },
+    async chatStream(_request, onTextDelta): Promise<BrainResponse> {
+      for (const delta of deltas) onTextDelta(delta);
+      return { text, toolCalls: [], stopReason: "stop" };
+    },
+  };
+}
+
+describe("AIRouter.chatStream", () => {
+  test("forwards deltas from a provider that supports chatStream", async () => {
+    const registry = new AIProviderRegistry();
+    registry.register("anthropic", streamingBrain("Hello, world.", ["Hel", "lo, ", "world."]), "paid");
+    const costTracker = new CostTracker(":memory:");
+    const router = new AIRouter(registry, costTracker, {});
+
+    const received: string[] = [];
+    const response = await router.chatStream(REQUEST, (d) => received.push(d));
+
+    expect(received).toEqual(["Hel", "lo, ", "world."]);
+    expect(response.text).toBe("Hello, world.");
+  });
+
+  test("falls back to a single whole-text delta for a provider with no chatStream", async () => {
+    const registry = new AIProviderRegistry();
+    registry.register("groq", okBrain("plain reply"), "free");
+    const costTracker = new CostTracker(":memory:");
+    const router = new AIRouter(registry, costTracker, {});
+
+    const received: string[] = [];
+    const response = await router.chatStream(REQUEST, (d) => received.push(d));
+
+    expect(received).toEqual(["plain reply"]);
+    expect(response.text).toBe("plain reply");
+  });
+
+  test("a failing stream propagates the error, same as chat()", async () => {
+    const registry = new AIProviderRegistry();
+    registry.register("anthropic", failingBrain("stream broke"), "paid");
+    const costTracker = new CostTracker(":memory:");
+    const router = new AIRouter(registry, costTracker, {});
+
+    await expect(router.chatStream(REQUEST, () => {})).rejects.toThrow("stream broke");
+  });
+
+  test("records cost for a streamed response same as a non-streamed one", async () => {
+    const registry = new AIProviderRegistry();
+    registry.register("anthropic", streamingBrain("hi", ["hi"]), "paid");
+    const costTracker = new CostTracker(":memory:");
+    const router = new AIRouter(registry, costTracker, {});
+
+    await router.chatStream(REQUEST, () => {});
+    // Confirms recordCost actually ran (a paid provider still gets a
+    // nonzero estimate even with no usage data on the mock response) —
+    // it never silently skips cost tracking for the streaming path.
+    expect(costTracker.getTodaySpend()).toBeGreaterThan(0);
+  });
+});
+
 describe("AIRouter", () => {
   test("throws immediately if no provider is registered", () => {
     const registry = new AIProviderRegistry();
