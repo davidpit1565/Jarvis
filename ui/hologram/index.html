@@ -324,6 +324,33 @@
     cursor: pointer; padding: 2px 6px; font-family: inherit;
   }
   #chat-close:focus-visible { outline: 2px solid #6fd8e8; outline-offset: 2px; }
+  #media-panel {
+    position: fixed; right: 3%; bottom: calc(3% + env(safe-area-inset-bottom));
+    z-index: 25; width: min(280px, 40vw);
+    background: rgba(6,14,16,0.92); border: 1px solid rgba(111,216,232,0.3);
+    border-radius: 6px; box-shadow: 0 0 30px rgba(0,0,0,0.6);
+    padding: 8px; box-sizing: border-box;
+  }
+  #media-panel.hidden { display: none; }
+  #media-panel-header {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    color: #a8f2ff; font-size: 9px; letter-spacing: 2px;
+  }
+  #media-panel-header span:first-child { flex: 1; }
+  #media-panel-close {
+    background: none; border: none; color: #a8f2ff; font-size: 12px;
+    cursor: pointer; padding: 0 4px; font-family: inherit;
+  }
+  #media-panel-close:focus-visible { outline: 2px solid #6fd8e8; outline-offset: 2px; }
+  #media-panel-img { display: block; width: 100%; border-radius: 3px; }
+  #media-panel-download {
+    display: block; margin-top: 6px; text-align: center; padding: 6px;
+    color: #a8f2ff; font-size: 10px; letter-spacing: 1px; text-decoration: none;
+    border: 1px solid rgba(111,216,232,0.3); border-radius: 3px;
+  }
+  #media-panel-download:hover, #media-panel-download:focus-visible {
+    background: rgba(111,216,232,0.12); outline: none;
+  }
   #chat-log {
     flex: 1; overflow-y: auto; padding: 12px; font-size: 12px; line-height: 1.6;
     min-height: 30vh;
@@ -678,6 +705,22 @@
         <button type="submit">SEND</button>
       </form>
     </div>
+  </div>
+
+  <!-- Media panel: a generated image (GENERATE_IMAGE) shows up here, not
+       dumped inline in the chat log as an image plus raw text — a small,
+       dismissible corner panel with a real "save to this device" download
+       link, per direct request. Independent of the chat panel: opening
+       chat doesn't show it, closing chat doesn't hide it — it only shows
+       once something's actually been generated, and stays until closed or
+       replaced by the next generated image. -->
+  <div id="media-panel" class="hidden" role="dialog" aria-label="Generated media">
+    <div id="media-panel-header">
+      <span>GENERATED IMAGE</span>
+      <button id="media-panel-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <img id="media-panel-img" alt="Generated image" />
+    <a id="media-panel-download" download target="_blank" rel="noopener">⬇ Download</a>
   </div>
 
   <!-- New, purely additive panels/controls (JARVIS_ROADMAP_AUDIT.md items
@@ -2915,12 +2958,28 @@
     let setChatPanelOpen = () => {};
 
     // Recognizes a generate_image tool result URL (see GenerateImageTool.ts)
-    // inside JARVIS's own reply text so a generated image actually shows
-    // up as an image in the chat log, not a bare link — deliberately
-    // scoped to this one known, trusted domain rather than treating any
-    // URL in a reply as renderable (which would let arbitrary text control
-    // what image tag gets embedded in the page).
+    // inside JARVIS's own reply text — deliberately scoped to this one
+    // known, trusted domain rather than treating any URL in a reply as
+    // renderable (which would let arbitrary text control what image tag
+    // gets embedded in the page).
     const POLLINATIONS_URL_PATTERN = /https:\/\/image\.pollinations\.ai\/prompt\/[^\s)]+/;
+
+    const mediaPanel = document.getElementById("media-panel");
+    const mediaPanelImg = document.getElementById("media-panel-img");
+    const mediaPanelDownload = document.getElementById("media-panel-download");
+    const mediaPanelClose = document.getElementById("media-panel-close");
+
+    // A generated image shows up here, in its own corner panel with a
+    // real download link — not dumped inline into the chat log as an
+    // image plus a wall of raw URL text, per direct request ("not in the
+    // chat, that's not professional at all"). Independent of the chat
+    // panel's own open/closed state.
+    function showMediaPanel(url) {
+      mediaPanelImg.src = url;
+      mediaPanelDownload.href = url;
+      mediaPanel.classList.remove("hidden");
+    }
+    mediaPanelClose.addEventListener("click", () => mediaPanel.classList.add("hidden"));
 
     function appendMessage(who, text, cls, imagePreviewUrl) {
       const div = document.createElement("div");
@@ -2941,24 +3000,20 @@
       const generatedMatch = !imagePreviewUrl && cls === "jarvis" ? text.match(POLLINATIONS_URL_PATTERN) : null;
       let displayText = text;
       if (generatedMatch) {
-        const img = document.createElement("img");
-        img.src = generatedMatch[0];
-        img.className = "chat-attached-image";
-        img.alt = "Generated image";
-        div.appendChild(img);
+        showMediaPanel(generatedMatch[0]);
 
-        // Once the URL is rendered as an actual <img> above, strip it back
-        // out of the plain text — otherwise both the raw markdown image
-        // tag ("![Generated image](https://...)") AND the bare URL the
-        // model tends to repeat right after it ("Here it is: https://...")
-        // show up a second time as ugly unrendered text under the image
-        // that's already showing it.
+        // The image itself now only ever shows in the media panel above —
+        // strip the raw markdown image tag ("![Generated image](https://
+        // ...)") and any bare repeat of the same URL (the model tends to
+        // say "here it is: https://...") out of the chat text entirely,
+        // replacing them with a short pointer instead of a wall of URL.
         const escapedUrl = generatedMatch[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         displayText = text
           .replace(new RegExp("!\\[[^\\]]*\\]\\(" + escapedUrl + "\\)", "g"), "")
           .replace(new RegExp(escapedUrl, "g"), "")
           .replace(/[ \t]+\n/g, "\n")
           .trim();
+        if (!displayText) displayText = "🖼️ Image ready — see the panel in the corner.";
       }
 
       div.appendChild(document.createTextNode(displayText));
