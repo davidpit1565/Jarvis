@@ -17,7 +17,7 @@ describe("TwilioVoiceGateway", () => {
     expect(response.headers.get("Content-Type")).toBe("text/xml");
   });
 
-  test("uses a deep, machine-sounding voice by default (not a Neural/human-like one)", async () => {
+  test("uses a natural, human-sounding Neural voice by default", async () => {
     const gateway = new TwilioVoiceGateway(() => ({
       orchestrator: makeStubOrchestrator(async () => "unused"),
       userId: "local-user",
@@ -25,8 +25,8 @@ describe("TwilioVoiceGateway", () => {
 
     const response = gateway.handleIncomingCall("CA1");
     const body = await response.text();
-    expect(body).toContain('voice="Polly.Matthew"');
-    expect(body).toContain('<prosody pitch="-15%" rate="92%">');
+    expect(body).toContain('voice="Polly.Matthew-Neural"');
+    expect(body).toContain('<prosody pitch="0%" rate="100%">');
   });
 
   test("honors a custom voice passed to the constructor", async () => {
@@ -225,7 +225,7 @@ describe("TwilioVoiceGateway", () => {
     const response = await gateway.handleGather("CA1", "מה אני עושה עכשיו");
     const body = await response.text();
 
-    expect(body).toContain('voice="Google.he-IL-Standard-D"');
+    expect(body).toContain('voice="Google.he-IL-Wavenet-C"');
     expect(body).toContain('language="he-IL"');
     expect(body).toContain("אתה עובד על ג");
   });
@@ -241,7 +241,7 @@ describe("TwilioVoiceGateway", () => {
     const body = await response.text();
 
     expect(body).toContain(
-      'voice="Polly.Matthew"><prosody pitch="-15%" rate="92%">You are working on JARVIS.</prosody></Say></Gather>'
+      'voice="Polly.Matthew-Neural"><prosody pitch="0%" rate="100%">You are working on JARVIS.</prosody></Say></Gather>'
     );
   });
 
