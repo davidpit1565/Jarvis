@@ -144,15 +144,44 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     /// whenever the Mac's own language wasn't set to Hebrew. Picks the
     /// voice from the reply's own script instead (same idea as the phone
     /// gateway's and the browser voice mode's per-language selection).
+    ///
+    /// This is the actual "Hey JARVIS" voice the user talks to day to
+    /// day — distinct from (and more important than) the Twilio phone
+    /// gateway's voice. `AVSpeechSynthesisVoice(language:)` alone picks
+    /// whatever the *system default* voice happens to be for that
+    /// language, which on a fresh macOS install is almost always the
+    /// bundled ".Compact" quality voice — deliberately low-fidelity
+    /// (small download size), and the reason this sounded robotic/"AI"
+    /// rather than human even though a language-matched voice was
+    /// already being selected. `bestAvailableVoice` instead prefers a
+    /// `.premium` or `.enhanced` quality voice for the language when one
+    /// is installed, only falling back to the plain default if neither
+    /// is available on this Mac.
     func speak(_ text: String) {
         print("[JarvisAgent] Speaking: \"\(text)\"")
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         let isHebrew = text.unicodeScalars.contains { (0x0590...0x05FF).contains($0.value) }
-        if let voice = AVSpeechSynthesisVoice(language: isHebrew ? "he-IL" : "en-US") {
+        if let voice = Self.bestAvailableVoice(languagePrefix: isHebrew ? "he" : "en") {
             utterance.voice = voice
         }
         synthesizer.speak(utterance)
+    }
+
+    /// Picks the highest-fidelity installed voice for a language: premium
+    /// over enhanced over the plain default quality, matched by language
+    /// prefix (e.g. "en" matches both "en-US" and "en-GB") since the
+    /// exact best-quality voice's region code isn't known in advance.
+    private static func bestAvailableVoice(languagePrefix: String) -> AVSpeechSynthesisVoice? {
+        let candidates = AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.hasPrefix(languagePrefix) }
+        if let premium = candidates.first(where: { $0.quality == .premium }) {
+            return premium
+        }
+        if let enhanced = candidates.first(where: { $0.quality == .enhanced }) {
+            return enhanced
+        }
+        return AVSpeechSynthesisVoice(language: languagePrefix == "he" ? "he-IL" : "en-US")
     }
 
     private func startListening() {
