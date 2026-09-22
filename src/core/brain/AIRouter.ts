@@ -434,6 +434,10 @@ export class AIRouter implements Brain {
   }
 
   /**
+   * Resolves this request's primary provider, plus the real, honest reason
+   * THIS primary was picked — "why did you use this model?" decision
+   * metadata (see `ProviderDecisionReason`'s own doc comment).
+   *
    * Fallback Correctness: when `request` needs vision, only ever
    * considers providers whose `ModelCatalog` entry claims vision support
    * — cost-tier preference still applies *within* that capable subset
@@ -443,19 +447,8 @@ export class AIRouter implements Brain {
    * sending the image to a text-only model. An explicit
    * `options.explicitProvider` still always wins, same as before this
    * capability check existed — a deliberate operator choice isn't
-   * second-guessed here.
-   */
-  private resolvePrimary(request: BrainRequest): ProviderName {
-    return this.resolvePrimaryWithReason(request).provider;
-  }
-
-  /**
-   * Same resolution as `resolvePrimary`, plus the real, honest reason THIS
-   * primary was picked — "why did you use this model?" decision metadata
-   * (see `ProviderDecisionReason`'s own doc comment). An explicit operator
-   * choice and a hard vision requirement both take precedence over the
-   * "no-story" free-first/default cases, matching the priority
-   * `resolvePrimary` itself already enforced.
+   * second-guessed here: an explicit choice and a hard vision requirement
+   * both take precedence over the "no-story" free-first/default cases.
    */
   private resolvePrimaryWithReason(request: BrainRequest): { provider: ProviderName; reason: ProviderDecisionReason } {
     if (this.options.explicitProvider && this.registry.has(this.options.explicitProvider)) {

@@ -493,7 +493,7 @@ export class Orchestrator {
     systemPrompt: string,
     runId: string
   ): Promise<string> {
-    const { eventBus, brain, conversation, liveState } = this.deps;
+    const { eventBus, brain, conversation, liveState, toolRegistry } = this.deps;
 
     // LISTENING can only legally transition to THINKING/IDLE (see
     // JarvisLiveState's transition table) — fast path still passes through
@@ -522,10 +522,17 @@ export class Orchestrator {
     eventBus.emit("brain.request", { messageCount: conversation.getMessages().length });
     const response = await brain.chat({
       messages: conversation.getMessagesForBrain(),
-      // No tools exposed: the one relevant result is already known, so
-      // this call's only job is to phrase a reply, not select a tool —
-      // the whole point of Fast Path is skipping that selection round-trip.
-      tools: [],
+      // Only the one tool that just ran is exposed — never the rest of the
+      // registry — so this call's job stays "phrase a reply", not "select a
+      // tool": the whole point of Fast Path is skipping that selection
+      // round-trip. It is deliberately NOT an empty array: the messages
+      // above now contain a tool_use block and its tool_result, and
+      // Anthropic's Messages API rejects (400) any request carrying
+      // tool_use/tool_result blocks with no `tools` defined — `ClaudeBrain`
+      // omits the `tools` parameter entirely for an empty array, so an
+      // empty list here would make every Fast Path turn fail against the
+      // real API even though it passes against a scripted test Brain.
+      tools: toolRegistry.toToolDefinitions(toolRegistry.listTools().filter((t) => t.name === toolName)),
       context: systemPrompt,
       runId,
       taskType: "chat",
