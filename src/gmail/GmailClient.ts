@@ -13,6 +13,8 @@ const TOKEN_EXPIRY_SAFETY_MARGIN_MS = 60_000;
 const MAX_RESULTS_CAP = 10;
 const MAX_BODY_LENGTH = 4000;
 
+const NO_ACCOUNT_LINKED_ERROR = "No Google account linked yet — visit GET /calendar/oauth/start to connect one.";
+
 // Sending a message is not idempotent — retrying a request that actually
 // reached Gmail before the response got lost could send the email twice.
 // A 429 (rejected outright by Gmail's rate limiter before it did anything)
@@ -31,11 +33,17 @@ const SEND_RETRY_OPTIONS = { retryableStatuses: (status: number) => status === 4
  * so the boundary is now "read + send, never delete/modify" rather than
  * fully read-only.
  *
- * Shares its OAuth tokens with GoogleCalendarClient (same CalendarTokenStore,
- * same Google account, one consent screen covering both scopes) rather than
- * requiring a second, separate account link for the same account.
+ * Shares its OAuth tokens with GoogleCalendarClient (same CalendarTokenStore)
+ * rather than requiring a second, separate account link per address.
  *
- * REQUIRES REAL VALIDATION: never exercised against a real Gmail account.
+ * Operates over EVERY account CalendarTokenStore has linked: search/count
+ * aggregate across all linked accounts by default (each EmailSummary
+ * tagged with which account it came from), so the caller never has to say
+ * which mailbox they mean. A send/reply always targets exactly one
+ * account — the explicit `account` argument if given, else whichever
+ * account was linked first (see `primaryAccount()`); reply additionally
+ * resolves which account an existing message id belongs to when the
+ * caller doesn't already know.
  */
 export class GmailClient {
   constructor(
@@ -44,7 +52,17 @@ export class GmailClient {
     private readonly tokenStore: CalendarTokenStore
   ) {}
 
-  private async refreshAccessToken(refreshToken: string): Promise<string> {
+  /** Every linked account's email, oldest-linked (primary) first. */
+  linkedAccounts(): string[] {
+    return this.tokenStore.getAll().map((a) => a.email);
+  }
+
+  /** The account a send/reply defaults to when none is specified — whichever was linked first — or null if nothing is linked. */
+  primaryAccount(): string | null {
+    return this.tokenStore.getAll()[0]?.email ?? null;
+  }
+
+  private async refreshAccessToken(email: string, refreshToken: string): Promise<string> {
     const response = await fetchWithRetry(GOOGLE_OAUTH_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -62,14 +80,14 @@ export class GmailClient {
 
     const data = (await response.json()) as { access_token: string; expires_in: number };
     const expiresAt = Date.now() + data.expires_in * 1000;
-    this.tokenStore.updateAccessToken(data.access_token, expiresAt);
+    this.tokenStore.updateAccessToken(email, data.access_token, expiresAt);
     return data.access_token;
   }
 
-  private async getValidAccessToken(): Promise<string> {
-    const tokens = this.tokenStore.get();
+  private async getValidAccessToken(email: string): Promise<string> {
+    const tokens = this.tokenStore.get(email);
     if (!tokens) {
-      throw new Error("No Google account linked yet — visit GET /calendar/oauth/start to connect one.");
+      throw new Error(`No Google account linked as ${email}.`);
     }
 
     const stillValid =
@@ -78,15 +96,63 @@ export class GmailClient {
       tokens.accessTokenExpiresAt - TOKEN_EXPIRY_SAFETY_MARGIN_MS > Date.now();
 
     if (stillValid) return tokens.accessToken!;
-    return this.refreshAccessToken(tokens.refreshToken);
+    return this.refreshAccessToken(email, tokens.refreshToken);
   }
 
-  private async getMessageSummary(accessToken: string, id: string): Promise<EmailSummary> {
+  /** Resolves which account a send (or an id-less read) should use: the explicit account if given (must actually be linked), else the primary (first-linked) account. */
+  private resolveAccount(explicit?: string): string {
+    if (explicit) {
+      if (!this.tokenStore.isLinked(explicit)) {
+        throw new Error(
+          `No Google account linked as ${explicit}. Linked accounts: ${this.linkedAccounts().join(", ") || "(none)"}.`
+        );
+      }
+      return explicit;
+    }
+    const primary = this.primaryAccount();
+    if (!primary) throw new Error(NO_ACCOUNT_LINKED_ERROR);
+    return primary;
+  }
+
+  /**
+   * Resolves which linked account an EXISTING message by id belongs to,
+   * for reply when the caller doesn't already know. With a single linked
+   * account this is free. With more than one, it probes each account's
+   * metadata fetch in link order and uses the first that finds the
+   * message; throws a combined "not found anywhere" error if none do.
+   */
+  private async resolveAccountForMessage(messageId: string, explicit?: string): Promise<string> {
+    if (explicit) return this.resolveAccount(explicit);
+
+    const accounts = this.tokenStore.getAll();
+    if (accounts.length === 0) throw new Error(NO_ACCOUNT_LINKED_ERROR);
+    if (accounts.length === 1) return accounts[0]!.email;
+
+    const triedEmails: string[] = [];
+    for (const account of accounts) {
+      triedEmails.push(account.email);
+      try {
+        const accessToken = await this.getValidAccessToken(account.email);
+        await this.fetchMessageMetadata(accessToken, messageId, ["Subject"]);
+        return account.email;
+      } catch {
+        // Not in this account — try the next one.
+      }
+    }
+    throw new Error(
+      `Could not find message "${messageId}" in any linked account (tried: ${triedEmails.join(", ")}). ` +
+        "Pass the account explicitly if you know which one it's in."
+    );
+  }
+
+  private async fetchMessageMetadata(
+    accessToken: string,
+    id: string,
+    headerNames: string[]
+  ): Promise<{ id: string; threadId?: string; snippet?: string; payload?: { headers?: Array<{ name: string; value: string }> } }> {
     const url = new URL(`${GMAIL_MESSAGES_URL}/${encodeURIComponent(id)}`);
     url.searchParams.set("format", "metadata");
-    url.searchParams.append("metadataHeaders", "Subject");
-    url.searchParams.append("metadataHeaders", "From");
-    url.searchParams.append("metadataHeaders", "Date");
+    for (const name of headerNames) url.searchParams.append("metadataHeaders", name);
 
     const response = await fetchWithRetry(url.toString(), {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -96,11 +162,16 @@ export class GmailClient {
       throw new Error(`Gmail message fetch failed (${response.status}): ${await response.text().catch(() => "")}`);
     }
 
-    const data = (await response.json()) as {
+    return (await response.json()) as {
       id: string;
+      threadId?: string;
       snippet?: string;
       payload?: { headers?: Array<{ name: string; value: string }> };
     };
+  }
+
+  private async getMessageSummary(accessToken: string, id: string, account: string): Promise<EmailSummary> {
+    const data = await this.fetchMessageMetadata(accessToken, id, ["Subject", "From", "Date"]);
 
     const header = (name: string) =>
       data.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
@@ -111,6 +182,7 @@ export class GmailClient {
       from: header("From"),
       date: header("Date"),
       snippet: data.snippet ?? "",
+      account,
     };
   }
 
@@ -145,9 +217,10 @@ export class GmailClient {
     return "";
   }
 
-  /** The full plain-text body of one message, given its id (from a search result). */
-  async getMessageBody(id: string): Promise<{ subject: string; from: string; date: string; body: string }> {
-    const accessToken = await this.getValidAccessToken();
+  /** The full plain-text body of one message, given its id (from a search result). Searches every linked account for it unless `account` is given. */
+  async getMessageBody(id: string, account?: string): Promise<{ subject: string; from: string; date: string; body: string; account: string }> {
+    const resolvedAccount = await this.resolveAccountForMessage(id, account);
+    const accessToken = await this.getValidAccessToken(resolvedAccount);
 
     const url = new URL(`${GMAIL_MESSAGES_URL}/${encodeURIComponent(id)}`);
     url.searchParams.set("format", "full");
@@ -183,17 +256,16 @@ export class GmailClient {
       from: header("From"),
       date: header("Date"),
       body,
+      account: resolvedAccount,
     };
   }
 
-  /** Searches the linked account's mailbox using Gmail's own search syntax (e.g. "from:x is:unread"). */
-  async searchMessages(query: string, maxResults: number = 5): Promise<EmailSummary[]> {
-    const accessToken = await this.getValidAccessToken();
-    const cappedMaxResults = Math.min(maxResults, MAX_RESULTS_CAP);
+  private async searchMessagesFor(email: string, query: string, maxResults: number): Promise<EmailSummary[]> {
+    const accessToken = await this.getValidAccessToken(email);
 
     const url = new URL(GMAIL_MESSAGES_URL);
     url.searchParams.set("q", query);
-    url.searchParams.set("maxResults", String(cappedMaxResults));
+    url.searchParams.set("maxResults", String(maxResults));
 
     const response = await fetchWithRetry(url.toString(), {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -208,20 +280,36 @@ export class GmailClient {
 
     const summaries: EmailSummary[] = [];
     for (const message of messages) {
-      summaries.push(await this.getMessageSummary(accessToken, message.id));
+      summaries.push(await this.getMessageSummary(accessToken, message.id, email));
     }
     return summaries;
   }
 
   /**
-   * Just the count of messages matching a query, via Gmail's own
-   * `resultSizeEstimate` — no per-message summary fetch, unlike
-   * searchMessages(). Meaningfully cheaper for "how many unread emails
-   * do I have," which only ever needs a number, not each message's
-   * subject/sender/date.
+   * Searches the mailbox using Gmail's own search syntax (e.g. "from:x
+   * is:unread") — across every linked account (each result tagged with
+   * which account it came from), or just `account` if given, merged
+   * newest-first and capped to `maxResults` after merging.
    */
-  async getMessageCount(query: string): Promise<number> {
-    const accessToken = await this.getValidAccessToken();
+  async searchMessages(query: string, maxResults: number = 5, account?: string): Promise<EmailSummary[]> {
+    const cappedMaxResults = Math.min(maxResults, MAX_RESULTS_CAP);
+
+    if (account) {
+      this.resolveAccount(account);
+      return this.searchMessagesFor(account, query, cappedMaxResults);
+    }
+
+    const accounts = this.tokenStore.getAll();
+    if (accounts.length === 0) throw new Error(NO_ACCOUNT_LINKED_ERROR);
+
+    const perAccountResults = await Promise.all(accounts.map((a) => this.searchMessagesFor(a.email, query, cappedMaxResults)));
+    const merged = perAccountResults.flat();
+    merged.sort((a, b) => (Date.parse(b.date || "") || 0) - (Date.parse(a.date || "") || 0));
+    return merged.slice(0, cappedMaxResults);
+  }
+
+  private async getMessageCountFor(email: string, query: string): Promise<number> {
+    const accessToken = await this.getValidAccessToken(email);
 
     const url = new URL(GMAIL_MESSAGES_URL);
     url.searchParams.set("q", query);
@@ -237,6 +325,27 @@ export class GmailClient {
 
     const data = (await response.json()) as { resultSizeEstimate?: number };
     return data.resultSizeEstimate ?? 0;
+  }
+
+  /**
+   * Just the count of messages matching a query, via Gmail's own
+   * `resultSizeEstimate` — no per-message summary fetch, unlike
+   * searchMessages(). Summed across every linked account by default (or
+   * just `account`, if given) — meaningfully cheaper than
+   * searchMessages("is:unread") across every mailbox, which only ever
+   * needs a total number, not each message's subject/sender/date.
+   */
+  async getMessageCount(query: string, account?: string): Promise<number> {
+    if (account) {
+      this.resolveAccount(account);
+      return this.getMessageCountFor(account, query);
+    }
+
+    const accounts = this.tokenStore.getAll();
+    if (accounts.length === 0) throw new Error(NO_ACCOUNT_LINKED_ERROR);
+
+    const counts = await Promise.all(accounts.map((a) => this.getMessageCountFor(a.email, query)));
+    return counts.reduce((sum, n) => sum + n, 0);
   }
 
   /**
@@ -271,9 +380,10 @@ export class GmailClient {
     return `${headers.join("\r\n")}\r\n\r\n${params.body}`;
   }
 
-  /** Sends a brand-new email (not a reply to anything). Returns the new message's Gmail id. */
-  async sendMessage(to: string, subject: string, body: string): Promise<{ id: string }> {
-    const accessToken = await this.getValidAccessToken();
+  /** Sends a brand-new email (not a reply to anything) from one account — `account` if given, else whichever account was linked first. Returns the new message's Gmail id and which account sent it. */
+  async sendMessage(to: string, subject: string, body: string, account?: string): Promise<{ id: string; account: string }> {
+    const resolvedAccount = this.resolveAccount(account);
+    const accessToken = await this.getValidAccessToken(resolvedAccount);
     const raw = this.toBase64Url(this.buildRawMessage({ to, subject, body }));
 
     const response = await fetchWithRetry(
@@ -291,7 +401,7 @@ export class GmailClient {
     }
 
     const data = (await response.json()) as { id: string };
-    return { id: data.id };
+    return { id: data.id, account: resolvedAccount };
   }
 
   /**
@@ -300,31 +410,15 @@ export class GmailClient {
    * first, so the reply lands in the same Gmail thread and email clients
    * recognize it as a reply (`In-Reply-To`/`References` set correctly),
    * rather than sending a disconnected new message that merely mentions
-   * the original.
+   * the original. Resolves which account the original message belongs to
+   * the same way getMessageBody() does, unless `account` is given
+   * explicitly.
    */
-  async replyToMessage(messageId: string, body: string): Promise<{ id: string }> {
-    const accessToken = await this.getValidAccessToken();
+  async replyToMessage(messageId: string, body: string, account?: string): Promise<{ id: string; account: string }> {
+    const resolvedAccount = await this.resolveAccountForMessage(messageId, account);
+    const accessToken = await this.getValidAccessToken(resolvedAccount);
 
-    const url = new URL(`${GMAIL_MESSAGES_URL}/${encodeURIComponent(messageId)}`);
-    url.searchParams.set("format", "metadata");
-    url.searchParams.append("metadataHeaders", "Subject");
-    url.searchParams.append("metadataHeaders", "From");
-    url.searchParams.append("metadataHeaders", "Message-ID");
-    url.searchParams.append("metadataHeaders", "References");
-
-    const originalResponse = await fetchWithRetry(url.toString(), {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!originalResponse.ok) {
-      throw new Error(
-        `Gmail message fetch failed (${originalResponse.status}): ${await originalResponse.text().catch(() => "")}`
-      );
-    }
-
-    const original = (await originalResponse.json()) as {
-      threadId?: string;
-      payload?: { headers?: Array<{ name: string; value: string }> };
-    };
+    const original = await this.fetchMessageMetadata(accessToken, messageId, ["Subject", "From", "Message-ID", "References"]);
     const header = (name: string) =>
       original.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
 
@@ -362,6 +456,6 @@ export class GmailClient {
     }
 
     const data = (await response.json()) as { id: string };
-    return { id: data.id };
+    return { id: data.id, account: resolvedAccount };
   }
 }

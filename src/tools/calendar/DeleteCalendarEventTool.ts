@@ -5,6 +5,8 @@ import type { UndoStore } from "@/core/undo/UndoStore";
 
 export interface DeleteCalendarEventInput extends Record<string, unknown> {
   eventId: string;
+  /** Which linked Google account the event is on, by email. Only needed if it can't be found automatically (e.g. more than one account is linked and the event wasn't just listed/searched). */
+  account?: string;
 }
 
 /**
@@ -32,6 +34,11 @@ export function createDeleteCalendarEventTool(
       type: "object",
       properties: {
         eventId: { type: "string", description: "The event's id." },
+        account: {
+          type: "string",
+          description:
+            "Which linked Google account the event is on, by email. Usually not needed — resolved automatically from the event id; only pass this if the automatic lookup fails (multiple accounts linked and the event's account isn't already known).",
+        },
       },
       required: ["eventId"],
     },
@@ -42,10 +49,13 @@ export function createDeleteCalendarEventTool(
       if (typeof input.eventId !== "string" || input.eventId.trim() === "") {
         return { success: false, error: "eventId must be a non-empty string" };
       }
+      if (input.account !== undefined && typeof input.account !== "string") {
+        return { success: false, error: "account must be a string" };
+      }
 
       try {
-        const eventBeforeDelete = await calendarClient.getEvent(input.eventId).catch(() => null);
-        await calendarClient.deleteEvent(input.eventId);
+        const eventBeforeDelete = await calendarClient.getEvent(input.eventId, input.account).catch(() => null);
+        await calendarClient.deleteEvent(input.eventId, input.account ?? eventBeforeDelete?.account);
         if (eventBeforeDelete) {
           undoStore?.record({
             type: "calendar_event_deleted",

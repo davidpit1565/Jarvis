@@ -120,17 +120,23 @@ describe("GET /calendar/oauth/callback", () => {
     });
     const state = new URL(startResponse.headers.get("Location")!).searchParams.get("state")!;
 
-    global.fetch = (async (url: string, init?: RequestInit) =>
-      url.includes("oauth2.googleapis.com")
-        ? new Response(JSON.stringify({ access_token: "a1", refresh_token: "r1", expires_in: 3600 }), { status: 200 })
-        : originalFetch(url, init)) as unknown as typeof fetch;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.includes("oauth2.googleapis.com")) {
+        return new Response(JSON.stringify({ access_token: "a1", refresh_token: "r1", expires_in: 3600 }), { status: 200 });
+      }
+      if (url.includes("userinfo")) {
+        return new Response(JSON.stringify({ email: "me@example.com" }), { status: 200 });
+      }
+      return originalFetch(url, init);
+    }) as unknown as typeof fetch;
 
     const callbackResponse = await fetch(
       `http://localhost:${handle.port}/calendar/oauth/callback?code=auth-code&state=${state}`
     );
 
     expect(callbackResponse.status).toBe(200);
-    expect(tokenStore.isLinked()).toBe(true);
+    expect(await callbackResponse.text()).toContain("me@example.com");
+    expect(tokenStore.isLinked("me@example.com")).toBe(true);
   });
 
   test("a state can't be redeemed twice", async () => {
@@ -143,10 +149,15 @@ describe("GET /calendar/oauth/callback", () => {
     });
     const state = new URL(startResponse.headers.get("Location")!).searchParams.get("state")!;
 
-    global.fetch = (async (url: string, init?: RequestInit) =>
-      url.includes("oauth2.googleapis.com")
-        ? new Response(JSON.stringify({ access_token: "a1", refresh_token: "r1", expires_in: 3600 }), { status: 200 })
-        : originalFetch(url, init)) as unknown as typeof fetch;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.includes("oauth2.googleapis.com")) {
+        return new Response(JSON.stringify({ access_token: "a1", refresh_token: "r1", expires_in: 3600 }), { status: 200 });
+      }
+      if (url.includes("userinfo")) {
+        return new Response(JSON.stringify({ email: "me@example.com" }), { status: 200 });
+      }
+      return originalFetch(url, init);
+    }) as unknown as typeof fetch;
 
     await fetch(`http://localhost:${handle.port}/calendar/oauth/callback?code=auth-code&state=${state}`);
     const secondAttempt = await fetch(`http://localhost:${handle.port}/calendar/oauth/callback?code=auth-code&state=${state}`);

@@ -15,6 +15,27 @@ function makeClient(tokenStore = new CalendarTokenStore(":memory:")) {
   };
 }
 
+function makeLinkedTokenStore(email = "me@example.com"): CalendarTokenStore {
+  const tokenStore = new CalendarTokenStore(":memory:");
+  tokenStore.save(email, { refreshToken: "r1", accessToken: "valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
+  return tokenStore;
+}
+
+/** Routes a mocked fetch by URL: oauth2 token endpoint, userinfo endpoint, or (by default) the Calendar API. */
+function routedFetch(handlers: { userinfo?: (url: string) => Response; calendar?: (url: string, init?: RequestInit) => Response }) {
+  return (async (url: string, init?: RequestInit) => {
+    if (url.includes("oauth2.googleapis.com")) {
+      return new Response(JSON.stringify({ access_token: "access-1", refresh_token: "refresh-1", expires_in: 3600 }), { status: 200 });
+    }
+    if (url.includes("userinfo")) {
+      return handlers.userinfo ? handlers.userinfo(url) : new Response(JSON.stringify({ email: "me@example.com" }), { status: 200 });
+    }
+    return handlers.calendar
+      ? handlers.calendar(url, init)
+      : new Response(JSON.stringify({ items: [] }), { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
 describe("GoogleCalendarClient.buildAuthUrl", () => {
   test("includes offline access, forced consent, and the given state", () => {
     const { client } = makeClient();
@@ -34,17 +55,39 @@ describe("GoogleCalendarClient.buildAuthUrl", () => {
 });
 
 describe("GoogleCalendarClient.exchangeCodeForTokens", () => {
-  test("saves the returned tokens", async () => {
-    global.fetch = (async () =>
-      new Response(JSON.stringify({ access_token: "access-1", refresh_token: "refresh-1", expires_in: 3600 }), {
-        status: 200,
-      })) as unknown as typeof fetch;
+  test("identifies the account via userinfo and saves the tokens keyed by its email", async () => {
+    global.fetch = routedFetch({ userinfo: () => new Response(JSON.stringify({ email: "alice@example.com" }), { status: 200 }) });
 
     const { client, tokenStore } = makeClient();
-    await client.exchangeCodeForTokens("auth-code");
+    const email = await client.exchangeCodeForTokens("auth-code");
 
-    expect(tokenStore.get()?.refreshToken).toBe("refresh-1");
-    expect(tokenStore.get()?.accessToken).toBe("access-1");
+    expect(email).toBe("alice@example.com");
+    expect(tokenStore.get("alice@example.com")?.refreshToken).toBe("refresh-1");
+    expect(tokenStore.get("alice@example.com")?.accessToken).toBe("access-1");
+  });
+
+  test("linking a SECOND account is additive — the first account's tokens are untouched", async () => {
+    const { client, tokenStore } = makeClient();
+
+    global.fetch = routedFetch({ userinfo: () => new Response(JSON.stringify({ email: "work@example.com" }), { status: 200 }) });
+    await client.exchangeCodeForTokens("code-1");
+
+    global.fetch = routedFetch({ userinfo: () => new Response(JSON.stringify({ email: "personal@example.com" }), { status: 200 }) });
+    await client.exchangeCodeForTokens("code-2");
+
+    expect(tokenStore.isLinked("work@example.com")).toBe(true);
+    expect(tokenStore.isLinked("personal@example.com")).toBe(true);
+    expect(tokenStore.getAll()).toHaveLength(2);
+  });
+
+  test("re-linking the SAME account updates it in place, not as a duplicate", async () => {
+    const { client, tokenStore } = makeClient();
+    global.fetch = routedFetch({ userinfo: () => new Response(JSON.stringify({ email: "me@example.com" }), { status: 200 }) });
+
+    await client.exchangeCodeForTokens("code-1");
+    await client.exchangeCodeForTokens("code-2");
+
+    expect(tokenStore.getAll()).toHaveLength(1);
   });
 
   test("throws when Google doesn't return a refresh token", async () => {
@@ -53,14 +96,55 @@ describe("GoogleCalendarClient.exchangeCodeForTokens", () => {
 
     const { client, tokenStore } = makeClient();
     await expect(client.exchangeCodeForTokens("auth-code")).rejects.toThrow(/refresh token/i);
-    expect(tokenStore.isLinked()).toBe(false);
+    expect(tokenStore.getAll()).toEqual([]);
   });
 
-  test("throws on a non-2xx response", async () => {
+  test("throws on a non-2xx response from the token endpoint", async () => {
     global.fetch = (async () => new Response("bad code", { status: 400 })) as unknown as typeof fetch;
 
     const { client } = makeClient();
     await expect(client.exchangeCodeForTokens("bad-code")).rejects.toThrow(/400/);
+  });
+
+  test("throws when the userinfo endpoint doesn't return an email", async () => {
+    global.fetch = routedFetch({ userinfo: () => new Response(JSON.stringify({}), { status: 200 }) });
+
+    const { client } = makeClient();
+    await expect(client.exchangeCodeForTokens("auth-code")).rejects.toThrow(/email/i);
+  });
+});
+
+describe("GoogleCalendarClient.backfillLegacyAccountEmails", () => {
+  test("re-keys a legacy-linked row onto its real, fetched email", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("google", { refreshToken: "legacy-refresh", accessToken: "legacy-access", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    global.fetch = routedFetch({ userinfo: () => new Response(JSON.stringify({ email: "real@example.com" }), { status: 200 }) });
+
+    const { client } = makeClient(tokenStore);
+    await client.backfillLegacyAccountEmails();
+
+    expect(tokenStore.isLinked("google")).toBe(false);
+    expect(tokenStore.isLinked("real@example.com")).toBe(true);
+  });
+
+  test("is a no-op when there's nothing to backfill", async () => {
+    const tokenStore = makeLinkedTokenStore("already-real@example.com");
+    const { client } = makeClient(tokenStore);
+
+    await expect(client.backfillLegacyAccountEmails()).resolves.toBeUndefined();
+    expect(tokenStore.isLinked("already-real@example.com")).toBe(true);
+  });
+
+  test("swallows its own errors instead of throwing, on a userinfo failure", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("google", { refreshToken: "legacy-refresh", accessToken: "legacy-access", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    global.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    await expect(client.backfillLegacyAccountEmails()).resolves.toBeUndefined();
+    // Stays linked under the placeholder key — still usable, just not backfilled yet.
+    expect(tokenStore.isLinked("google")).toBe(true);
   });
 });
 
@@ -72,7 +156,7 @@ describe("GoogleCalendarClient.listUpcomingEvents", () => {
 
   test("uses the stored access token directly when it's still valid", async () => {
     const tokenStore = new CalendarTokenStore(":memory:");
-    tokenStore.save({ refreshToken: "refresh-1", accessToken: "still-valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("me@example.com", { refreshToken: "refresh-1", accessToken: "still-valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
 
     let capturedAuthHeader: string | undefined;
     global.fetch = (async (url: string, init?: RequestInit) => {
@@ -88,7 +172,7 @@ describe("GoogleCalendarClient.listUpcomingEvents", () => {
 
   test("refreshes an expired access token before listing events", async () => {
     const tokenStore = new CalendarTokenStore(":memory:");
-    tokenStore.save({ refreshToken: "refresh-1", accessToken: "expired", accessTokenExpiresAt: Date.now() - 1000 });
+    tokenStore.save("me@example.com", { refreshToken: "refresh-1", accessToken: "expired", accessTokenExpiresAt: Date.now() - 1000 });
 
     const calls: string[] = [];
     global.fetch = (async (url: string, init?: RequestInit) => {
@@ -104,12 +188,12 @@ describe("GoogleCalendarClient.listUpcomingEvents", () => {
     await client.listUpcomingEvents();
 
     expect(calls[0]).toContain("oauth2.googleapis.com");
-    expect(tokenStore.get()?.accessToken).toBe("refreshed-token");
+    expect(tokenStore.get("me@example.com")?.accessToken).toBe("refreshed-token");
   });
 
-  test("maps Google event fields into CalendarEvent, including all-day events", async () => {
+  test("maps Google event fields into CalendarEvent, tagged with the linked account, including all-day events", async () => {
     const tokenStore = new CalendarTokenStore(":memory:");
-    tokenStore.save({ refreshToken: "refresh-1", accessToken: "valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("me@example.com", { refreshToken: "refresh-1", accessToken: "valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
 
     global.fetch = (async () =>
       new Response(
@@ -126,8 +210,8 @@ describe("GoogleCalendarClient.listUpcomingEvents", () => {
     const events = await client.listUpcomingEvents();
 
     expect(events).toEqual([
-      { id: "ev1", summary: "Team sync", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:30:00Z", location: "Zoom" },
-      { id: "ev2", summary: "(no title)", start: "2026-01-16", end: "2026-01-17", location: null },
+      { id: "ev1", summary: "Team sync", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:30:00Z", location: "Zoom", account: "me@example.com" },
+      { id: "ev2", summary: "(no title)", start: "2026-01-16", end: "2026-01-17", location: null, account: "me@example.com" },
     ]);
   });
 
@@ -143,13 +227,56 @@ describe("GoogleCalendarClient.listUpcomingEvents", () => {
 
     expect(capturedMaxResults as unknown as string).toBe("50");
   });
-});
 
-function makeLinkedTokenStore(): CalendarTokenStore {
-  const tokenStore = new CalendarTokenStore(":memory:");
-  tokenStore.save({ refreshToken: "r1", accessToken: "valid", accessTokenExpiresAt: Date.now() + 3_600_000 });
-  return tokenStore;
-}
+  test("aggregates events across every linked account, merged and sorted soonest-first, tagged with their own account", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string>)?.Authorization;
+      if (auth === "Bearer work-token") {
+        return new Response(
+          JSON.stringify({ items: [{ id: "w1", summary: "Standup", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:15:00Z" } }] }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({ items: [{ id: "p1", summary: "Dentist", start: { dateTime: "2026-01-15T08:00:00Z" }, end: { dateTime: "2026-01-15T08:30:00Z" } }] }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    const events = await client.listUpcomingEvents();
+
+    expect(events.map((e) => e.id)).toEqual(["p1", "w1"]); // 08:00 dentist (personal) before 09:00 standup (work)
+    expect(events.find((e) => e.id === "p1")?.account).toBe("personal@example.com");
+    expect(events.find((e) => e.id === "w1")?.account).toBe("work@example.com");
+  });
+
+  test("a single explicit account is scoped to just that account, not aggregated", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    await client.listUpcomingEvents(10, "work@example.com");
+
+    expect(fetchCalls).toBe(1);
+  });
+
+  test("throws a clear error when the explicit account isn't actually linked", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(client.listUpcomingEvents(10, "nobody@example.com")).rejects.toThrow(/nobody@example\.com/);
+  });
+});
 
 describe("GoogleCalendarClient.searchEvents", () => {
   test("throws when no account is linked", async () => {
@@ -182,7 +309,7 @@ describe("GoogleCalendarClient.searchEvents", () => {
 
     expect(new URL(capturedUrl!).searchParams.get("q")).toBe("dentist");
     expect(events).toEqual([
-      { id: "ev1", summary: "Dentist", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:30:00Z", location: "Clinic" },
+      { id: "ev1", summary: "Dentist", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:30:00Z", location: "Clinic", account: "me@example.com" },
     ]);
   });
 
@@ -213,7 +340,7 @@ describe("GoogleCalendarClient.getEvent", () => {
     await expect(client.getEvent("ev1")).rejects.toThrow(/no google account linked/i);
   });
 
-  test("maps the full event including description and attendees", async () => {
+  test("maps the full event including description and attendees, tagged with the account", async () => {
     global.fetch = (async () =>
       new Response(
         JSON.stringify({
@@ -239,6 +366,7 @@ describe("GoogleCalendarClient.getEvent", () => {
       location: "Zoom",
       description: "Weekly sync",
       attendees: ["alice@example.com", "bob@example.com"],
+      account: "me@example.com",
     });
   });
 
@@ -261,6 +389,37 @@ describe("GoogleCalendarClient.getEvent", () => {
 
     const { client } = makeClient(makeLinkedTokenStore());
     await expect(client.getEvent("missing")).rejects.toThrow(/404/);
+  });
+
+  test("with more than one linked account and no explicit account, probes each account and finds it wherever it actually is", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string>)?.Authorization;
+      if (auth === "Bearer work-token") return new Response("not found", { status: 404 });
+      return new Response(
+        JSON.stringify({ id: "p1", summary: "Dentist", start: { dateTime: "2026-01-15T08:00:00Z" }, end: { dateTime: "2026-01-15T08:30:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    const event = await client.getEvent("p1");
+
+    expect(event.account).toBe("personal@example.com");
+  });
+
+  test("with more than one linked account, throws a combined error naming every account tried when the event is in none of them", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    global.fetch = (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    await expect(client.getEvent("missing")).rejects.toThrow(/work@example\.com.*personal@example\.com/s);
   });
 });
 
@@ -309,7 +468,7 @@ describe("GoogleCalendarClient.listEventsInRange", () => {
 });
 
 describe("GoogleCalendarClient.createEvent", () => {
-  test("posts the event and returns the created event, mapped", async () => {
+  test("posts the event to the primary (first-linked) account when none is given, and returns the created event, mapped", async () => {
     let capturedBody: string | undefined;
     global.fetch = (async (url: string, init?: RequestInit) => {
       capturedBody = init?.body as string;
@@ -339,6 +498,7 @@ describe("GoogleCalendarClient.createEvent", () => {
       start: "2026-01-20T10:00:00Z",
       end: "2026-01-20T10:30:00Z",
       location: "Clinic",
+      account: "me@example.com",
     });
 
     const body = JSON.parse(capturedBody!);
@@ -353,6 +513,37 @@ describe("GoogleCalendarClient.createEvent", () => {
     await expect(
       client.createEvent({ summary: "Test", start: "2026-01-20T10:00:00Z", end: "2026-01-20T10:30:00Z" })
     ).rejects.toThrow(/400/);
+  });
+
+  test("creates on the explicitly given account, not the primary, when more than one is linked", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    let capturedAuth: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedAuth = (init?.headers as Record<string, string>)?.Authorization;
+      return new Response(
+        JSON.stringify({ id: "e1", summary: "Test", start: { dateTime: "2026-01-20T10:00:00Z" }, end: { dateTime: "2026-01-20T10:30:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    const event = await client.createEvent(
+      { summary: "Test", start: "2026-01-20T10:00:00Z", end: "2026-01-20T10:30:00Z" },
+      "personal@example.com"
+    );
+
+    expect(capturedAuth).toBe("Bearer personal-token");
+    expect(event.account).toBe("personal@example.com");
+  });
+
+  test("throws a clear error when the explicit account isn't linked", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    await expect(
+      client.createEvent({ summary: "Test", start: "2026-01-20T10:00:00Z", end: "2026-01-20T10:30:00Z" }, "nobody@example.com")
+    ).rejects.toThrow(/nobody@example\.com/);
   });
 });
 
@@ -406,6 +597,32 @@ describe("GoogleCalendarClient.updateEvent", () => {
     const { client } = makeClient(makeLinkedTokenStore());
     await expect(client.updateEvent("ev1", { summary: "New" })).rejects.toThrow(/400/);
   });
+
+  test("with more than one linked account and no explicit account, finds and patches whichever account actually has the event", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string>)?.Authorization;
+      if (auth === "Bearer work-token") return new Response("not found", { status: 404 });
+      if (init?.method === "PATCH") {
+        return new Response(
+          JSON.stringify({ id: "p1", summary: "Moved", start: { dateTime: "2026-01-20T11:00:00Z" }, end: { dateTime: "2026-01-20T11:30:00Z" } }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({ id: "p1", summary: "Dentist", start: { dateTime: "2026-01-20T10:00:00Z" }, end: { dateTime: "2026-01-20T10:30:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    const event = await client.updateEvent("p1", { start: "2026-01-20T11:00:00Z" });
+
+    expect(event.account).toBe("personal@example.com");
+  });
 });
 
 describe("GoogleCalendarClient.deleteEvent", () => {
@@ -428,5 +645,22 @@ describe("GoogleCalendarClient.deleteEvent", () => {
 
     const { client } = makeClient(makeLinkedTokenStore());
     await expect(client.deleteEvent("event-1")).rejects.toThrow(/403/);
+  });
+
+  test("deletes from the explicitly given account, without probing the others", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    let capturedAuth: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedAuth = (init?.headers as Record<string, string>)?.Authorization;
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    await client.deleteEvent("event-1", "personal@example.com");
+
+    expect(capturedAuth).toBe("Bearer personal-token");
   });
 });

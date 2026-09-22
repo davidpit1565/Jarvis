@@ -2211,3 +2211,124 @@ This pass added 17 new tests (14 in `CloudflareWorkersAIBrain.test.ts`, 1
 in `CostTracker.test.ts`, 2 in `config.test.ts`), bringing the suite to
 1983 passing / 0 failing / 0 typecheck errors (`bun run typecheck` and
 `bun test` both re-run clean after this pass).
+
+## 2026-09-22 update — Google Calendar/Gmail: single-account → multi-account linking (architecture upgrade)
+
+`CalendarTokenStore` was a genuine singleton — one hardcoded row
+(`id = "google"`), a doc comment stating outright "there's only ever one
+linked account for this single-user assistant." David explicitly wants
+3 real Google accounts linked at once (his own plus 2 more), each with
+full Calendar + Gmail read/write access, with reads/searches working
+across all of them by default (no "which account?" ceremony) and writes
+targeting one account (explicit or default-to-primary). That's not a
+config tweak on top of the existing design — the single-row schema, the
+`GoogleCalendarClient`/`GmailClient` methods that assumed exactly one
+token set, and the OAuth callback's overwrite-on-link behavior all had to
+change together. Treated as a real architecture upgrade, not a patch.
+
+**What was built:**
+
+- **`src/calendar/CalendarTokenStore.ts`** — the single-row schema
+  (`id TEXT PRIMARY KEY`) replaced with one row per linked account, keyed
+  by the account's own email (`email TEXT PRIMARY KEY, refresh_token,
+  access_token, access_token_expires_at, linked_at`). New API: `save(email,
+  tokens)`, `get(email)`, `getAll()` (every linked account, oldest-linked/
+  primary first), `delete(email)`, `isLinked(email)`, `count()`. A
+  one-time, additive migration (`migrateLegacySingletonSchema`, this
+  codebase's usual `PRAGMA table_info` + rename/recreate pattern, not a
+  silent drop) carries a pre-existing installation's single row forward
+  under a placeholder key (`"google"`, deliberately not a valid email) —
+  `listAccountsNeedingEmailBackfill()`/`rekey()` complete the migration
+  once that account's real email is fetched (see below). Real migration
+  tests in `tests/calendar/CalendarTokenStore.test.ts` (seeding the exact
+  old schema against a raw `bun:sqlite` `Database`, then verifying the
+  migrated row, the rekey, and idempotency across re-opens).
+- **`src/calendar/GoogleCalendarClient.ts`** — `exchangeCodeForTokens`
+  now calls Google's userinfo endpoint (`GOOGLE_USERINFO_URL`) right
+  after the token exchange to identify which account just authorized
+  JARVIS, and upserts only THAT account's row — linking a second/third
+  account is additive (a new row), re-approving the same account updates
+  it in place, and neither ever touches a different account's tokens.
+  Every read/search method (`listUpcomingEvents`/`searchEvents`/
+  `listEventsInRange`) now aggregates across every linked account by
+  default (or scopes to one `account` if given), merging and sorting
+  soonest-first and tagging each `CalendarEvent` with which account it
+  came from (`account: string`, new field on `CalendarEvent`/
+  `CalendarEventDetail` in `src/types/calendar.ts`). Writes
+  (`createEvent`) take an optional `account`, defaulting to
+  `primaryAccount()` (whichever was linked first). `getEvent`/
+  `updateEvent`/`deleteEvent` resolve which account an existing event id
+  belongs to automatically when `account` isn't given — free (no extra
+  call) with a single linked account, probing each linked account's GET
+  in link order with more than one, throwing a combined "not found in any
+  linked account" error naming every account tried if none has it. A new
+  `backfillLegacyAccountEmails()` (called once, fire-and-forget, from
+  `src/index.ts` at startup) completes the token-store migration above by
+  fetching the real email for any legacy-migrated row and re-keying it —
+  swallows its own errors so a transient network failure at boot never
+  blocks startup; the account keeps working under the placeholder key in
+  the meantime.
+- **`src/gmail/GmailClient.ts`** — the same shape as `GoogleCalendarClient`:
+  `searchMessages`/`getMessageCount` aggregate across every linked account
+  by default (search results merged newest-first and capped after
+  merging; counts summed), each `EmailSummary` tagged with its `account`
+  (new field, `src/types/gmail.ts`). `sendMessage` takes an optional
+  `account`, defaulting to the primary account. `getMessageBody`/
+  `replyToMessage` resolve which account an existing message id belongs
+  to the same way `GoogleCalendarClient` resolves events.
+- **Tool layer** — `CreateCalendarEventTool`/`UpdateCalendarEventTool`/
+  `DeleteCalendarEventTool`/`SendEmailTool`/`ReplyEmailTool` all gained an
+  optional `account` input parameter, validated and threaded straight
+  through to the client methods above; `UpdateCalendarEventTool`/
+  `DeleteCalendarEventTool` reuse the account already discovered by their
+  existing pre-fetch (`getEvent`) rather than re-resolving from scratch.
+  `LIST_CALENDAR_EVENTS`/`SEARCH_CALENDAR_EVENTS`/`GET_CALENDAR_EVENT`/
+  `SEARCH_EMAIL`/`GET_EMAIL`/`GET_UNREAD_EMAIL_COUNT` needed NO input
+  schema change at all — aggregation is the default, exactly what was
+  asked ("no ceremony"). `UnlinkCalendarTool` (`src/tools/calendar/
+  UnlinkCalendarTool.ts`) now takes an optional `account`: unambiguous and
+  omittable with exactly one account linked, required (and lists the
+  linked accounts rather than guessing) with more than one.
+- **`src/communication/websocket/JarvisWebSocketServer.ts`** —
+  `handleCalendarOAuthCallback` now surfaces which account was just
+  linked in its response text, and relies on `exchangeCodeForTokens`'s
+  own new upsert-by-email behavior for the additive-linking guarantee (no
+  route-level change needed there — Google's own consent screen already
+  supports picking a different account, so re-running `/calendar/oauth/start`
+  and choosing another account IS the "add a second account" flow).
+- **`src/index.ts`** — `GoogleCalendarClient`/`GmailClient` construction
+  is unchanged (client id/secret are the OAuth app's own credentials,
+  shared across every linked account, not per-account); the one addition
+  is the fire-and-forget `calendarClient.backfillLegacyAccountEmails()`
+  call right after registration.
+- **Tests** — `tests/calendar/CalendarTokenStore.test.ts` (full rewrite:
+  per-account save/get/delete, link-order preservation across re-links,
+  the migration path with real seeded-legacy-schema tests),
+  `tests/calendar/GoogleCalendarClient.test.ts` (full rewrite: userinfo-
+  based linking, additive multi-account linking, aggregated reads across
+  2 mock accounts merged/sorted, single-account fast path unchanged from
+  before, account-resolution probing and its combined not-found error,
+  explicit-account targeting on every write), `tests/gmail/GmailClient.test.ts`
+  (same shape — aggregated search/count across accounts, resolution
+  probing, explicit-account send targeting),
+  `tests/integration/calendarOAuthHttp.test.ts` (userinfo mocked into the
+  full OAuth flow test), `tests/tools/UnlinkCalendarTool.test.ts` (new
+  multi-account ambiguity/targeting cases), plus every other
+  Calendar/Gmail tool test and `tests/core/buildContextNote.test.ts`/
+  `tests/digest/formatMorningBriefing.test.ts`/
+  `tests/security/externalContentQuarantine.test.ts` updated for the new
+  `CalendarTokenStore.save(email, tokens)` signature and the `account`
+  field now present on `CalendarEvent`/`EmailSummary`.
+- **`README.md`** — "Calendar & Gmail integration" section rewritten to
+  describe linking multiple accounts (re-run `/calendar/oauth/start`,
+  pick a different account at Google's consent screen), how aggregated
+  reads/tagged results work, and how to target a specific account on a
+  write.
+
+**Not touched, as scoped:** AgentMail, Telegram, Twilio, every
+AI-provider/Brain file — this pass is Calendar+Gmail multi-account
+linking only, nothing else.
+
+This pass added 32 new tests, bringing the suite to 2015 passing / 0
+failing / 0 typecheck errors (`bun run typecheck` and `bun test` both
+re-run clean after this pass).

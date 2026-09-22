@@ -6,6 +6,8 @@ export interface SendEmailInput extends Record<string, unknown> {
   to: string;
   subject: string;
   body: string;
+  /** Which linked Google account to send from, by email. Omit to use whichever account was linked first. */
+  account?: string;
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -44,6 +46,11 @@ export function createSendEmailTool(gmailClient: GmailClient): LocalTool<SendEma
         to: { type: "string", description: "Recipient email address." },
         subject: { type: "string", description: "Email subject line." },
         body: { type: "string", description: "Plain-text email body." },
+        account: {
+          type: "string",
+          description:
+            "Which linked Google account to send from, by email. Omit to use whichever account was linked first — only needed when the user explicitly names a specific account (e.g. \"send it from my work email\").",
+        },
       },
       required: ["to", "subject", "body"],
     },
@@ -63,10 +70,13 @@ export function createSendEmailTool(gmailClient: GmailClient): LocalTool<SendEma
       if (!body.trim()) {
         return { success: false, error: "body must be a non-empty string" };
       }
+      if (input.account !== undefined && typeof input.account !== "string") {
+        return { success: false, error: "account must be a string" };
+      }
 
       try {
-        const result = await gmailClient.sendMessage(to, subject, body);
-        return { success: true, data: { messageId: result.id, to, subject } };
+        const result = await gmailClient.sendMessage(to, subject, body, input.account);
+        return { success: true, data: { messageId: result.id, to, subject, account: result.account } };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }

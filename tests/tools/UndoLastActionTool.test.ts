@@ -16,7 +16,7 @@ afterEach(() => {
 
 function makeClient() {
   const tokenStore = new CalendarTokenStore(":memory:");
-  tokenStore.save({ refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
+  tokenStore.save("me@example.com", { refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
   return new GoogleCalendarClient("id", "secret", "https://example.com/callback", tokenStore);
 }
 

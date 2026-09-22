@@ -5,6 +5,8 @@ export interface CalendarEvent {
   start: string;
   end: string;
   location: string | null;
+  /** Which linked Google account (its email) this event belongs to — lets a multi-account aggregated result say "in your work account". */
+  account: string;
 }
 
 export interface CalendarEventDetail extends CalendarEvent {

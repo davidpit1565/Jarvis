@@ -13,7 +13,7 @@ afterEach(() => {
 
 function makeClient() {
   const tokenStore = new CalendarTokenStore(":memory:");
-  tokenStore.save({ refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
+  tokenStore.save("me@example.com", { refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
   return new GmailClient("client-id", "client-secret", tokenStore);
 }
 
@@ -62,7 +62,7 @@ describe("REPLY_EMAIL tool", () => {
     const result = await tool.execute({ messageId: "m1", body: "Sounds good!" }, context);
 
     expect(result.success).toBe(true);
-    expect(result.data).toEqual({ messageId: "reply-1", inReplyTo: "m1" });
+    expect(result.data).toEqual({ messageId: "reply-1", inReplyTo: "m1", account: "me@example.com" });
     expect(calls).toHaveLength(1);
     const sendBody = calls[0]!.body as { raw: string; threadId: string };
     expect(sendBody.threadId).toBe("thread-1");

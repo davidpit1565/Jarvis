@@ -273,6 +273,19 @@ function main() {
     : undefined;
   const undoStore = new UndoStore();
   if (calendarClient) {
+    // One-time, best-effort: identifies the real email of any account
+    // carried over from the old single-account schema (see
+    // CalendarTokenStore's own migration) so it becomes addressable by
+    // email like every newly-linked account. Fire-and-forget — a
+    // transient network failure here must never block JARVIS from
+    // starting, and the account keeps working for Calendar/Gmail in the
+    // meantime regardless.
+    calendarClient.backfillLegacyAccountEmails().catch((err) => {
+      console.error(
+        "[jarvis] Legacy Google account email backfill failed at startup (will retry on next restart):",
+        err instanceof Error ? err.message : String(err)
+      );
+    });
     toolRegistry.registerTool(createListCalendarEventsTool(calendarClient));
     toolRegistry.registerTool(createSearchCalendarEventsTool(calendarClient));
     toolRegistry.registerTool(createGetCalendarEventTool(calendarClient));
