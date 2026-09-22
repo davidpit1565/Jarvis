@@ -79,6 +79,23 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     /// a clap alone (no "Hey JARVIS" needed) should get an instant reply.
     private static let clapGreeting = "Yes? What do you need?"
 
+    /// Whether a hand clap can wake JARVIS instead of the wake phrase.
+    ///
+    /// Off unless `JARVIS_CLAP_TO_ACTIVATE=1` is set in the Agent's
+    /// environment. `ClapDetector` recognises a clap only by its shape — a
+    /// fast, loud transient after relative quiet — and in a normal office
+    /// that describes a dropped pen, a door, a keyboard slammed, or
+    /// JARVIS's own greeting coming back through the speakers. Each false
+    /// positive doesn't just say "Yes? What do you need?" into an empty
+    /// room: it also restarts the recognition task and puts the listener
+    /// in clap-command mode, where the *whole* next transcript is treated
+    /// as a command and the wake phrase is never looked for. So a room
+    /// noisy enough to trigger claps takes "Hey JARVIS" down with it,
+    /// which is exactly what happened on David's Mac — 20 claps, zero wake
+    /// phrases heard. Until the detector can tell a clap from a door, the
+    /// wake phrase alone is the reliable path.
+    private static let clapToActivateEnabled = ProcessInfo.processInfo.environment["JARVIS_CLAP_TO_ACTIVATE"] == "1"
+
     private let clapDetector = ClapDetector()
     /// True from the moment a clap is detected until either a command
     /// follows it (dispatched the same way a wake-phrase command is) or
@@ -198,6 +215,10 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
         print("[JarvisAgent] WakeWordListener: input format \(recordingFormat)")
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
+            // Skipped entirely rather than detected-and-ignored: with the
+            // feature off there's no reason to run peak analysis on every
+            // buffer, and nothing downstream can act on the result.
+            guard Self.clapToActivateEnabled else { return }
             if self?.clapDetector.process(buffer) == true {
                 DispatchQueue.main.async {
                     self?.handleClapDetected()
@@ -220,7 +241,7 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
         silenceCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.checkForSilence()
         }
-        print("[JarvisAgent] Wake-word listening started — say \"Hey JARVIS\" or clap.")
+        print("[JarvisAgent] Wake-word listening started — say \"Hey JARVIS\"\(Self.clapToActivateEnabled ? " or clap" : "").")
         Logger.shared.log("Wake-word listening started.")
     }
 
