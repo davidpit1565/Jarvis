@@ -19,7 +19,7 @@ import { summarizeToolResult } from "./toolResultSummary";
 import { classifyFastPath } from "@/core/intent/FastPathClassifier";
 import { isLikelyStatusQuery, formatLiveStatus } from "@/core/state/liveStatusFormatter";
 import { isLikelyWhyQuery, explainAction, findLastToolCall, noActionToExplain } from "@/core/state/actionExplainer";
-import type { LiveStateSnapshot } from "@/core/state/JarvisLiveState";
+import type { LiveState, LiveStateSnapshot, LiveStateTransitionOptions } from "@/core/state/JarvisLiveState";
 import { scopeToolsForMessage } from "@/core/intent/ToolScoping";
 
 export interface OrchestratorDependencies {
@@ -229,6 +229,35 @@ export class Orchestrator {
     return `${this.deps.liveStateChannel ?? "chat"}:${userId}`;
   }
 
+  /**
+   * Live state is diagnostic/UI-facing bookkeeping (a hologram ring
+   * color, a "thinking..." caption) — nothing about the actual
+   * conversation depends on it being accurate. `JarvisLiveStateTracker`
+   * itself deliberately throws on an illegal transition (see its own
+   * doc comment, and it's tested doing so), but that's the wrong
+   * failure mode for a real turn: found live — a session shared across
+   * a fast chat reply and a same-session AgentCore task (or two
+   * quick-succession turns racing `reset()`) can genuinely land an
+   * out-of-sequence transition, and the thrown error was being caught
+   * by this class's own top-level error handling and surfaced to the
+   * user as "Invalid JARVIS live-state transition: IDLE -> EXECUTING" —
+   * a confusing, purely internal message with nothing to do with
+   * whatever the user actually asked for. Every `liveState.transition`
+   * call in this class goes through here instead of calling it
+   * directly, so a bookkeeping race is logged and dropped, never
+   * failing the real work.
+   */
+  private transitionLiveState(sessionId: string, userId: string, to: LiveState, options?: LiveStateTransitionOptions): void {
+    try {
+      this.deps.liveState?.transition(sessionId, userId, to, options);
+    } catch (error) {
+      console.warn(
+        `[jarvis] live-state transition to ${to} failed for session ${sessionId} (harmless, UI-only):`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
   async handleUserMessage(userId: string, content: string, images?: UserMessageImage[]): Promise<string> {
     const { brain, conversation, toolRegistry, eventBus, channelContext, contextProvider, liveState } = this.deps;
     const extraContext = [channelContext, await contextProvider?.()].filter(Boolean).join("\n\n");
@@ -298,7 +327,7 @@ export class Orchestrator {
     // from a prior interrupted turn — otherwise a new message on the same
     // session would immediately look "stopped" again.
     liveState?.reset(sessionId, userId, "new turn starting");
-    liveState?.transition(sessionId, userId, "LISTENING", { reason: "user message received" });
+    this.transitionLiveState(sessionId, userId, "LISTENING", { reason: "user message received" });
 
     // Dynamic Tool Scoping's "recent context" input — the previous user
     // turn, if any, captured before this turn's message is added below (so
@@ -357,7 +386,7 @@ export class Orchestrator {
     const toolCallCountsThisRun = new Map<string, number>();
 
     try {
-      liveState?.transition(sessionId, userId, "THINKING", { reason: "awaiting brain response" });
+      this.transitionLiveState(sessionId, userId, "THINKING", { reason: "awaiting brain response" });
 
       for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
         if (liveState?.isStopRequested(sessionId)) {
@@ -392,14 +421,14 @@ export class Orchestrator {
 
         if (response.toolCalls.length === 0) {
           conversation.addAssistantMessage(response.text);
-          liveState?.transition(sessionId, userId, "SPEAKING", { reason: "formatting final reply" });
+          this.transitionLiveState(sessionId, userId, "SPEAKING", { reason: "formatting final reply" });
           liveState?.reset(sessionId, userId, "turn complete");
           return response.text;
         }
 
         conversation.addAssistantMessage(response.text, response.toolCalls);
 
-        liveState?.transition(sessionId, userId, "EXECUTING", {
+        this.transitionLiveState(sessionId, userId, "EXECUTING", {
           reason: `running ${response.toolCalls.length} tool call(s)`,
         });
 
@@ -433,13 +462,13 @@ export class Orchestrator {
         if (liveState?.isStopRequested(sessionId)) {
           return "Stopped.";
         }
-        liveState?.transition(sessionId, userId, "THINKING", { reason: "tool results returned; back to brain" });
+        this.transitionLiveState(sessionId, userId, "THINKING", { reason: "tool results returned; back to brain" });
       }
 
       throw new Error(`Exceeded maximum tool iterations (${MAX_TOOL_ITERATIONS}) without a final response`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unexpected error";
-      liveState?.transition(sessionId, userId, "ERROR", { reason: message });
+      this.transitionLiveState(sessionId, userId, "ERROR", { reason: message });
       liveState?.reset(sessionId, userId, "recovered after error");
       throw error;
     }
@@ -526,7 +555,7 @@ export class Orchestrator {
     // THINKING here (no brain call happens for it, classification already
     // ran synchronously above) purely to keep this a legal state sequence,
     // consistent with the normal path's LISTENING -> THINKING -> EXECUTING.
-    liveState?.transition(sessionId, userId, "THINKING", { reason: "fast path: shape recognized" });
+    this.transitionLiveState(sessionId, userId, "THINKING", { reason: "fast path: shape recognized" });
 
     if (liveState?.isStopRequested(sessionId)) {
       return "Stopped.";
@@ -534,7 +563,7 @@ export class Orchestrator {
 
     const toolCall: ToolCallRequest = { id: randomUUID(), toolName, input };
 
-    liveState?.transition(sessionId, userId, "EXECUTING", { reason: `fast path: running ${toolName}` });
+    this.transitionLiveState(sessionId, userId, "EXECUTING", { reason: `fast path: running ${toolName}` });
     conversation.addAssistantMessage("", [toolCall]);
     const result = await this.executeToolCall(userId, toolCall, runId);
     this.completeToolCall(toolCall, result);
@@ -543,7 +572,7 @@ export class Orchestrator {
       return "Stopped.";
     }
 
-    liveState?.transition(sessionId, userId, "THINKING", { reason: "fast path: formatting final reply" });
+    this.transitionLiveState(sessionId, userId, "THINKING", { reason: "fast path: formatting final reply" });
 
     eventBus.emit("brain.request", { messageCount: conversation.getMessages().length });
     const response = await brain.chat({
@@ -571,7 +600,7 @@ export class Orchestrator {
     });
 
     conversation.addAssistantMessage(response.text);
-    liveState?.transition(sessionId, userId, "SPEAKING", { reason: "formatting final reply" });
+    this.transitionLiveState(sessionId, userId, "SPEAKING", { reason: "formatting final reply" });
     liveState?.reset(sessionId, userId, "turn complete (fast path)");
     return response.text;
   }
@@ -719,7 +748,7 @@ export class Orchestrator {
 
     const { liveState } = this.deps;
     const sessionId = this.liveSessionId(userId);
-    liveState?.transition(sessionId, userId, "WAITING", { reason: `awaiting confirmation for ${tool.name}` });
+    this.transitionLiveState(sessionId, userId, "WAITING", { reason: `awaiting confirmation for ${tool.name}` });
 
     const approved = await confirmationService.requestConfirmation({
       toolId: tool.id,
@@ -733,7 +762,7 @@ export class Orchestrator {
     // own caller, runLocalTool/runDeviceTool) is still mid tool-call either
     // way; a decline just means this particular call's ToolResult will be
     // an error, not that the whole turn is done.
-    liveState?.transition(sessionId, userId, "EXECUTING", { reason: "confirmation answered" });
+    this.transitionLiveState(sessionId, userId, "EXECUTING", { reason: "confirmation answered" });
 
     if (!approved) {
       return { success: false, error: "User declined to confirm this action" };

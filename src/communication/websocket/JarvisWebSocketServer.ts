@@ -970,8 +970,8 @@ export class JarvisWebSocketServer {
         ws.send(JSON.stringify({ type: "assistant", text: response }));
       })
       .catch((error) => {
-        const message = error instanceof Error ? error.message : "Unexpected error";
-        ws.send(JSON.stringify({ type: "error", message }));
+        console.error("[jarvis] web chat turn failed:", error instanceof Error ? error.message : String(error));
+        ws.send(JSON.stringify({ type: "error", message: WEB_CHAT_ERROR_MESSAGE }));
       });
   }
 
@@ -2396,6 +2396,16 @@ const VALID_WEB_CHAT_IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "im
 // kept deliberately identical rather than diverging per channel.
 const WEB_CHAT_YES_PATTERN = /^\s*(yes|y|כן|אישור|confirm)\s*$/i;
 const WEB_CHAT_NO_PATTERN = /^\s*(no|n|לא|ביטול|cancel)\s*$/i;
+
+// Same friendly, generic wording every other channel already uses
+// (TelegramGateway, TwilioSmsGateway, TwilioVoiceGateway's own
+// ERROR_MESSAGE constants) — found live: this was the one channel still
+// sending the raw thrown error straight to the user, e.g. a full upstream
+// provider error body ("OpenRouter chat completion failed (429): {...raw
+// JSON...}") once every configured AI provider was exhausted. The real
+// error is still logged server-side for debugging; nothing useful about
+// an upstream 429's JSON body belongs in a user-facing chat bubble.
+const WEB_CHAT_ERROR_MESSAGE = "Sorry, something went wrong on my end. Please try again.";
 
 /**
  * Structural validation only (right mediaType, non-empty base64 string) —

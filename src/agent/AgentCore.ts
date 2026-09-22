@@ -273,12 +273,27 @@ export class AgentCore {
     const mappedState = liveStateForAgentTaskState(to);
     if (liveState && mappedState) {
       const sessionId = this.liveSessionId(task.userId);
-      liveState.transition(sessionId, task.userId, mappedState, { reason: `agent task ${task.id}: ${reason}` });
-      // COMPLETED/FAILED/CANCELLED map onto SPEAKING/ERROR/STOPPED, all of
-      // which only ever lead back to IDLE — settle there immediately so a
-      // finished task doesn't leave its session stuck showing "speaking".
-      if (to === "COMPLETED" || to === "FAILED" || to === "CANCELLED") {
-        liveState.reset(sessionId, task.userId, `agent task ${task.id} ${to.toLowerCase()}`);
+      try {
+        // Live state is diagnostic/UI-facing bookkeeping only — nothing
+        // about the actual task depends on it being accurate.
+        // `JarvisLiveStateTracker.transition` deliberately throws on an
+        // illegal transition (e.g. this task's own state machine skipping
+        // a step this mapping expects, or a stale session left mid-flight
+        // from an earlier run), which must never abort or fail the real
+        // task over a UI-only concern — see Orchestrator's own
+        // `transitionLiveState` for the matching guard on the chat side.
+        liveState.transition(sessionId, task.userId, mappedState, { reason: `agent task ${task.id}: ${reason}` });
+        // COMPLETED/FAILED/CANCELLED map onto SPEAKING/ERROR/STOPPED, all of
+        // which only ever lead back to IDLE — settle there immediately so a
+        // finished task doesn't leave its session stuck showing "speaking".
+        if (to === "COMPLETED" || to === "FAILED" || to === "CANCELLED") {
+          liveState.reset(sessionId, task.userId, `agent task ${task.id} ${to.toLowerCase()}`);
+        }
+      } catch (error) {
+        console.warn(
+          `[jarvis] live-state transition to ${mappedState} failed for agent task ${task.id} (harmless, UI-only):`,
+          error instanceof Error ? error.message : String(error)
+        );
       }
     }
 

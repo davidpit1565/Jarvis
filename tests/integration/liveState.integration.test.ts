@@ -8,7 +8,7 @@ import { PermissionLevel } from "@/types/permissions";
 import { AgentCore } from "@/agent/AgentCore";
 import { AgentTaskStore } from "@/agent/AgentTaskStore";
 import { ToolAuditLog } from "@/audit/ToolAuditLog";
-import { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
+import { JarvisLiveStateTracker, InvalidLiveStateTransitionError } from "@/core/state/JarvisLiveState";
 import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { LocalTool, ToolResult } from "@/types/tools";
 import type { AgentPlanRequest, AgentPlanner, AgentStepProposal, AgentVerificationRequest, AgentVerificationResult } from "@/agent/types";
@@ -313,6 +313,51 @@ describe("JarvisLiveState wired into Orchestrator.handleUserMessage", () => {
       const messages = conversation.getMessages();
       expect(messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant"]);
     });
+  });
+
+  // Regression test — found live: a real session hit "Invalid JARVIS
+  // live-state transition: IDLE -> EXECUTING" (and later IDLE -> SPEAKING),
+  // and Orchestrator's own top-level catch surfaced that internal
+  // bookkeeping exception to the user as the turn's actual error, instead
+  // of the turn's real work completing normally. Live state is
+  // diagnostic/UI-facing only — a bookkeeping race (two turns, or an
+  // AgentCore task sharing a session) must never fail the real turn.
+  test("a bookkeeping-only live-state transition failure never fails the actual turn", async () => {
+    const brain = new ScriptedBrain([{ text: "hi there", toolCalls: [], stopReason: "end_turn" }]);
+    const eventBus = new EventBus();
+    const toolRegistry = new ToolRegistry();
+    const permissionService = new PermissionService();
+    const conversation = new ConversationManager(eventBus);
+
+    let calls = 0;
+    // A fake tracker that throws on its very first transition (as if the
+    // session were already out of sequence) but otherwise behaves like the
+    // real one — reset()/isStopRequested() still need to work normally so
+    // the rest of the turn proceeds exactly as it would in production.
+    const flakyLiveState = {
+      transition: (..._args: unknown[]) => {
+        calls++;
+        if (calls === 1) {
+          throw new InvalidLiveStateTransitionError("IDLE", "LISTENING");
+        }
+        return undefined;
+      },
+      reset: () => undefined,
+      isStopRequested: () => false,
+    };
+
+    const orchestrator = new Orchestrator({
+      brain,
+      conversation,
+      toolRegistry,
+      permissionService,
+      eventBus,
+      liveState: flakyLiveState as unknown as JarvisLiveStateTracker,
+    });
+
+    const reply = await orchestrator.handleUserMessage("user-1", "hello");
+    expect(reply).toBe("hi there");
+    expect(calls).toBeGreaterThan(1); // later transitions still happened normally
   });
 });
 
