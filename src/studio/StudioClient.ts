@@ -1,12 +1,13 @@
 import type { StudioInstagramStats, StudioPublishResult, StudioReel } from "@/types/studio";
 
-/** Most recent posts kept when reporting Instagram stats — see getInstagramStats()'s doc comment for why this exists. */
+/** Most recent posts/reels kept when reporting Instagram stats or the reel list — see getInstagramStats()'s doc comment for why this exists. */
 const MAX_INSTAGRAM_MEDIA_ITEMS = 10;
-/** Caption length kept per post — full captions/hashtags are the single biggest contributor to response size. */
+/** Caption length kept per post/reel — full captions/hashtags are the single biggest contributor to response size. */
 const MAX_CAPTION_LENGTH = 200;
 
-function truncateCaption(caption: string): string {
-  return caption.length > MAX_CAPTION_LENGTH ? `${caption.slice(0, MAX_CAPTION_LENGTH)}…` : caption;
+function truncateCaption<T extends string | null | undefined>(caption: T): T {
+  if (caption == null) return caption;
+  return (caption.length > MAX_CAPTION_LENGTH ? `${caption.slice(0, MAX_CAPTION_LENGTH)}…` : caption) as T;
 }
 
 /**
@@ -32,7 +33,13 @@ export class StudioClient {
     return { Authorization: `Bearer ${this.secret}` };
   }
 
-  /** Rendered reels waiting for/already through publish, soonest-built first (the studio's own order). */
+  /**
+   * Rendered reels waiting for/already through publish, soonest-built first (the studio's
+   * own order). Capped and caption-truncated the same way as getInstagramStats() — see its
+   * doc comment; a studio with a long production history can return just as many reels as
+   * it has Instagram posts, and this is the other half of one Telegram turn ("check the
+   * studio") that calls both tools together, so both need to stay small on their own.
+   */
   async listReels(): Promise<StudioReel[]> {
     const response = await fetch(new URL("/api/jarvis/reels", this.baseUrl), { headers: this.headers() });
     if (!response.ok) {
@@ -40,7 +47,16 @@ export class StudioClient {
     }
     const data = (await response.json()) as { ok: boolean; reason?: string; reels?: StudioReel[] };
     if (!data.ok) throw new Error(data.reason ?? "Studio reels request failed");
-    return data.reels ?? [];
+    return (data.reels ?? []).slice(0, MAX_INSTAGRAM_MEDIA_ITEMS).map((reel) => ({
+      file: reel.file,
+      kind: reel.kind,
+      episode: reel.episode,
+      title: reel.title,
+      caption: truncateCaption(reel.caption),
+      builtAt: reel.builtAt,
+      bytes: reel.bytes,
+      gatePassed: reel.gatePassed,
+    }));
   }
 
   /**
