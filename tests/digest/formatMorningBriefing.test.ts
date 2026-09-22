@@ -34,4 +34,22 @@ describe("formatMorningBriefing", () => {
     expect(text).not.toContain("Weather:");
     expect(text).toContain("Standup");
   });
+
+  test("includes unread email count when greater than zero", () => {
+    const text = formatMorningBriefing(undefined, [], [], 7);
+
+    expect(text).toContain("Unread email: 7.");
+  });
+
+  test("omits the unread email line at exactly zero, same as any other empty section", () => {
+    const text = formatMorningBriefing(undefined, [], [], 0);
+
+    expect(text).not.toContain("Unread email:");
+  });
+
+  test("omits the unread email line when not provided (Gmail not linked)", () => {
+    const text = formatMorningBriefing(undefined, [], [], undefined);
+
+    expect(text).not.toContain("Unread email:");
+  });
 });
