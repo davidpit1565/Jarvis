@@ -26,6 +26,16 @@ final class AgentToolRegistry {
         tools[tool.name] = tool
     }
 
+    /// Every tool this Agent can actually run, for the capability list sent
+    /// in `device.register`. Derived from the registry rather than written
+    /// out by hand so the two can't drift: a tool added to `buildDefault`
+    /// is advertised to Core by that fact alone. Sorted so the reported
+    /// list is stable across launches instead of following Dictionary's
+    /// arbitrary ordering.
+    var toolNames: [String] {
+        tools.keys.sorted()
+    }
+
     func execute(name: String, input: [String: AnyCodable]) -> ToolResultPayload {
         guard let tool = tools[name] else {
             return ToolResultPayload(success: false, data: nil, error: "Unknown tool on this Agent: \(name)")

@@ -49,6 +49,15 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             }
         }
 
+        // Accessibility (CLICK_ELEMENT, TYPE_TEXT) is the one permission
+        // macOS never prompts for on its own — an app has to ask, or it
+        // never even appears in the Accessibility list for the user to
+        // grant. Asked here, next to the notification request, for the
+        // same reason: both are "this tool is dead without it" permissions
+        // that should be settled at launch rather than at the moment a
+        // tool call needs them.
+        CapabilityReporter.requestAccessibilityIfNeeded()
+
         connection.connect()
     }
 
@@ -270,7 +279,7 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             platform: "macos",
             agentVersion: "0.1.0",
             protocolVersion: protocolVersion,
-            capabilities: ["get_active_application"],
+            capabilities: tools.toolNames,
             requestedRole: "primary",
             credential: credential
         )
@@ -309,6 +318,14 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
 // `KeepAlive` (Resources/com.jarvis.agent.plist), which restarts the
 // Agent automatically — this handler only makes *why* it crashed
 // possible to find afterward.
+// Line-buffer stdout. Swift's `print` block-buffers (4 KB) when stdout is a
+// file rather than a TTY, which is exactly how launchd runs this Agent
+// (StandardOutPath). That made the log lag minutes behind reality — the
+// pairing code, which is only valid for 5 minutes, could still be sitting
+// in the buffer when it expired, and a connection failure left no trace at
+// all until enough later output happened to flush it.
+setvbuf(stdout, nil, _IOLBF, 0)
+
 NSSetUncaughtExceptionHandler { exception in
     let message = "Uncaught exception: \(exception.name.rawValue) — \(exception.reason ?? "no reason") — \(exception.callStackSymbols.joined(separator: "\n"))"
     Logger.shared.error(message)

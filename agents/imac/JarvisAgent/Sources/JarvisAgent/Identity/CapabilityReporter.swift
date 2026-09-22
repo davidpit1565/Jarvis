@@ -78,6 +78,35 @@ enum CapabilityReporter {
         }
     }
 
+    /// Asks macOS for Accessibility access when it isn't already granted.
+    ///
+    /// `AXIsProcessTrusted()` — what `currentPermissions` reads — is a pure
+    /// query: it never prompts, and, crucially, it never registers this app
+    /// in System Settings › Privacy & Security › Accessibility. An app that
+    /// only ever calls it therefore stays invisible in that list until the
+    /// user adds it by hand with the "+" button, and a user who does that
+    /// has no way of telling this app apart from a stale binary of the same
+    /// name they granted months ago — they can toggle the wrong row on and
+    /// nothing changes, with no feedback anywhere.
+    ///
+    /// `AXIsProcessTrustedWithOptions` with the prompt option is the
+    /// documented way to ask: macOS puts this app in the list under the
+    /// identity it actually launched with and shows the user a dialog that
+    /// opens the right pane. Called once per launch and only while access
+    /// is missing, so a Mac that has already granted it never sees a
+    /// dialog. The return value is the same boolean `AXIsProcessTrusted()`
+    /// gives and is deliberately discarded: granting happens in System
+    /// Settings, out of process, long after this call returns, so the
+    /// answer here is "no" even in the run where the user says yes. The
+    /// next `currentPermissions` (on the next launch, or the next
+    /// reconnect) is what reports the real state.
+    static func requestAccessibilityIfNeeded() {
+        guard !AXIsProcessTrusted() else { return }
+
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+    }
+
     private static func mapAVAuthorization(_ status: AVAuthorizationStatus) -> String {
         switch status {
         case .authorized: return "granted"

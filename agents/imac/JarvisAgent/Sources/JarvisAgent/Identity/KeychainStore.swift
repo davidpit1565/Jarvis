@@ -43,9 +43,32 @@ enum KeychainStore {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
 
-        let status = SecItemAdd(query as CFDictionary, nil)
+        var status = SecItemAdd(query as CFDictionary, nil)
+
+        // The delete above silently fails when the existing item was written
+        // by a *differently signed* build of this Agent: macOS scopes item
+        // access by code signature, and every `swift build` produces a new
+        // ad-hoc signature. SecItemAdd then returns errSecDuplicateItem and
+        // the save is lost — leaving the previous build's now-stale secret in
+        // the Keychain. The Agent still reads it back fine (hasCredential=true)
+        // but Core rejects it, so the device re-pairs on every launch and
+        // never reconnects on its own. Fall back to an in-place update, which
+        // rewrites the value of the item that is already there.
+        if status == errSecDuplicateItem {
+            let match: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+            ]
+            status = SecItemUpdate(match as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            if status == errSecSuccess {
+                Logger.shared.log("Keychain credential updated in place (previous item was not deletable).")
+            }
+        }
+
         if status != errSecSuccess {
             Logger.shared.error("Keychain save failed with OSStatus \(status): \(secStatusMessage(status))")
+            print("[JarvisAgent] Keychain save FAILED (OSStatus \(status)) — will re-pair on next launch.")
         }
         return status == errSecSuccess
     }
