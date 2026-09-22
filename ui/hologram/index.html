@@ -2986,7 +2986,11 @@
     // panel's own open/closed state.
     function showMediaPanel(url) {
       mediaPanelImg.src = url;
-      mediaPanelDownload.href = url;
+      // Routed through Core's own /image-proxy (same-origin) so the
+      // `download` attribute actually forces a save-to-device — a
+      // browser only honors it for a same-origin URL, and
+      // image.pollinations.ai is cross-origin from here.
+      mediaPanelDownload.href = coreOrigin("http") + "/image-proxy?url=" + encodeURIComponent(url);
       mediaPanel.classList.remove("hidden");
     }
     mediaPanelClose.addEventListener("click", () => mediaPanel.classList.add("hidden"));
