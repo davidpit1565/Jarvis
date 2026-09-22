@@ -128,6 +128,35 @@ describe("CloudflareWorkersAIBrain.chat", () => {
     ]);
   });
 
+  test("sends empty string (not null) as content for a tool-calls-only assistant message", async () => {
+    // Regression test: found live — Cloudflare Workers AI's OpenAI-compat
+    // layer 400s a real tool-call round trip when the assistant message's
+    // content is `null` (which Groq/OpenRouter/Ollama all accept per the
+    // OpenAI spec), reproduced independently with curl against the real
+    // API before fixing. See toOpenAIMessages's own comment.
+    let capturedBody: Record<string, unknown> | undefined;
+    global.fetch = (async (_url: unknown, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const brain = new CloudflareWorkersAIBrain("acct-1", "cf-token", { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+    const messages: ConversationMessage[] = [
+      { role: "user", content: "check the studio" },
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "call-1", toolName: "list_reels", input: {} }],
+      },
+      { role: "tool", toolCallId: "call-1", toolName: "list_reels", content: "[]" },
+    ];
+    await brain.chat({ messages, tools: [] });
+
+    const assistantMessage = (capturedBody?.messages as Array<Record<string, unknown>>).find((m) => m.role === "assistant");
+    expect(assistantMessage?.content).toBe("");
+    expect(assistantMessage?.content).not.toBeNull();
+  });
+
   test("retries once on a 503, then succeeds", async () => {
     let attempts = 0;
     global.fetch = (async () => {
