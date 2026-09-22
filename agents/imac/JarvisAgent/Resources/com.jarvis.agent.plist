@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-REQUIRES REAL macOS VALIDATION — this launchd user agent definition has
-never been loaded or tested on a real Mac. Install to:
-  ~/Library/LaunchAgents/com.jarvis.agent.plist
-then:
-  launchctl load ~/Library/LaunchAgents/com.jarvis.agent.plist
+Template for the launchd user agent. Don't install this file directly —
+scripts/install.sh substitutes __JARVIS_AGENT_EXECUTABLE__ and writes the
+result to ~/Library/LaunchAgents/com.jarvis.agent.plist, because launchd
+does not expand $HOME and the Agent must be run from inside its .app
+bundle.
 
 RunAtLoad + KeepAlive give the persistence Phase 2 requires: the Agent
 starts at login and is restarted by launchd if it crashes, without
@@ -18,8 +18,7 @@ needing a Terminal window open.
 
     <key>ProgramArguments</key>
     <array>
-        <!-- Replace with the actual installed path of the built executable. -->
-        <string>/usr/local/bin/JarvisAgent</string>
+        <string>__JARVIS_AGENT_EXECUTABLE__</string>
     </array>
 
     <key>RunAtLoad</key>

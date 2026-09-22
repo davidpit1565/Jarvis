@@ -83,6 +83,41 @@ test.
   silence-threshold tuning, and the actual round trip (mic → Core →
   spoken reply) have never run against a real microphone or a real Core.
 
+## Building and installing
+
+`scripts/install.sh` is the whole flow: build, bundle into
+`~/Applications/JarvisAgent.app`, sign, install the launchd service,
+restart. Re-run it after any source change.
+
+Do not build and sign by hand. `codesign --sign -` produces an *ad-hoc*
+signature, which carries no certificate, so the only thing macOS can pin
+a TCC grant or a Keychain ACL to is the code directory hash:
+
+    designated => cdhash H"4ab780cb1f0e4f9311f0113ae7eebd90ecdba6de"
+
+That hash changes on every build. The effect is that every rebuild
+silently revokes Microphone, Speech Recognition, Accessibility and
+Reminders, and locks the Agent out of the pairing credential it saved —
+so the Agent hangs on a SecurityAgent dialog, then asks to be paired
+again. Nothing says why; the only trace is in tccd's log:
+
+    Failed to match existing code requirement for subject com.jarvis.agent
+
+`scripts/create-signing-identity.sh` (called automatically by
+`install.sh`) creates a long-lived self-signed code-signing certificate in
+the login keychain once, and signing with it changes the requirement to:
+
+    designated => identifier "com.jarvis.agent" and certificate leaf = H"495b..."
+
+which every later build satisfies. Permissions and the paired credential
+then survive rebuilds. The certificate is local-only and is not a
+substitute for a Developer ID signature if the Agent is ever installed on
+another Mac.
+
+The `.app` bundle is not cosmetic: `UNUserNotificationCenter` refuses to
+initialise outside one, and TCC wants a bundle identifier to hang grants
+on. A bare executable in `/usr/local/bin` cannot hold either.
+
 ## Security
 
 There is intentionally no shell execution, AppleScript execution, sudo,
