@@ -1,5 +1,6 @@
 import type { Orchestrator } from "@/core/orchestrator/Orchestrator";
 import { fetchWithRetry } from "@/core/net/fetchWithRetry";
+import { apiError } from "@/core/net/apiError";
 
 export interface TelegramSession {
   orchestrator: Orchestrator;
@@ -155,7 +156,7 @@ export class TelegramGateway {
       );
 
       if (!response.ok) {
-        throw new Error(`Telegram sendMessage failed (${response.status}): ${await response.text().catch(() => "")}`);
+        throw await apiError("Telegram sendMessage failed", response);
       }
     }
   }
@@ -182,7 +183,7 @@ export class TelegramGateway {
     );
 
     if (!response.ok) {
-      throw new Error(`Telegram sendPhoto failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Telegram sendPhoto failed", response);
     }
   }
 
@@ -222,7 +223,7 @@ export class TelegramGateway {
     );
 
     if (!response.ok) {
-      throw new Error(`Telegram sendDocument failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Telegram sendDocument failed", response);
     }
   }
 
