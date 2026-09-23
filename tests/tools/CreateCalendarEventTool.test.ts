@@ -203,6 +203,41 @@ describe("CREATE_CALENDAR_EVENT tool", () => {
     expect((result.data as { duplicate: unknown }).duplicate).toBeNull();
   });
 
+  test("flags a duplicate even when the existing (short) event ends before the new event starts", async () => {
+    global.fetch = (async (url: string) => {
+      if (url.includes("timeMin") && url.includes("timeMax")) {
+        // Existing "Standup" 09:00-09:02 — ends before the new event's
+        // 09:03 start, so a naive listEventsInRange(input.start, input.end)
+        // query would never return it at all (Google's timeMin is an
+        // exclusive lower bound on the event's END time), even though its
+        // start is only 3 minutes off and well within the duplicate window.
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: "existing", summary: "Standup", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:02:00Z" } },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({ id: "e1", summary: "Standup", start: { dateTime: "2026-01-15T09:03:00Z" }, end: { dateTime: "2026-01-15T09:33:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const tool = createCreateCalendarEventTool(makeClient());
+    const result = await tool.execute({ summary: "Standup", start: "2026-01-15T09:03:00Z", end: "2026-01-15T09:33:00Z" }, context);
+
+    expect(result.success).toBe(true);
+    const data = result.data as { duplicate: unknown; conflicts: unknown[] };
+    expect(data.duplicate).not.toBeNull();
+    // The short existing event doesn't actually overlap the new one's
+    // [09:03, 09:33) range, so it must NOT show up as a "conflicts" hit —
+    // only as a duplicate warning.
+    expect(data.conflicts).toEqual([]);
+  });
+
   test("does not record anything in the undo store on failure", async () => {
     global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
 
