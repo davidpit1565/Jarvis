@@ -94,4 +94,24 @@ describe("SEND_SMS tool", () => {
     expect(result.success).toBe(false);
     expect(guard.remaining(fixedDateKey())).toBe(1);
   });
+
+  test("refunds the same day's slot even if the day rolls over while the Twilio call is in flight", async () => {
+    global.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+
+    // Simulates local midnight ticking over during the awaited sendSms()
+    // call: the first call (tryConsume) sees "2026-01-01", the second
+    // (release, in the catch block) would see "2026-01-02" if the tool
+    // re-invoked todayDateKey() instead of reusing a single captured value.
+    let call = 0;
+    const rollingDateKey = () => (call++ === 0 ? "2026-01-01" : "2026-01-02");
+
+    const guard = new TwilioCostGuard(1);
+    const tool = createSendSmsTool(makeSender(), "+15551234567", guard, rollingDateKey);
+
+    const result = await tool.execute({ message: "hi" }, context);
+
+    expect(result.success).toBe(false);
+    expect(guard.remaining("2026-01-01")).toBe(1);
+    expect(guard.remaining("2026-01-02")).toBe(1);
+  });
 });

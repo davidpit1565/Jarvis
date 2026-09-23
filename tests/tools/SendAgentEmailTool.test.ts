@@ -96,4 +96,25 @@ describe("SEND_AGENT_EMAIL tool", () => {
     expect(result.success).toBe(false);
     expect(guard.remaining(fixedDateKey())).toBe(1);
   });
+
+  test("refunds the same day's slot even if the day rolls over while the AgentMail call is in flight", async () => {
+    global.fetch = (async () => new Response("insufficient scope", { status: 403 })) as unknown as typeof fetch;
+
+    // Simulates local midnight ticking over during the awaited
+    // sendMessage() call: the first call (tryConsume) sees "2026-01-01",
+    // the second (release, in the catch block) would see "2026-01-02" if
+    // the tool re-invoked todayDateKey() instead of reusing a single
+    // captured value.
+    let call = 0;
+    const rollingDateKey = () => (call++ === 0 ? "2026-01-01" : "2026-01-02");
+
+    const guard = new AgentMailSendGuard(1);
+    const tool = createSendAgentEmailTool(makeClient(), guard, rollingDateKey);
+
+    const result = await tool.execute({ to: "bob@example.com", subject: "Hi", body: "Hello" }, context);
+
+    expect(result.success).toBe(false);
+    expect(guard.remaining("2026-01-01")).toBe(1);
+    expect(guard.remaining("2026-01-02")).toBe(1);
+  });
 });

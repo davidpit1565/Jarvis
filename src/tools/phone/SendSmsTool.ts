@@ -62,7 +62,17 @@ export function createSendSmsTool(
         return { success: false, error: `message is too long (over ${MAX_MESSAGE_LENGTH} characters)` };
       }
 
-      if (!sendGuard.tryConsume(todayDateKey())) {
+      // Captured once and reused for both tryConsume/release below — the
+      // sendSms() call below awaits a real network round trip, and
+      // re-invoking todayDateKey() separately at each point could land on
+      // a different day if local midnight ticks over while that call is
+      // in flight, silently consuming one day's slot but refunding a
+      // different (untouched) day's counter instead. Same reasoning as
+      // the wake-up-call scheduler's single `todayDateStr` capture in
+      // index.ts.
+      const dayKey = todayDateKey();
+
+      if (!sendGuard.tryConsume(dayKey)) {
         return {
           success: false,
           error: "Daily SMS send limit has been reached — try again tomorrow.",
@@ -76,7 +86,7 @@ export function createSendSmsTool(
         // The consumed slot was for a send that never actually happened —
         // refund it so a transient Twilio failure doesn't burn real
         // quota and falsely trip the daily cap for the rest of the day.
-        sendGuard.release(todayDateKey());
+        sendGuard.release(dayKey);
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     },
