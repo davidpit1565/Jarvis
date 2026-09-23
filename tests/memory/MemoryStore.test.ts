@@ -184,6 +184,30 @@ describe("MemoryStore", () => {
       store.close();
     });
 
+    test("a resave that omits category/importance preserves the existing record's values instead of resetting to defaults", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.pref.editor", value: "vim", category: "preference", importance: 5 });
+
+      const record = store.save({ key: "user.pref.editor", value: "neovim" });
+
+      expect(record.value).toBe("neovim");
+      expect(record.category).toBe("preference");
+      expect(record.importance).toBe(5);
+      expect(store.getByKey("user.pref.editor")).toEqual(record);
+      store.close();
+    });
+
+    test("a resave with an explicit category/importance still overrides the existing record's values", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.pref.editor", value: "vim", category: "preference", importance: 5 });
+
+      const record = store.save({ key: "user.pref.editor", value: "vim", category: "fact", importance: 1 });
+
+      expect(record.category).toBe("fact");
+      expect(record.importance).toBe(1);
+      store.close();
+    });
+
     test("a pre-existing untyped row (no category/importance columns populated) defaults sensibly when read back", () => {
       const store = new MemoryStore(":memory:");
       // Simulate a Phase 1 row written before category/importance existed —
@@ -221,6 +245,17 @@ describe("MemoryStore", () => {
       const store = new MemoryStore(":memory:");
       const explicit = new Date(Date.now() + 60_000).toISOString();
       const record = store.save({ key: "session.topic", value: "x", category: "temporary", expiresAt: explicit });
+      expect(record.expiresAt).toBe(explicit);
+      store.close();
+    });
+
+    test("a resave that omits expiresAt preserves the existing record's expiry instead of recomputing it", () => {
+      const store = new MemoryStore(":memory:");
+      const explicit = new Date(Date.now() + 60_000).toISOString();
+      store.save({ key: "session.topic", value: "x", category: "temporary", expiresAt: explicit });
+
+      const record = store.save({ key: "session.topic", value: "y" });
+
       expect(record.expiresAt).toBe(explicit);
       store.close();
     });
