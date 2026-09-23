@@ -187,35 +187,68 @@ export class GmailClient {
     };
   }
 
+  private static decodeGmailBody(data: string): string {
+    return Buffer.from(data, "base64url").toString("utf8");
+  }
+
+  /**
+   * Depth-first search of the ENTIRE payload subtree for a part with the
+   * given mimeType, returning null (not "") when nothing matches so a
+   * genuinely empty body can still be told apart from "not found".
+   */
+  private findBodyByMimeType(
+    payload: { mimeType?: string; body?: { data?: string }; parts?: Array<{ mimeType?: string; body?: { data?: string }; parts?: unknown[] }> },
+    mimeType: string
+  ): string | null {
+    if (payload.mimeType === mimeType && payload.body?.data) {
+      return GmailClient.decodeGmailBody(payload.body.data);
+    }
+    if (payload.parts) {
+      for (const part of payload.parts) {
+        const found = this.findBodyByMimeType(part as typeof payload, mimeType);
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  }
+
+  /** Depth-first search for ANY part with decodable body data, regardless of mimeType — the last-resort fallback below. */
+  private findAnyBody(payload: {
+    body?: { data?: string };
+    parts?: Array<{ mimeType?: string; body?: { data?: string }; parts?: unknown[] }>;
+  }): string | null {
+    if (payload.body?.data) return GmailClient.decodeGmailBody(payload.body.data);
+    if (payload.parts) {
+      for (const part of payload.parts) {
+        const found = this.findAnyBody(part as typeof payload);
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  }
+
   /**
    * Extracts the best plain-text body out of a Gmail message payload,
-   * walking multipart parts depth-first and preferring `text/plain` over
-   * `text/html` (Gmail sends both for most real mail) — falls back to the
-   * top-level body if the message isn't multipart at all.
+   * searching the WHOLE payload subtree for a `text/plain` part before
+   * ever falling back to anything else (Gmail sends both `text/plain`
+   * and `text/html` for most real mail, sometimes with a `text/html`
+   * leaf appearing before the `text/plain` part in the same `parts`
+   * array — e.g. `multipart/mixed[ text/html, multipart/alternative[
+   * text/plain, text/html ] ]` — so stopping at the first non-matching
+   * leaf instead of searching the full subtree would return raw HTML
+   * markup even though the real plain-text part exists later in the
+   * same tree). Only once no `text/plain` part exists ANYWHERE does this
+   * fall back to whatever body is available at all (the top-level body
+   * if the message isn't multipart, or the first leaf part otherwise).
    */
   private extractPlainTextBody(payload: {
     mimeType?: string;
     body?: { data?: string };
     parts?: Array<{ mimeType?: string; body?: { data?: string }; parts?: unknown[] }>;
   }): string {
-    const decode = (data: string) => Buffer.from(data, "base64url").toString("utf8");
-
-    if (payload.mimeType === "text/plain" && payload.body?.data) {
-      return decode(payload.body.data);
-    }
-
-    if (payload.parts) {
-      const plainPart = payload.parts.find((p) => p.mimeType === "text/plain" && p.body?.data);
-      if (plainPart?.body?.data) return decode(plainPart.body.data);
-
-      for (const part of payload.parts) {
-        const nested = this.extractPlainTextBody(part as typeof payload);
-        if (nested) return nested;
-      }
-    }
-
-    if (payload.body?.data) return decode(payload.body.data);
-    return "";
+    const plainText = this.findBodyByMimeType(payload, "text/plain");
+    if (plainText !== null) return plainText;
+    return this.findAnyBody(payload) ?? "";
   }
 
   /** The full plain-text body of one message, given its id (from a search result). Searches every linked account for it unless `account` is given. */
