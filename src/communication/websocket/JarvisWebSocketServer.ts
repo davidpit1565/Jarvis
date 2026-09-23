@@ -881,8 +881,25 @@ export class JarvisWebSocketServer {
           }
 
           if (isUpgradeRequest && url.pathname === "/dashboard/audio-ws") {
-            if (!this.deps.audioLevelBroadcaster) {
+            const { audioLevelBroadcaster, webAuthnService } = this.deps;
+            if (!audioLevelBroadcaster) {
               return new Response("Not found", { status: 404 });
+            }
+            // Same "locked" check GET /dashboard itself uses (a few lines
+            // above) — this socket is that same locked dashboard's live
+            // waveform feed (real Twilio call audio levels, gated only by
+            // audioLevelBroadcaster's presence until now), so it must
+            // require the same session once any WebAuthn credential is
+            // registered. Without this, anyone who discovers the
+            // deterministic wss://<host>/dashboard/audio-ws URL could open
+            // it directly with no session at all and get a live signal of
+            // exactly when phone calls are active — the one piece of
+            // "dashboard" functionality that wasn't actually behind the
+            // lock screen. A normal browser upgrade from the loaded
+            // dashboard page already carries the session cookie, so this
+            // doesn't change anything for a logged-in session.
+            if (webAuthnService?.hasCredentials() && !this.hasValidSession(req)) {
+              return new Response("Unauthorized", { status: 401 });
             }
             return server.upgrade(req, { data: { kind: "audio-viewer" } })
               ? undefined
