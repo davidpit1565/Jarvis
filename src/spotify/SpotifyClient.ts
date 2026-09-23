@@ -1,5 +1,6 @@
 import type { SpotifyTokenStore } from "@/spotify/SpotifyTokenStore";
 import type { SpotifyPlaybackState, SpotifyPlaylist, SpotifyTrack } from "@/types/spotify";
+import { apiError } from "@/core/net/apiError";
 
 const SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
 const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
@@ -74,7 +75,7 @@ export class SpotifyClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Spotify OAuth code exchange failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Spotify OAuth code exchange failed", response);
     }
 
     const data = (await response.json()) as { access_token: string; refresh_token?: string; expires_in: number };
@@ -106,7 +107,7 @@ export class SpotifyClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Spotify OAuth token refresh failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Spotify OAuth token refresh failed", response);
     }
 
     const data = (await response.json()) as { access_token: string; expires_in: number };
@@ -158,7 +159,7 @@ export class SpotifyClient {
     }
 
     if (!response.ok) {
-      throw new Error(`Spotify API request failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Spotify API request failed", response);
     }
 
     const data = (await response.json()) as {
@@ -185,7 +186,7 @@ export class SpotifyClient {
     });
 
     if (!response.ok && response.status !== 204) {
-      throw new Error(`Spotify play failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Spotify play failed", response);
     }
   }
 
@@ -207,7 +208,7 @@ export class SpotifyClient {
     });
 
     if (!response.ok && response.status !== 204) {
-      throw new Error(`Spotify play failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Spotify play failed", response);
     }
   }
 
@@ -232,7 +233,7 @@ export class SpotifyClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Spotify list playlists failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Spotify list playlists failed", response);
     }
 
     const data = (await response.json()) as {
@@ -275,7 +276,7 @@ export class SpotifyClient {
     });
 
     if (!response.ok && response.status !== 204) {
-      throw new Error(`Spotify pause failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Spotify pause failed", response);
     }
   }
 
@@ -288,7 +289,7 @@ export class SpotifyClient {
     });
 
     if (!response.ok && response.status !== 204) {
-      throw new Error(`Spotify skip failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Spotify skip failed", response);
     }
   }
 
@@ -301,7 +302,7 @@ export class SpotifyClient {
     });
 
     if (!response.ok && response.status !== 204) {
-      throw new Error(`Spotify skip failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Spotify skip failed", response);
     }
   }
 
@@ -319,7 +320,7 @@ export class SpotifyClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Spotify search failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Spotify search failed", response);
     }
 
     const data = (await response.json()) as {

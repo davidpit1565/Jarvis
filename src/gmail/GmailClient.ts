@@ -1,6 +1,7 @@
 import type { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import type { EmailSummary } from "@/types/gmail";
 import { fetchWithRetry } from "@/core/net/fetchWithRetry";
+import { apiError } from "@/core/net/apiError";
 
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
@@ -75,7 +76,7 @@ export class GmailClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Google OAuth token refresh failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Google OAuth token refresh failed", response);
     }
 
     const data = (await response.json()) as { access_token: string; expires_in: number };
@@ -159,7 +160,7 @@ export class GmailClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Gmail message fetch failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Gmail message fetch failed", response);
     }
 
     return (await response.json()) as {
@@ -230,7 +231,7 @@ export class GmailClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Gmail message fetch failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Gmail message fetch failed", response);
     }
 
     const data = (await response.json()) as {
@@ -272,7 +273,7 @@ export class GmailClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Gmail search failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Gmail search failed", response);
     }
 
     const data = (await response.json()) as { messages?: Array<{ id: string }> };
@@ -320,7 +321,7 @@ export class GmailClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Gmail search failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Gmail search failed", response);
     }
 
     const data = (await response.json()) as { resultSizeEstimate?: number };
@@ -397,7 +398,7 @@ export class GmailClient {
     );
 
     if (!response.ok) {
-      throw new Error(`Gmail send failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Gmail send failed", response);
     }
 
     const data = (await response.json()) as { id: string };
@@ -452,7 +453,7 @@ export class GmailClient {
     );
 
     if (!response.ok) {
-      throw new Error(`Gmail reply failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Gmail reply failed", response);
     }
 
     const data = (await response.json()) as { id: string };

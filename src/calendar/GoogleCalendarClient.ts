@@ -1,5 +1,6 @@
 import type { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import type { CalendarEvent, CalendarEventDetail, CreateCalendarEventInput } from "@/types/calendar";
+import { apiError } from "@/core/net/apiError";
 
 const GOOGLE_OAUTH_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -127,7 +128,7 @@ export class GoogleCalendarClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Google OAuth code exchange failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Google OAuth code exchange failed", response);
     }
 
     const data = (await response.json()) as { access_token: string; refresh_token?: string; expires_in: number };
@@ -152,7 +153,7 @@ export class GoogleCalendarClient {
   private async fetchAccountEmail(accessToken: string): Promise<string> {
     const response = await fetch(GOOGLE_USERINFO_URL, { headers: { Authorization: `Bearer ${accessToken}` } });
     if (!response.ok) {
-      throw new Error(`Google userinfo request failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Google userinfo request failed", response);
     }
     const data = (await response.json()) as { email?: string };
     if (!data.email) {
@@ -204,7 +205,7 @@ export class GoogleCalendarClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Google OAuth token refresh failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Google OAuth token refresh failed", response);
     }
 
     const data = (await response.json()) as { access_token: string; expires_in: number };
@@ -282,7 +283,7 @@ export class GoogleCalendarClient {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!response.ok) {
-      throw new Error(`Google Calendar API request failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Google Calendar API request failed", response);
     }
     return (await response.json()) as RawGoogleEventDetail;
   }
@@ -305,7 +306,7 @@ export class GoogleCalendarClient {
 
     const response = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
     if (!response.ok) {
-      throw new Error(`Google Calendar API request failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Google Calendar API request failed", response);
     }
     const data = (await response.json()) as { items: RawGoogleEvent[] };
     return (data.items ?? []).map((item) => this.mapEvent(item, email));
@@ -410,7 +411,7 @@ export class GoogleCalendarClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Google Calendar event creation failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Google Calendar event creation failed", response);
     }
 
     const item = (await response.json()) as RawGoogleEvent;
@@ -450,7 +451,7 @@ export class GoogleCalendarClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Google Calendar event update failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Google Calendar event update failed", response);
     }
 
     const item = (await response.json()) as RawGoogleEvent;
@@ -471,7 +472,7 @@ export class GoogleCalendarClient {
     // deleted — both mean "the event isn't there anymore," which is what
     // the caller wanted, so 410 isn't treated as failure.
     if (!response.ok && response.status !== 410) {
-      throw new Error(`Google Calendar event deletion failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Google Calendar event deletion failed", response);
     }
   }
 }
