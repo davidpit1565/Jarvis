@@ -34,6 +34,36 @@ describe("TwilioOutboundCaller", () => {
     expect(body.get("Url")).toBe("https://example.com/voice/wakeup-connected");
   });
 
+  test("includes StatusCallback/StatusCallbackEvent when a status callback URL is given", async () => {
+    let capturedInit: RequestInit | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedInit = init;
+      return new Response(JSON.stringify({ sid: "CA123" }), { status: 201 });
+    }) as typeof fetch;
+
+    const caller = new TwilioOutboundCaller("ACxxx", "authtoken", "+15005550006");
+    await caller.placeCall("+15551234567", "https://example.com/voice/wakeup-connected", "https://example.com/voice/status");
+
+    const body = new URLSearchParams(capturedInit?.body as string);
+    expect(body.get("StatusCallback")).toBe("https://example.com/voice/status");
+    expect(body.get("StatusCallbackEvent")).toBe("completed");
+  });
+
+  test("omits StatusCallback when no status callback URL is given", async () => {
+    let capturedInit: RequestInit | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedInit = init;
+      return new Response(JSON.stringify({ sid: "CA123" }), { status: 201 });
+    }) as typeof fetch;
+
+    const caller = new TwilioOutboundCaller("ACxxx", "authtoken", "+15005550006");
+    await caller.placeCall("+15551234567", "https://example.com/voice/wakeup-connected");
+
+    const body = new URLSearchParams(capturedInit?.body as string);
+    expect(body.get("StatusCallback")).toBeNull();
+    expect(body.get("StatusCallbackEvent")).toBeNull();
+  });
+
   test("throws with Twilio's error detail on a non-2xx response, without leaking the auth token", async () => {
     global.fetch = (async () => new Response("bad request detail", { status: 400 })) as unknown as typeof fetch;
 

@@ -977,6 +977,13 @@ function main() {
       config.twilioFromNumber!
     );
     const wakeUpTwimlUrl = new URL("/voice/wakeup-connected", config.twilioPublicBaseUrl!).toString();
+    // Twilio only sends call-status webhooks for an API-placed call when
+    // StatusCallback is explicitly set on that call — unlike an inbound
+    // call, it's never inherited from the number's own Voice URL config.
+    // Without this, handleCallEnded() (wired to /voice/status) would never
+    // fire for a wake-up call, leaking its PhoneSession/turnCount entry in
+    // TwilioVoiceGateway for the life of the process.
+    const wakeUpStatusCallbackUrl = new URL("/voice/status", config.twilioPublicBaseUrl!).toString();
 
     // Same account/credentials as outboundCaller above — reuses the same
     // "outbound call" config group since SMS needs exactly the same
@@ -1026,7 +1033,7 @@ function main() {
 
         inFlightWakeUpCallIds.add(call.id);
         outboundCaller
-          .placeCall(config.ownerPhoneNumber!, wakeUpTwimlUrl)
+          .placeCall(config.ownerPhoneNumber!, wakeUpTwimlUrl, wakeUpStatusCallbackUrl)
           .then(() => {
             wakeUpCallStore.markTriggered(call.id, todayDateStr);
             activityLog.record(`Placed wake-up call${call.label ? ` (${call.label})` : ""}`);
