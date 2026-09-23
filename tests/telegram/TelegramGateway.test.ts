@@ -224,6 +224,20 @@ describe("TelegramGateway send retry safety", () => {
     await gateway.sendMessage("123", "hi");
     expect(fetchCalls).toBe(2);
   });
+
+  test("does not leak Telegram's raw response body into the thrown error", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ ok: false, error_code: 400, description: "Bad Request: chat not found" }), {
+        status: 400,
+      })) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await expect(gateway.sendMessage("123", "hi")).rejects.toThrow(/^Telegram sendMessage failed \(400\)$/);
+  });
 });
 
 describe("TelegramGateway.sendDocument", () => {
@@ -267,6 +281,20 @@ describe("TelegramGateway.sendDocument", () => {
     }));
 
     await expect(gateway.sendDocument("123", "aGVsbG8=", "notes.txt")).rejects.toThrow("500");
+  });
+
+  test("does not leak Telegram's raw response body into the thrown error", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ ok: false, error_code: 400, description: "Bad Request: chat not found" }), {
+        status: 400,
+      })) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await expect(gateway.sendDocument("123", "aGVsbG8=", "notes.txt")).rejects.toThrow(/^Telegram sendDocument failed \(400\)$/);
   });
 });
 
@@ -319,6 +347,22 @@ describe("TelegramGateway.sendPhoto", () => {
     }));
 
     await expect(gateway.sendPhoto("123", "https://image.pollinations.ai/prompt/robot")).rejects.toThrow("500");
+  });
+
+  test("does not leak Telegram's raw response body into the thrown error", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ ok: false, error_code: 400, description: "Bad Request: chat not found" }), {
+        status: 400,
+      })) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await expect(gateway.sendPhoto("123", "https://image.pollinations.ai/prompt/robot")).rejects.toThrow(
+      /^Telegram sendPhoto failed \(400\)$/
+    );
   });
 });
 
