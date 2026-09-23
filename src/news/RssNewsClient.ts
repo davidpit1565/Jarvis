@@ -12,12 +12,16 @@ const LINK_PATTERN = /<link\b[^>]*>([\s\S]*?)<\/link>/i;
 
 function decodeXmlText(raw: string): string {
   const withoutCdata = raw.replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, "$1");
+  // &amp; must decode LAST, not first: a doubly-escaped feed's "&amp;lt;"
+  // is meant to display as the literal text "&lt;" (an ampersand-escaped
+  // "lt;"), not as "<". Decoding &amp; first would turn "&amp;lt;" into
+  // "&lt;" and then the &lt; pass would wrongly collapse that into "<".
   return withoutCdata
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
     .trim();
 }
 
