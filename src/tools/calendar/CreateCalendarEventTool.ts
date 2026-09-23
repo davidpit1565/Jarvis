@@ -95,17 +95,31 @@ export function createCreateCalendarEventTool(
         // one was given explicitly; otherwise checked across every linked
         // account, which is the more useful warning anyway (a duplicate
         // in another linked account is still worth flagging).
-        const conflicts = await calendarClient.listEventsInRange(input.start, input.end, input.account).catch(() => []);
-        // Same reasoning as conflicts above: a near-identical existing
-        // event is a warning, never a gate — SAFE_ACTION tools shouldn't
-        // second-guess the user by refusing to create what they asked
-        // for. Checked against `conflicts` (already fetched for the
-        // overlap check) rather than a second API call — a same-title
-        // duplicate within a few minutes of this start time necessarily
-        // overlaps this event's own [start, end) range too.
+        //
+        // Widened past [input.start, input.end) to also reach a short
+        // existing event that ends before input.start but still starts
+        // within the duplicate window — listEventsInRange's timeMin is an
+        // exclusive lower bound on an event's END time (Google Calendar
+        // API semantics), so a 2-minute "Standup" ending just before a
+        // new "Standup" starts 3 minutes later would otherwise never be
+        // returned at all, even though it's exactly the same-title,
+        // near-identical-start-time case this dedup check exists for.
         const inputStartMs = Date.parse(input.start);
+        const widenedRangeStart = new Date(inputStartMs - DUPLICATE_START_WINDOW_MS).toISOString();
+        const nearby = await calendarClient.listEventsInRange(widenedRangeStart, input.end, input.account).catch(() => []);
+
+        // `conflicts` means a genuine time overlap — computed client-side
+        // against the real [input.start, input.end) range rather than
+        // just returning `nearby` as-is, since `nearby` now deliberately
+        // includes non-overlapping events pulled in for duplicate
+        // detection only.
+        const inputEndMs = Date.parse(input.end);
+        const conflicts = nearby.filter(
+          (existing) => Date.parse(existing.start) < inputEndMs && Date.parse(existing.end) > inputStartMs
+        );
+
         const duplicate =
-          conflicts.find(
+          nearby.find(
             (existing) =>
               normalizeTitle(existing.summary) === normalizeTitle(input.summary) &&
               Math.abs(Date.parse(existing.start) - inputStartMs) <= DUPLICATE_START_WINDOW_MS
