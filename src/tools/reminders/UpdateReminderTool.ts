@@ -79,6 +79,26 @@ export function createUpdateReminderTool(reminderStore: ReminderStore): LocalToo
         return { success: false, error: `recurrence must be one of: ${VALID_RECURRENCES.join(", ")}, or null` };
       }
 
+      // Same invariant CreateReminderTool enforces at creation time: a
+      // recurring reminder needs a dueAt to recur from — without this,
+      // an update could leave (or put) a reminder in a recurrence-set/
+      // dueAt-null state that CreateReminderTool would have refused
+      // outright. ReminderStore.complete() silently treats that
+      // combination as a one-off (its `existing.recurrence &&
+      // existing.dueAt` guard), so the reminder would just stop
+      // recurring with no error and no next occurrence, even though its
+      // own `recurrence` field still claims otherwise.
+      if (input.dueAt !== undefined || input.recurrence !== undefined) {
+        const existing = reminderStore.get(input.id);
+        if (existing) {
+          const resultingDueAt = input.dueAt !== undefined ? input.dueAt : existing.dueAt;
+          const resultingRecurrence = input.recurrence !== undefined ? input.recurrence : existing.recurrence;
+          if (resultingRecurrence && !resultingDueAt) {
+            return { success: false, error: "recurrence requires dueAt" };
+          }
+        }
+      }
+
       const updated = reminderStore.update(input.id, {
         text: input.text,
         dueAt: input.dueAt,
