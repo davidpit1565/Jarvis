@@ -1281,7 +1281,7 @@ function main() {
   // push suppressed by quiet hours is queued here (not dropped) and
   // flushed by the first tick once the window ends.
   const inFlightAutomationRuleIds = new Set<string>();
-  const pendingQuietAutomationPushes: string[] = [];
+  const pendingQuietAutomationPushes: Array<{ ruleId: string; message: string }> = [];
   const automationRuleInterval = setInterval(() => {
     schedulerHealthTracker.tick("automationRules");
     const now = new Date();
@@ -1290,9 +1290,13 @@ function main() {
     const quiet = isSuppressibleByQuietHours("automation_rule_result") && isQuietHours(nowTimeOfDay, quietHoursWindow);
 
     if (!quiet && pendingQuietAutomationPushes.length > 0 && telegramGateway && config.telegramOwnerChatId) {
-      for (const queuedMessage of pendingQuietAutomationPushes.splice(0)) {
-        if (notificationDedup.shouldSend(`automation-push:${queuedMessage}`)) {
-          telegramGateway.sendMessage(config.telegramOwnerChatId, queuedMessage).catch(() => {
+      for (const queued of pendingQuietAutomationPushes.splice(0)) {
+        // Keyed by ruleId, not just message text — two unrelated rules can
+        // easily produce the same reply text (e.g. both say "Nothing new."),
+        // and content-only keys would let one rule's push silently suppress
+        // another's within the same window.
+        if (notificationDedup.shouldSend(`automation-push:${queued.ruleId}:${queued.message}`)) {
+          telegramGateway.sendMessage(config.telegramOwnerChatId, queued.message).catch(() => {
             // Best-effort push — already logged when the rule ran.
           });
         }
@@ -1310,8 +1314,8 @@ function main() {
           activityLog.record(`Automation ran: ${rule.instruction.slice(0, 100)}`);
           if (telegramGateway && config.telegramOwnerChatId) {
             if (isSuppressibleByQuietHours("automation_rule_result") && isQuietHours(formatTimeOfDay(new Date(), config.timezone), quietHoursWindow)) {
-              pendingQuietAutomationPushes.push(reply);
-            } else if (notificationDedup.shouldSend(`automation-push:${reply}`)) {
+              pendingQuietAutomationPushes.push({ ruleId: rule.id, message: reply });
+            } else if (notificationDedup.shouldSend(`automation-push:${rule.id}:${reply}`)) {
               telegramGateway!.sendMessage(config.telegramOwnerChatId!, reply).catch(() => {
                 // Best-effort push — the rule still ran and is logged above either way.
               });
