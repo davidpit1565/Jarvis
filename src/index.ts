@@ -483,6 +483,7 @@ function main() {
     "LIST_MAC_REMINDERS",
     "CREATE_MAC_REMINDER",
     "COMPLETE_MAC_REMINDER",
+    "WRITE_FILE",
   ];
   function grantPrimaryDeviceTools(deviceId: string): void {
     for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {
