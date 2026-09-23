@@ -17,4 +17,6 @@ export interface CreateReminderInput {
   text: string;
   dueAt?: string | null;
   recurrence?: ReminderRecurrence | null;
+  /** Defaults to false (a normal new reminder). Set true only to restore a previously-completed reminder (e.g. undoing its deletion) without going through complete()'s recurrence-advance side effect. */
+  completed?: boolean;
 }

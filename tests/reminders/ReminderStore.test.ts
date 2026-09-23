@@ -13,6 +13,21 @@ describe("ReminderStore", () => {
     store.close();
   });
 
+  test("creates an already-completed reminder when restoring prior state, without spawning a recurrence occurrence", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({
+      text: "Take medication",
+      dueAt: "2026-01-15T08:00:00.000Z",
+      recurrence: "daily",
+      completed: true,
+    });
+
+    const fetched = store.get(record.id);
+    expect(fetched?.completed).toBe(true);
+    expect(store.list(true)).toHaveLength(1);
+    store.close();
+  });
+
   test("creates a dated reminder", () => {
     const store = new ReminderStore(":memory:");
     const dueAt = "2026-09-19T18:00:00.000Z";

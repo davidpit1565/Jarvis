@@ -217,6 +217,24 @@ describe("DELETE_REMINDER tool", () => {
       text: "Buy milk",
       dueAt: "2030-09-19T18:00:00.000Z",
       recurrence: "daily",
+      completed: false,
+    });
+  });
+
+  test("records completed: true when deleting an already-completed reminder", async () => {
+    const record = store.create({ text: "Buy milk", dueAt: "2030-09-19T18:00:00.000Z" });
+    store.complete(record.id);
+    const undoStore = new UndoStore();
+    const tool = createDeleteReminderTool(store, undoStore);
+
+    await tool.execute({ id: record.id }, context);
+
+    expect(undoStore.takeLast()).toEqual({
+      type: "reminder_deleted",
+      text: "Buy milk",
+      dueAt: "2030-09-19T18:00:00.000Z",
+      recurrence: null,
+      completed: true,
     });
   });
 

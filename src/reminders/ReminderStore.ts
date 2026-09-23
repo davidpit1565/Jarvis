@@ -130,7 +130,7 @@ export class ReminderStore {
       id: randomUUID(),
       text: input.text,
       dueAt: input.dueAt ?? null,
-      completed: false,
+      completed: input.completed ?? false,
       createdAt: new Date().toISOString(),
       recurrence: input.recurrence ?? null,
       notifiedAt: null,
@@ -138,9 +138,9 @@ export class ReminderStore {
 
     this.db
       .query(
-        `INSERT INTO reminders (id, text, due_at, completed, created_at, recurrence, notified_at) VALUES (?, ?, ?, 0, ?, ?, NULL)`
+        `INSERT INTO reminders (id, text, due_at, completed, created_at, recurrence, notified_at) VALUES (?, ?, ?, ?, ?, ?, NULL)`
       )
-      .run(record.id, record.text, record.dueAt, record.createdAt, record.recurrence);
+      .run(record.id, record.text, record.dueAt, record.completed ? 1 : 0, record.createdAt, record.recurrence);
 
     return record;
   }
