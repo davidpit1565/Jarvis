@@ -75,6 +75,18 @@ describe("PUBLISH_REEL tool", () => {
     expect(JSON.parse(capturedBody as string)).toEqual({ file: "ep1.mp4", caption: "hi" });
   });
 
+  test("omits caption entirely when not provided, instead of overriding the studio's own caption with an empty string", async () => {
+    let capturedBody: unknown;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const result = await createPublishReelTool(makeClient()).execute({ file: "ep1.mp4" }, context);
+    expect(result.success).toBe(true);
+    expect(JSON.parse(capturedBody as string)).toEqual({ file: "ep1.mp4" });
+  });
+
   test("returns a failure result when the studio reports ok: false", async () => {
     global.fetch = (async () =>
       new Response(JSON.stringify({ ok: false, reason: "Instagram rejected the upload" }), { status: 200 })) as unknown as typeof fetch;

@@ -30,6 +30,16 @@ describe("StudioClient.listReels", () => {
     await expect(makeClient().listReels()).rejects.toThrow(/401/);
   });
 
+  test("does not leak the raw response body into the thrown error", async () => {
+    global.fetch = (async () => new Response("internal upstream detail", { status: 500 })) as unknown as typeof fetch;
+    let error: Error | undefined;
+    await makeClient().listReels().catch((e) => {
+      error = e as Error;
+    });
+    expect(error?.message).not.toContain("internal upstream detail");
+    expect(error?.message).toContain("500");
+  });
+
   test("throws when the studio reports ok: false", async () => {
     global.fetch = (async () =>
       new Response(JSON.stringify({ ok: false, reason: "no reels dir" }), { status: 200 })) as unknown as typeof fetch;
@@ -178,6 +188,16 @@ describe("StudioClient.getInstagramStats", () => {
     global.fetch = (async () => new Response("locked", { status: 401 })) as unknown as typeof fetch;
     await expect(makeClient().getInstagramStats()).rejects.toThrow(/401/);
   });
+
+  test("does not leak the raw response body into the thrown error", async () => {
+    global.fetch = (async () => new Response("internal upstream detail", { status: 500 })) as unknown as typeof fetch;
+    let error: Error | undefined;
+    await makeClient().getInstagramStats().catch((e) => {
+      error = e as Error;
+    });
+    expect(error?.message).not.toContain("internal upstream detail");
+    expect(error?.message).toContain("500");
+  });
 });
 
 describe("StudioClient.publish", () => {
@@ -200,5 +220,16 @@ describe("StudioClient.publish", () => {
     global.fetch = (async () => new Response("internal error", { status: 500 })) as unknown as typeof fetch;
     const result = await makeClient().publish("ep1.mp4", "caption");
     expect(result.ok).toBe(false);
+  });
+
+  test("omits the caption field entirely when not provided, instead of sending an empty string that would override the studio's own caption", async () => {
+    let capturedBody: unknown;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedBody = init?.body;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await makeClient().publish("ep1.mp4");
+    expect(JSON.parse(capturedBody as string)).toEqual({ file: "ep1.mp4" });
   });
 });

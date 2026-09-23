@@ -1,3 +1,4 @@
+import { apiError } from "@/core/net/apiError";
 import type { StudioInstagramStats, StudioPublishResult, StudioReel } from "@/types/studio";
 
 /** Most recent posts/reels kept when reporting Instagram stats or the reel list — see getInstagramStats()'s doc comment for why this exists. */
@@ -43,7 +44,7 @@ export class StudioClient {
   async listReels(): Promise<StudioReel[]> {
     const response = await fetch(new URL("/api/jarvis/reels", this.baseUrl), { headers: this.headers() });
     if (!response.ok) {
-      throw new Error(`Studio reels request failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Studio reels request failed", response);
     }
     const data = (await response.json()) as { ok: boolean; reason?: string; reels?: StudioReel[] };
     if (!data.ok) throw new Error(data.reason ?? "Studio reels request failed");
@@ -76,7 +77,7 @@ export class StudioClient {
   async getInstagramStats(): Promise<StudioInstagramStats> {
     const response = await fetch(new URL("/api/jarvis/instagram", this.baseUrl), { headers: this.headers() });
     if (!response.ok) {
-      throw new Error(`Studio Instagram request failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Studio Instagram request failed", response);
     }
     const raw = (await response.json()) as StudioInstagramStats;
     if (!raw.connected) return raw;
@@ -108,11 +109,11 @@ export class StudioClient {
    * responsible for having already confirmed with the user before this
    * is invoked, the same way the studio's own button asks first.
    */
-  async publish(file: string, caption: string): Promise<StudioPublishResult> {
+  async publish(file: string, caption?: string): Promise<StudioPublishResult> {
     const response = await fetch(new URL("/api/jarvis/publish", this.baseUrl), {
       method: "POST",
       headers: { ...this.headers(), "Content-Type": "application/json" },
-      body: JSON.stringify({ file, caption }),
+      body: JSON.stringify(caption === undefined ? { file } : { file, caption }),
     });
     return (await response.json().catch(() => ({ ok: false, reason: `Unexpected response (${response.status})` }))) as StudioPublishResult;
   }

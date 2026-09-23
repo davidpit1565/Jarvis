@@ -45,7 +45,7 @@ export function createPublishReelTool(studioClient: StudioClient): LocalTool<Pub
       }
 
       try {
-        const result = await studioClient.publish(input.file, input.caption ?? "");
+        const result = await studioClient.publish(input.file, input.caption);
         if (!result.ok) {
           return { success: false, error: result.reason ?? "Publish failed" };
         }
