@@ -21,6 +21,17 @@ describe("ConversationHistoryStore", () => {
     store.close();
   });
 
+  test("a literal underscore in the search query is not treated as a single-character LIKE wildcard", () => {
+    const store = new ConversationHistoryStore(":memory:");
+    store.record("user", "my wifi_password is on the fridge");
+    store.record("user", "my wifi.password is different"); // would wrongly match "wifi_password" as a LIKE pattern
+
+    const results = store.search("wifi_password");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.content).toContain("fridge");
+    store.close();
+  });
+
   test("returns no results when nothing matches", () => {
     const store = new ConversationHistoryStore(":memory:");
     store.record("user", "hello");
