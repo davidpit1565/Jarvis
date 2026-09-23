@@ -152,6 +152,108 @@ describe("Pairing approval over HTTP", () => {
     ws.close();
   });
 
+  test("a device cannot self-escalate to primary by reconnecting and claiming requestedRole later, without fresh human approval", async () => {
+    // Real gap this closes: role assignment is documented as "a Core-side
+    // administrative decision, never something a device can trigger on
+    // its own by claiming a role in its registration payload"
+    // (DeviceRegistry.setRole's own doc comment) — but a previously-paired
+    // device presenting only its own already-issued credential (no new
+    // human approval) used to be able to get "primary" auto-granted just
+    // by reconnecting with a fresh device.register claiming
+    // requestedRole: "primary", since updateRegistrationMetadata()
+    // refreshes requestedRole from the live payload and the authenticated-
+    // reconnect branch used to call maybeAssignRequestedRole() right after.
+    const { handle, port, deviceRegistry } = setupServer();
+    activeHandle = handle;
+
+    const deviceId = "test-imac-no-role";
+    const ws1 = new WebSocket(`ws://localhost:${port}`);
+
+    const pairingCode = await new Promise<string>((resolve, reject) => {
+      ws1.onopen = () => {
+        ws1.send(
+          JSON.stringify({
+            requestId: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            deviceId,
+            type: "device.register",
+            payload: {
+              deviceName: "Test iMac",
+              deviceType: "mac",
+              platform: "macos",
+              agentVersion: "0.1.0",
+              protocolVersion: "1",
+              capabilities: [],
+              // Deliberately no requestedRole at first pairing.
+            },
+          })
+        );
+      };
+      ws1.onmessage = (event) => {
+        const message = JSON.parse(event.data as string);
+        if (message.payload?.command === "pairing.pending") resolve(message.payload.args.code);
+      };
+      ws1.onerror = () => reject(new Error("WebSocket error"));
+      setTimeout(() => reject(new Error("Timed out waiting for pairing.pending")), 2000);
+    });
+
+    const credentialPromise = new Promise<string>((resolve, reject) => {
+      ws1.onmessage = (event) => {
+        const message = JSON.parse(event.data as string);
+        if (message.payload?.command === "pairing.approved") resolve(message.payload.args.credential);
+      };
+      setTimeout(() => reject(new Error("Timed out waiting for pairing.approved")), 2000);
+    });
+
+    const httpResponse = await fetch(`http://localhost:${port}/pairing/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId, code: pairingCode }),
+    });
+    expect(httpResponse.status).toBe(200);
+    const credential = await credentialPromise;
+    ws1.close();
+
+    expect(deviceRegistry.getDevice(deviceId)?.role).toBeNull();
+
+    // Reconnect using the already-issued credential — a plain reconnect,
+    // no human involved — but this time claim requestedRole: "primary".
+    const ws2 = new WebSocket(`ws://localhost:${port}`);
+    await new Promise<void>((resolve, reject) => {
+      ws2.onopen = () => {
+        ws2.send(
+          JSON.stringify({
+            requestId: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            deviceId,
+            type: "device.register",
+            payload: {
+              deviceName: "Test iMac",
+              deviceType: "mac",
+              platform: "macos",
+              agentVersion: "0.1.0",
+              protocolVersion: "1",
+              capabilities: [],
+              credential,
+              requestedRole: "primary",
+            },
+          })
+        );
+      };
+      ws2.onmessage = (event) => {
+        const message = JSON.parse(event.data as string);
+        if (message.payload?.command === "pairing.approved") resolve();
+      };
+      ws2.onerror = () => reject(new Error("WebSocket error"));
+      setTimeout(() => reject(new Error("Timed out waiting for pairing.approved")), 2000);
+    });
+
+    expect(deviceRegistry.getDevice(deviceId)?.role).toBeNull();
+    expect(deviceRegistry.getPrimaryDevice()).toBeUndefined();
+
+    ws2.close();
+  });
+
   test("approving a device grants it exactly the configured tool list, scoped to that device only", () => {
     // Direct user decision: broader "control the computer" tools are
     // wanted, but must never be usable until the human has explicitly

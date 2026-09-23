@@ -1234,7 +1234,23 @@ export class JarvisWebSocketServer {
     ws.data.connection = connection;
     deviceConnectionManager.registerConnection(deviceId, connection);
     deviceRegistry.updateStatus(deviceId, "online");
-    this.maybeAssignRequestedRole(deviceId);
+    // Deliberately NOT calling maybeAssignRequestedRole() here: this
+    // branch is reached purely by presenting an already-issued
+    // credential, with zero human decision involved, on EVERY
+    // reconnect — and updateRegistrationMetadata() above just refreshed
+    // `requestedRole` from this same live, device-controlled payload. A
+    // previously-paired but non-primary device could otherwise simply
+    // reconnect claiming `requestedRole: "primary"` and self-grant the
+    // role (and its standing tool grants — see grantPrimaryDeviceTools
+    // in index.ts) with no fresh approval at all, contradicting
+    // DeviceRegistry.setRole's own documented invariant that role
+    // assignment is "a Core-side administrative decision, never
+    // something a device can trigger on its own." approveDevice() —
+    // the one human-driven pairing-approval path — remains the sole
+    // place a role is ever granted. A device's role, once granted, is
+    // already re-derived from persisted state at startup (see index.ts's
+    // `for (const device of deviceRegistry.listDevices())` loop), so
+    // nothing here needs to re-run that on a plain reconnect anyway.
     this.send(ws, deviceId, "device.command", { command: "pairing.approved" });
   }
 
