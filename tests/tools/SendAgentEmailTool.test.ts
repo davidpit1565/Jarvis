@@ -84,4 +84,16 @@ describe("SEND_AGENT_EMAIL tool", () => {
 
     expect(guard.remaining(fixedDateKey())).toBe(1);
   });
+
+  test("refunds the consumed slot when the AgentMail API call itself fails, so a transient failure doesn't burn quota", async () => {
+    global.fetch = (async () => new Response("insufficient scope", { status: 403 })) as unknown as typeof fetch;
+
+    const guard = new AgentMailSendGuard(1);
+    const tool = createSendAgentEmailTool(makeClient(), guard, fixedDateKey);
+
+    const result = await tool.execute({ to: "bob@example.com", subject: "Hi", body: "Hello" }, context);
+
+    expect(result.success).toBe(false);
+    expect(guard.remaining(fixedDateKey())).toBe(1);
+  });
 });

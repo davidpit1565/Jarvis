@@ -32,4 +32,19 @@ describe("AgentMailSendGuard", () => {
     guard.tryConsume("2026-01-01");
     expect(guard.remaining("2026-01-01")).toBe(0);
   });
+
+  test("release() refunds a consumed slot, so a failed send doesn't burn quota", () => {
+    const guard = new AgentMailSendGuard(1);
+
+    expect(guard.tryConsume("2026-01-01")).toBe(true);
+    guard.release("2026-01-01");
+    expect(guard.tryConsume("2026-01-01")).toBe(true);
+  });
+
+  test("release() is a no-op once today's count is already 0", () => {
+    const guard = new AgentMailSendGuard(1);
+
+    guard.release("2026-01-01");
+    expect(guard.remaining("2026-01-01")).toBe(1);
+  });
 });
