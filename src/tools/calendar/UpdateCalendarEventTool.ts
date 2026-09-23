@@ -48,7 +48,7 @@ export function createUpdateCalendarEventTool(
         summary: { type: "string", description: "New title. Omit to leave unchanged." },
         start: { type: "string", description: "New ISO 8601 start timestamp. Omit to leave unchanged." },
         end: { type: "string", description: "New ISO 8601 end timestamp. Omit to leave unchanged." },
-        location: { type: "string", description: "New location, or null to clear it. Omit to leave unchanged." },
+        location: { type: ["string", "null"], description: "New location, or null to clear it. Omit to leave unchanged." },
         account: {
           type: "string",
           description:

@@ -45,10 +45,13 @@ export function createUpdateReminderTool(reminderStore: ReminderStore): LocalToo
       properties: {
         id: { type: "string", description: "The reminder's id." },
         text: { type: "string", description: "New text. Omit to leave unchanged." },
-        dueAt: { type: "string", description: "New ISO 8601 due timestamp, or null to clear it. Omit to leave unchanged." },
+        dueAt: {
+          type: ["string", "null"],
+          description: "New ISO 8601 due timestamp, or null to clear it. Omit to leave unchanged.",
+        },
         recurrence: {
-          type: "string",
-          enum: VALID_RECURRENCES,
+          type: ["string", "null"],
+          enum: [...VALID_RECURRENCES, null],
           description: 'New recurrence ("daily"/"weekly"), or null to make it a one-off. Omit to leave unchanged.',
         },
       },
