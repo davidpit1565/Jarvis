@@ -140,6 +140,57 @@ describe("device.capabilities (capability discovery / permission status)", () =>
     expect(deviceRegistry.getDevice(deviceId)?.permissions).toEqual({ accessibility: "granted" });
   });
 
+  test("a device cannot update a different device's capabilities by declaring its deviceId in the message", async () => {
+    // Device ids aren't secret (logged, shown in pairing UI, echoed back
+    // in device.command acks) — a message's own deviceId field must never
+    // be trusted over the identity this specific socket actually
+    // authenticated as during device.register/pairing.
+    const { handle, port, deviceRegistry } = setupServer();
+    activeHandle = handle;
+
+    const deviceA = "capabilities-device-a";
+    const deviceB = "capabilities-device-b";
+    const wsA = await registerAndApprove(port!, deviceA);
+    activeSocket = wsA;
+    const wsB = await registerAndApprove(port!, deviceB);
+
+    wsB.send(
+      JSON.stringify({
+        requestId: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        deviceId: deviceB,
+        type: "device.capabilities",
+        payload: { permissions: { accessibility: "granted" } },
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(deviceRegistry.getDevice(deviceB)?.permissions).toEqual({ accessibility: "granted" });
+
+    const errors: unknown[] = [];
+    wsA.onmessage = (event) => {
+      const message = JSON.parse(event.data as string);
+      if (message.type === "error") errors.push(message);
+    };
+
+    // wsA authenticated as deviceA, but declares deviceB's id here.
+    wsA.send(
+      JSON.stringify({
+        requestId: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        deviceId: deviceB,
+        type: "device.capabilities",
+        payload: { permissions: { accessibility: "denied", microphone: "denied" } },
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(errors.length).toBeGreaterThan(0);
+    // deviceB's real capabilities must be untouched by deviceA's socket.
+    expect(deviceRegistry.getDevice(deviceB)?.permissions).toEqual({ accessibility: "granted" });
+
+    wsB.close();
+  });
+
   test("a device.capabilities message for an unregistered deviceId is ignored, not an error", async () => {
     const { handle, port } = setupServer();
     activeHandle = handle;

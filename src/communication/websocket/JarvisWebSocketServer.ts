@@ -1121,6 +1121,25 @@ export class JarvisWebSocketServer {
 
     const message = result.message;
 
+    // Every message type below (except device.register, which is how a
+    // socket establishes its identity in the first place) carries its own
+    // self-declared `deviceId` straight from the client's JSON body —
+    // never verified against the identity this specific socket actually
+    // authenticated as during registration/pairing. Without this check, a
+    // legitimately-paired device A could send device.status/
+    // device.capabilities/voice.transcript/tool.result claiming to be a
+    // different device B (device ids aren't secret — they're logged, shown
+    // in pairing UI, echoed back in device.command acks), and Core would
+    // silently act on it as if it came from B: flipping B's online status,
+    // corrupting B's stored capability map, or injecting a voice command
+    // under B's identity. Same "trust a device-controlled field as if it
+    // were the Core-verified identity" shape as the device-role-
+    // self-escalation fix.
+    if (message.type !== "device.register" && ws.data.deviceId && message.deviceId && message.deviceId !== ws.data.deviceId) {
+      ws.send(JSON.stringify({ type: "error", reason: "deviceId does not match the authenticated connection" }));
+      return;
+    }
+
     switch (message.type) {
       case "device.register":
         this.handleRegister(ws, message);
