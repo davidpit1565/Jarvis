@@ -47,7 +47,15 @@ export function createDeleteMemoryTool(memoryStore: MemoryStore, undoStore?: Und
         return { success: false, error: `No saved fact found with key: ${input.key}` };
       }
       if (factBeforeDelete) {
-        undoStore?.record({ type: "memory_deleted", key: factBeforeDelete.key, value: factBeforeDelete.value });
+        undoStore?.record({
+          type: "memory_deleted",
+          key: factBeforeDelete.key,
+          value: factBeforeDelete.value,
+          category: factBeforeDelete.category,
+          importance: factBeforeDelete.importance,
+          expiresAt: factBeforeDelete.expiresAt,
+          source: factBeforeDelete.source,
+        });
       }
       return { success: true, data: { key: input.key } };
     },

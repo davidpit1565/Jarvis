@@ -67,7 +67,14 @@ export function createUndoLastActionTool(
         }
         if (action.type === "memory_deleted") {
           if (!memoryStore) return { success: false, error: "Memory isn't available; can't undo this" };
-          memoryStore.save({ key: action.key, value: action.value });
+          memoryStore.save({
+            key: action.key,
+            value: action.value,
+            category: action.category,
+            importance: action.importance,
+            expiresAt: action.expiresAt,
+            source: action.source,
+          });
           return { success: true, data: { undone: action.type, key: action.key } };
         }
         return { success: false, error: `Don't know how to undo action type: ${(action as { type: string }).type}` };

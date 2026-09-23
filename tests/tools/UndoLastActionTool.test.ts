@@ -188,7 +188,15 @@ describe("UNDO_LAST_ACTION tool", () => {
   test("restores a just-deleted memory fact", async () => {
     const memoryStore = new MemoryStore(":memory:");
     const undoStore = new UndoStore();
-    undoStore.record({ type: "memory_deleted", key: "user.oldJob", value: "Acme Corp" });
+    undoStore.record({
+      type: "memory_deleted",
+      key: "user.oldJob",
+      value: "Acme Corp",
+      category: "fact",
+      importance: 3,
+      expiresAt: null,
+      source: "USER_STATED",
+    });
     const tool = createUndoLastActionTool(undoStore, undefined, undefined, memoryStore);
 
     const result = await tool.execute({}, context);
@@ -198,9 +206,44 @@ describe("UNDO_LAST_ACTION tool", () => {
     memoryStore.close();
   });
 
+  test("restores a deleted memory fact's category/importance/expiry/trust exactly, not with fresh defaults", async () => {
+    const memoryStore = new MemoryStore(":memory:");
+    const undoStore = new UndoStore();
+    undoStore.record({
+      type: "memory_deleted",
+      key: "user.tempNote",
+      value: "leaving early Friday",
+      category: "temporary",
+      importance: 1,
+      expiresAt: "2026-01-01T00:00:00.000Z",
+      source: "MODEL_INFERRED",
+    });
+    const tool = createUndoLastActionTool(undoStore, undefined, undefined, memoryStore);
+
+    const result = await tool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const restored = memoryStore.getByKey("user.tempNote");
+    expect(restored).toMatchObject({
+      category: "temporary",
+      importance: 1,
+      expiresAt: "2026-01-01T00:00:00.000Z",
+      source: "MODEL_INFERRED",
+    });
+    memoryStore.close();
+  });
+
   test("fails to undo a memory deletion when no memoryStore was given", async () => {
     const undoStore = new UndoStore();
-    undoStore.record({ type: "memory_deleted", key: "user.oldJob", value: "Acme Corp" });
+    undoStore.record({
+      type: "memory_deleted",
+      key: "user.oldJob",
+      value: "Acme Corp",
+      category: "fact",
+      importance: 3,
+      expiresAt: null,
+      source: "USER_STATED",
+    });
     const tool = createUndoLastActionTool(undoStore);
 
     const result = await tool.execute({}, context);
