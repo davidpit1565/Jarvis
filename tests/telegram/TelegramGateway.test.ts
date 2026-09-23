@@ -73,6 +73,46 @@ describe("TelegramGateway.handleUpdate", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("replies with a graceful not-yet-supported message for a photo, instead of staying silent", async () => {
+    const { calls } = stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, photo: [{ file_id: "abc" }] } });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.chatId).toBe("123");
+    expect(calls[0]?.text).toMatch(/just text for now/i);
+  });
+
+  test("replies with a graceful not-yet-supported message for a voice note", async () => {
+    const { calls } = stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, voice: { file_id: "abc" } } });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.text).toMatch(/voice notes/i);
+  });
+
+  test("does not reply to a photo/voice message from a disallowed chat", async () => {
+    const { calls } = stubSendMessage();
+    const gateway = new TelegramGateway(
+      "bot-token",
+      () => ({ orchestrator: makeStubOrchestrator(async () => "unused"), userId: "local-user" }),
+      ["999"]
+    );
+
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, photo: [{ file_id: "abc" }] } });
+
+    expect(calls).toHaveLength(0);
+  });
+
   test("reuses the same session/conversation across multiple messages from the same chat", async () => {
     stubSendMessage();
     let sessionsCreated = 0;

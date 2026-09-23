@@ -186,25 +186,39 @@ export class TelegramGateway {
 
   /**
    * Handles one Telegram Update webhook payload. Silently ignores anything
-   * that isn't a plain text message (photos, stickers, service messages,
-   * edits) — JARVIS only replies to messages it can actually understand.
+   * with no chat to reply to (service messages, edits) — JARVIS only
+   * replies to messages it can actually understand. A photo, voice note,
+   * or document gets a short "text only for now" reply instead of being
+   * dropped, since vision/audio input isn't wired up on this channel yet
+   * and a silent non-response reads as "the bot is broken".
    * Never throws: a brain/tool failure still gets a spoken-style error
    * reply back to the chat rather than a silently dropped message, and a
    * failure sending *that* is logged, not thrown, so a malformed or
    * malicious webhook body can never crash the server.
    */
   async handleUpdate(update: unknown): Promise<void> {
-    const message = (update as { message?: { chat?: { id?: number | string }; text?: string } } | undefined)?.message;
+    const message = (
+      update as
+        | { message?: { chat?: { id?: number | string }; text?: string; photo?: unknown; voice?: unknown; document?: unknown } }
+        | undefined
+    )?.message;
     const chatId = message?.chat?.id;
     const text = message?.text;
 
-    if (chatId === undefined || chatId === null || typeof text !== "string" || text.trim().length === 0) {
+    if (chatId === undefined || chatId === null) {
       return;
     }
 
     const chatIdStr = String(chatId);
     if (!this.isChatAllowed(chatIdStr)) {
       console.error(`[jarvis] rejected Telegram message from disallowed chat: ${chatIdStr}`);
+      return;
+    }
+
+    if (typeof text !== "string" || text.trim().length === 0) {
+      if (message?.photo || message?.voice || message?.document) {
+        await this.sendMessage(chatIdStr, "I can't read photos, voice notes, or files here yet — just text for now.").catch(() => {});
+      }
       return;
     }
 
