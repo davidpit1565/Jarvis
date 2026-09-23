@@ -465,6 +465,25 @@ function main() {
   // in-memory only, re-derived at startup for any device that already
   // has the role persisted from before a restart.
   const STANDARD_PRIMARY_DEVICE_TOOLS = ["OPEN_APPLICATION", "QUIT_APPLICATION", "OPEN_URL", "SCHEDULE_MAC_NOTIFICATION"];
+  // The other standing grant a device can accumulate: pairing approval's
+  // own autoGrantToolIdsOnApproval list (passed to JarvisWebSocketServer
+  // below). Kept in one place and referenced by both so `device.revoked`
+  // below actually clears everything a device could have been granted,
+  // instead of drifting out of sync with whatever tools approval grants.
+  const AUTO_GRANTED_ON_APPROVAL_TOOLS = [
+    "OPEN_URL",
+    "OPEN_APPLICATION",
+    "COMPOSE_EMAIL_DRAFT",
+    "CLICK_ELEMENT",
+    "TYPE_TEXT",
+    "SET_VOLUME",
+    "TOGGLE_WIFI",
+    "CREATE_FOLDER",
+    "EMPTY_TRASH",
+    "LIST_MAC_REMINDERS",
+    "CREATE_MAC_REMINDER",
+    "COMPLETE_MAC_REMINDER",
+  ];
   function grantPrimaryDeviceTools(deviceId: string): void {
     for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {
       permissionService.grant(DEFAULT_USER_ID, toolId, deviceId);
@@ -480,8 +499,9 @@ function main() {
   // stay valid forever, since nothing else ever clears them. If it ever
   // reconnected anyway (a bug elsewhere in the pairing/auth path), it
   // shouldn't silently keep acting on its old standing trust.
+  const ALL_STANDING_DEVICE_GRANT_TOOLS = [...new Set([...STANDARD_PRIMARY_DEVICE_TOOLS, ...AUTO_GRANTED_ON_APPROVAL_TOOLS])];
   eventBus.on("device.revoked", ({ deviceId }) => {
-    for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {
+    for (const toolId of ALL_STANDING_DEVICE_GRANT_TOOLS) {
       permissionService.revoke(DEFAULT_USER_ID, toolId, deviceId);
     }
   });
@@ -1596,20 +1616,7 @@ function main() {
     // own doc comment on this field for why). CONFIRM tools still ask
     // per-invocation regardless (confirmViaChat below) — a grant here
     // only means "may be asked," never "runs without asking."
-    autoGrantToolIdsOnApproval: [
-      "OPEN_URL",
-      "OPEN_APPLICATION",
-      "COMPOSE_EMAIL_DRAFT",
-      "CLICK_ELEMENT",
-      "TYPE_TEXT",
-      "SET_VOLUME",
-      "TOGGLE_WIFI",
-      "CREATE_FOLDER",
-      "EMPTY_TRASH",
-      "LIST_MAC_REMINDERS",
-      "CREATE_MAC_REMINDER",
-      "COMPLETE_MAC_REMINDER",
-    ],
+    autoGrantToolIdsOnApproval: AUTO_GRANTED_ON_APPROVAL_TOOLS,
   });
   wsServerRef = wsServer;
   const httpHandle = wsServer.start(config.port);
