@@ -58,6 +58,52 @@ describe("DeviceConnectionManager", () => {
     expect(manager.hasConnection("imac-1")).toBe(false);
   });
 
+  test("removeConnection with expectedConnection is a no-op when a newer connection has since replaced it", () => {
+    // Mirrors the real race: a stale socket's delayed close fires after
+    // the device already reconnected on a new socket and re-registered.
+    const eventBus = new EventBus();
+    const manager = new DeviceConnectionManager(eventBus);
+    const events: unknown[] = [];
+    eventBus.on("device.disconnected", (payload) => events.push(payload));
+
+    const staleConnection = new MockDeviceConnection();
+    const newConnection = new MockDeviceConnection();
+    manager.registerConnection("imac-1", staleConnection);
+    manager.registerConnection("imac-1", newConnection); // device reconnected first
+
+    const removed = manager.removeConnection("imac-1", "socket_closed", staleConnection);
+
+    expect(removed).toBe(false);
+    expect(events).toHaveLength(0);
+    expect(manager.hasConnection("imac-1")).toBe(true); // the newer connection is untouched
+    expect(newConnection.closed).toBe(false);
+  });
+
+  test("removeConnection with expectedConnection succeeds when it's still the currently-registered one", () => {
+    const eventBus = new EventBus();
+    const manager = new DeviceConnectionManager(eventBus);
+    const connection = new MockDeviceConnection();
+    manager.registerConnection("imac-1", connection);
+
+    const removed = manager.removeConnection("imac-1", "socket_closed", connection);
+
+    expect(removed).toBe(true);
+    expect(manager.hasConnection("imac-1")).toBe(false);
+    expect(connection.closed).toBe(true);
+  });
+
+  test("handleDisconnect returns whether the disconnect actually applied", () => {
+    const eventBus = new EventBus();
+    const manager = new DeviceConnectionManager(eventBus);
+    const staleConnection = new MockDeviceConnection();
+    const newConnection = new MockDeviceConnection();
+    manager.registerConnection("imac-1", staleConnection);
+    manager.registerConnection("imac-1", newConnection);
+
+    expect(manager.handleDisconnect("imac-1", "socket_closed", staleConnection)).toBe(false);
+    expect(manager.handleDisconnect("imac-1", "socket_closed", newConnection)).toBe(true);
+  });
+
   test("pingAll sends a ping envelope to every connected device", () => {
     const eventBus = new EventBus();
     const manager = new DeviceConnectionManager(eventBus);
