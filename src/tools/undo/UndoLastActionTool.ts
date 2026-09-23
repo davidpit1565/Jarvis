@@ -72,6 +72,12 @@ export function createUndoLastActionTool(
         }
         return { success: false, error: `Don't know how to undo action type: ${(action as { type: string }).type}` };
       } catch (error) {
+        // The actual reversal (a Calendar/Gmail API call) failed — restore
+        // the record instead of leaving it lost. Without this, a transient
+        // network/OAuth hiccup on the one call that matters most (undoing
+        // a mistake) would silently and permanently destroy the undo
+        // record, even though nothing was actually undone.
+        undoStore.record(action);
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     },

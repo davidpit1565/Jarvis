@@ -75,6 +75,25 @@ describe("UNDO_LAST_ACTION tool", () => {
     expect(result.success).toBe(false);
   });
 
+  test("restores the undo record on a failed reversal, so a retry can still succeed", async () => {
+    let attempt = 0;
+    global.fetch = (async () => {
+      attempt++;
+      if (attempt === 1) return new Response("service unavailable", { status: 503 });
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    undoStore.record({ type: "calendar_event_created", eventId: "e1", summary: "Dentist" });
+    const tool = createUndoLastActionTool(undoStore, makeClient());
+
+    const first = await tool.execute({}, context);
+    expect(first.success).toBe(false);
+
+    const second = await tool.execute({}, context);
+    expect(second.success).toBe(true);
+  });
+
   test("recreates a just-deleted calendar event", async () => {
     let capturedBody: string | undefined;
     global.fetch = (async (_url: string, init?: RequestInit) => {
