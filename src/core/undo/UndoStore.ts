@@ -1,4 +1,5 @@
 import type { ReminderRecurrence } from "@/types/reminders";
+import type { MemoryCategory, MemoryImportance, MemoryTrust } from "@/types/memory";
 
 export interface UndoableCalendarEventCreation {
   type: "calendar_event_created";
@@ -32,6 +33,11 @@ export interface UndoableMemoryDeletion {
   type: "memory_deleted";
   key: string;
   value: string;
+  /** The deleted record's own category/importance/expiresAt/source, so undoing a delete restores it exactly rather than re-inserting it with defaults (e.g. turning an expiring "temporary" fact permanent, or a low-trust fact into a USER_STATED one). */
+  category: MemoryCategory;
+  importance: MemoryImportance;
+  expiresAt: string | null;
+  source: MemoryTrust;
 }
 
 export type UndoableAction =

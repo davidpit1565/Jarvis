@@ -221,7 +221,40 @@ describe("DELETE_MEMORY tool", () => {
 
     await tool.execute({ key: "user.oldJob" }, context);
 
-    expect(undoStore.takeLast()).toEqual({ type: "memory_deleted", key: "user.oldJob", value: "Acme Corp" });
+    expect(undoStore.takeLast()).toEqual({
+      type: "memory_deleted",
+      key: "user.oldJob",
+      value: "Acme Corp",
+      category: "fact",
+      importance: 3,
+      expiresAt: null,
+      source: "USER_STATED",
+    });
+  });
+
+  test("preserves a deleted fact's non-default category/importance/expiry/trust so undo restores them exactly", async () => {
+    store.save({
+      key: "user.tempNote",
+      value: "leaving early Friday",
+      category: "temporary",
+      importance: 1,
+      source: "MODEL_INFERRED",
+    });
+    const savedRecord = store.getByKey("user.tempNote");
+    const undoStore = new UndoStore();
+    const tool = createDeleteMemoryTool(store, undoStore);
+
+    await tool.execute({ key: "user.tempNote" }, context);
+
+    expect(undoStore.takeLast()).toEqual({
+      type: "memory_deleted",
+      key: "user.tempNote",
+      value: "leaving early Friday",
+      category: "temporary",
+      importance: 1,
+      expiresAt: savedRecord!.expiresAt,
+      source: "MODEL_INFERRED",
+    });
   });
 
   test("does not record anything in the undo store on failure", async () => {
