@@ -1,6 +1,7 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 import type { TwilioSmsSender } from "@/communication/phone/TwilioSmsSender";
+import type { TwilioCostGuard } from "@/communication/phone/TwilioCostGuard";
 
 export interface SendSmsInput extends Record<string, unknown> {
   message: string;
@@ -21,8 +22,20 @@ const MAX_MESSAGE_LENGTH = 1600;
  * configured phone number, never an arbitrary one, so it can't become a
  * cost/harassment vector via a prompt-injected "to" value from something
  * JARVIS read (an email, a calendar invite).
+ *
+ * Also enforced here: a config-driven daily send cap (`TwilioCostGuard`,
+ * the same class already gating the wake-up-call scheduler's outbound
+ * calls) — without this, a misconfigured automation rule or a runaway
+ * agent loop could rack up an unbounded number of real, Twilio-billed
+ * texts in a day, exactly the gap `TwilioCostGuard`/`AgentMailSendGuard`
+ * already close for outbound calls and SEND_AGENT_EMAIL.
  */
-export function createSendSmsTool(smsSender: TwilioSmsSender, ownerPhoneNumber: string): LocalTool<SendSmsInput> {
+export function createSendSmsTool(
+  smsSender: TwilioSmsSender,
+  ownerPhoneNumber: string,
+  sendGuard: TwilioCostGuard,
+  todayDateKey: () => string
+): LocalTool<SendSmsInput> {
   return {
     id: "SEND_SMS",
     name: "send_sms",
@@ -49,10 +62,21 @@ export function createSendSmsTool(smsSender: TwilioSmsSender, ownerPhoneNumber: 
         return { success: false, error: `message is too long (over ${MAX_MESSAGE_LENGTH} characters)` };
       }
 
+      if (!sendGuard.tryConsume(todayDateKey())) {
+        return {
+          success: false,
+          error: "Daily SMS send limit has been reached — try again tomorrow.",
+        };
+      }
+
       try {
         const result = await smsSender.sendSms(ownerPhoneNumber, message);
         return { success: true, data: { messageSid: result.messageSid } };
       } catch (error) {
+        // The consumed slot was for a send that never actually happened —
+        // refund it so a transient Twilio failure doesn't burn real
+        // quota and falsely trip the daily cap for the rest of the day.
+        sendGuard.release(todayDateKey());
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     },

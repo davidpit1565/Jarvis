@@ -474,6 +474,14 @@ export interface JarvisConfig {
    */
   agentMailMaxSendsPerDay: number;
   /**
+   * Hard daily cap on real sends via SEND_SMS — same reasoning as
+   * maxOutboundCallsPerDay/agentMailMaxSendsPerDay: nothing else stops a
+   * misconfigured automation rule (or a runaway agent loop) from sending
+   * an unbounded number of real, Twilio-billed text messages to the
+   * owner's phone in a day. Defaults to 20.
+   */
+  maxSmsPerDay: number;
+  /**
    * Enables the entire Semantic Memory Search / Semantic Result Cache
    * layer (JARVIS_ROADMAP_AUDIT.md #60, previously skipped for lack of a
    * free embeddings source) — unset (the default) means every existing
@@ -759,6 +767,11 @@ export function loadConfig(): JarvisConfig {
   if (!Number.isInteger(maxOutboundCallsPerDay) || maxOutboundCallsPerDay < 1) {
     throw new ConfigError("JARVIS_MAX_OUTBOUND_CALLS_PER_DAY must be a positive integer");
   }
+  const maxSmsPerDayRaw = process.env.JARVIS_MAX_SMS_PER_DAY?.trim();
+  const maxSmsPerDay = maxSmsPerDayRaw ? Number(maxSmsPerDayRaw) : 20;
+  if (!Number.isInteger(maxSmsPerDay) || maxSmsPerDay < 1) {
+    throw new ConfigError("JARVIS_MAX_SMS_PER_DAY must be a positive integer");
+  }
 
   if (twilioAuthToken && twilioPublicBaseUrl && !adminToken) {
     throw new ConfigError(
@@ -958,6 +971,7 @@ export function loadConfig(): JarvisConfig {
     twilioFromNumber,
     ownerPhoneNumber,
     maxOutboundCallsPerDay,
+    maxSmsPerDay,
     wakeUpCallDbPath,
     alarmDbPath,
     adminToken,
