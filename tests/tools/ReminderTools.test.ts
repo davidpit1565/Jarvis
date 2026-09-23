@@ -322,4 +322,36 @@ describe("UPDATE_REMINDER tool", () => {
     const result = await tool.execute({ id: record.id, recurrence: "hourly" as never }, context);
     expect(result.success).toBe(false);
   });
+
+  test("rejects setting recurrence on a reminder with no dueAt and none given", async () => {
+    const record = store.create({ text: "Task" });
+    const tool = createUpdateReminderTool(store);
+
+    const result = await tool.execute({ id: record.id, recurrence: "daily" }, context);
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/recurrence requires dueAt/);
+    expect(store.get(record.id)?.recurrence).toBeNull();
+  });
+
+  test("rejects clearing dueAt on a reminder that already has a recurrence", async () => {
+    const record = store.create({ text: "Task", dueAt: "2030-09-19T18:00:00.000Z", recurrence: "daily" });
+    const tool = createUpdateReminderTool(store);
+
+    const result = await tool.execute({ id: record.id, dueAt: null }, context);
+
+    expect(result.success).toBe(false);
+    expect((result as { error: string }).error).toMatch(/recurrence requires dueAt/);
+    expect(store.get(record.id)?.dueAt).not.toBeNull();
+  });
+
+  test("allows setting recurrence and dueAt together in the same update", async () => {
+    const record = store.create({ text: "Task" });
+    const tool = createUpdateReminderTool(store);
+
+    const result = await tool.execute({ id: record.id, dueAt: "2030-09-19T18:00:00.000Z", recurrence: "daily" }, context);
+
+    expect(result.success).toBe(true);
+    expect(store.get(record.id)?.recurrence).toBe("daily");
+  });
 });
