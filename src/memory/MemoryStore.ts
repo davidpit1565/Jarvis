@@ -222,9 +222,19 @@ export class MemoryStore {
    * this only ever blocks a *downgrade*.
    */
   save(input: SaveMemoryInput): SaveMemoryResult {
-    const existing = this.db.query(`SELECT id, value, COALESCE(source, 'USER_STATED') as source FROM memory_records WHERE key = ?`).get(
-      input.key
-    ) as { id: string; value: string; source: MemoryTrust } | null;
+    // COLLATE NOCASE: a key is a stable identifier the model composes
+    // itself each call (e.g. "user.timezone"), with no guarantee it uses
+    // the same casing twice — without this, a differently-cased re-save
+    // of the same logical key would miss `existing` entirely and INSERT a
+    // second row instead of upserting, defeating the "one fact per key"
+    // guarantee this method exists for (see class doc comment above) and
+    // letting a MODEL_INFERRED/EXTERNAL_CONTENT write dodge the Memory
+    // Poisoning Defense's trust-rank check below by using a case variant
+    // of an existing USER_STATED key. search()'s LIKE already matches
+    // case-insensitively, so this makes exact-key lookups agree with it.
+    const existing = this.db
+      .query(`SELECT id, value, COALESCE(source, 'USER_STATED') as source FROM memory_records WHERE key = ? COLLATE NOCASE`)
+      .get(input.key) as { id: string; value: string; source: MemoryTrust } | null;
     const createdAt = new Date().toISOString();
     const category = input.category ?? DEFAULT_CATEGORY;
     const importance = input.importance ?? DEFAULT_IMPORTANCE;
@@ -328,7 +338,11 @@ export class MemoryStore {
 
   /** Exact key lookup — the natural handle Claude/the user actually has, unlike the opaque internal id. */
   getByKey(key: string): MemoryRecord | null {
-    const row = this.db.query(`SELECT ${SELECT_COLUMNS} FROM memory_records WHERE key = ?`).get(key) as MemoryRow | null;
+    // COLLATE NOCASE — see save()'s comment on why key lookups must be
+    // case-insensitive, matching search()'s own case-insensitive LIKE.
+    const row = this.db
+      .query(`SELECT ${SELECT_COLUMNS} FROM memory_records WHERE key = ? COLLATE NOCASE`)
+      .get(key) as MemoryRow | null;
     return row ? rowToRecord(row) : null;
   }
 
@@ -470,7 +484,9 @@ export class MemoryStore {
 
   /** Deletes by exact key — the natural handle Claude/the user actually has, unlike the opaque internal id. */
   deleteByKey(key: string): boolean {
-    const result = this.db.query(`DELETE FROM memory_records WHERE key = ?`).run(key);
+    // COLLATE NOCASE — see save()'s comment; a delete-by-key call using
+    // different casing than the record was saved under must still find it.
+    const result = this.db.query(`DELETE FROM memory_records WHERE key = ? COLLATE NOCASE`).run(key);
     return result.changes > 0;
   }
 
