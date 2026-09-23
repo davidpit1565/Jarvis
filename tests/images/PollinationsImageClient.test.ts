@@ -55,6 +55,13 @@ describe("PollinationsImageClient.buildImageUrl", () => {
     expect(url.searchParams.get("seed")).toBe("42");
   });
 
+  test("always requests nologo, to avoid Pollinations' own watermark on every image", () => {
+    const client = new PollinationsImageClient();
+    const url = new URL(client.buildImageUrl("sunset"));
+
+    expect(url.searchParams.get("nologo")).toBe("true");
+  });
+
   test("omits seed when not given", () => {
     const client = new PollinationsImageClient();
     const url = new URL(client.buildImageUrl("sunset"));
