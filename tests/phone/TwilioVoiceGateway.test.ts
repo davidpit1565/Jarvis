@@ -285,7 +285,24 @@ describe("TwilioVoiceGateway", () => {
     expect(errorBody).toContain("השתבש");
   });
 
-  test("handleCallEnded frees the session so a later gather creates a new one", async () => {
+  test("handleCallEnded frees the session's memory", async () => {
+    const gateway = new TwilioVoiceGateway((): PhoneSession => ({
+      orchestrator: makeStubOrchestrator(async () => "ok"),
+      userId: "local-user",
+    }));
+
+    gateway.handleIncomingCall("CA1");
+    expect(gateway.hasActiveSession("CA1")).toBe(true);
+
+    gateway.handleCallEnded("CA1");
+    expect(gateway.hasActiveSession("CA1")).toBe(false);
+  });
+
+  test("a /voice/gather that arrives after /voice/status already ended the call hangs up instead of leaking a new session", async () => {
+    // Twilio's call-status and speech-gather webhooks for the same call
+    // are independent HTTP requests with no ordering guarantee — if
+    // status arrives first, a late gather must not resurrect a session
+    // for a call that's already over (nothing would ever clean it up).
     let sessionsCreated = 0;
     const gateway = new TwilioVoiceGateway((): PhoneSession => {
       sessionsCreated++;
@@ -293,13 +310,15 @@ describe("TwilioVoiceGateway", () => {
     });
 
     gateway.handleIncomingCall("CA1");
-    expect(gateway.hasActiveSession("CA1")).toBe(true);
-
     gateway.handleCallEnded("CA1");
-    expect(gateway.hasActiveSession("CA1")).toBe(false);
 
-    await gateway.handleGather("CA1", "hi");
-    expect(sessionsCreated).toBe(2);
+    const response = await gateway.handleGather("CA1", "hi");
+    const body = await response.text();
+
+    expect(body).toContain("<Hangup/>");
+    expect(body).not.toContain("<Gather");
+    expect(sessionsCreated).toBe(1);
+    expect(gateway.hasActiveSession("CA1")).toBe(false);
   });
 
   test("a call is ended by JARVIS itself after too many turns, as a cost/abuse safety net", async () => {
