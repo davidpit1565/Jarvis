@@ -664,7 +664,7 @@ export class AIRouter implements Brain {
       return candidate;
     }
 
-    const free = this.registry.findByCostTier("free")[0];
+    const free = this.registry.findByCostTier("free").find((name) => !alreadyTried.has(name));
     if (free) {
       this.options.eventBus?.emit("ai.providerFallback", { from: candidate, to: free, reason: "budget-exceeded" });
       if (decisionRef) decisionRef.value = "budget-exceeded";
