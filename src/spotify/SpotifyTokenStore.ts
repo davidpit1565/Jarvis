@@ -50,11 +50,25 @@ export class SpotifyTokenStore {
       .run(SINGLETON_ID, tokens.refreshToken, tokens.accessToken, tokens.accessTokenExpiresAt);
   }
 
-  /** Updates just the access token after a refresh — the refresh token itself doesn't change. */
-  updateAccessToken(accessToken: string, expiresAt: number): void {
-    this.db
-      .query(`UPDATE spotify_tokens SET access_token = ?, access_token_expires_at = ? WHERE id = ?`)
-      .run(accessToken, expiresAt, SINGLETON_ID);
+  /**
+   * Updates the access token after a refresh. `newRefreshToken` is only
+   * passed when Spotify's refresh response actually included one — its
+   * OAuth service periodically rotates the refresh token (documented
+   * behavior, not just PKCE-specific), and the old one becomes invalid
+   * once that happens. Omitting it here leaves the existing refresh
+   * token untouched, matching the common case where Spotify didn't
+   * rotate it this time.
+   */
+  updateAccessToken(accessToken: string, expiresAt: number, newRefreshToken?: string): void {
+    if (newRefreshToken !== undefined) {
+      this.db
+        .query(`UPDATE spotify_tokens SET access_token = ?, access_token_expires_at = ?, refresh_token = ? WHERE id = ?`)
+        .run(accessToken, expiresAt, newRefreshToken, SINGLETON_ID);
+    } else {
+      this.db
+        .query(`UPDATE spotify_tokens SET access_token = ?, access_token_expires_at = ? WHERE id = ?`)
+        .run(accessToken, expiresAt, SINGLETON_ID);
+    }
   }
 
   get(): SpotifyTokens | null {
