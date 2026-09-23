@@ -822,13 +822,25 @@ export class JarvisWebSocketServer {
             // Twilio signs the Media Streams connection's initial HTTP
             // handshake the same way it signs its webhook POSTs, just
             // with no form body to include in the signed payload.
-            if (twilioAuthToken && twilioPublicBaseUrl) {
-              const publicUrl = new URL(url.pathname + url.search, twilioPublicBaseUrl).toString();
-              const signature = req.headers.get("X-Twilio-Signature");
-              if (!verifyTwilioSignature(twilioAuthToken, publicUrl, {}, signature)) {
-                console.error("[jarvis] rejected audio-stream upgrade: invalid or missing Twilio signature");
-                return new Response("Forbidden", { status: 403 });
-              }
+            //
+            // Fails CLOSED (403), not open, when twilioAuthToken/
+            // twilioPublicBaseUrl aren't configured — audioLevelBroadcaster
+            // only requires audioWaveformEnabled + twilioPublicBaseUrl to
+            // exist (see index.ts), so a deploy with the waveform feature
+            // on but no TWILIO_AUTH_TOKEN set (e.g. one rotated out, or
+            // the waveform feature tried without the phone gateway) would
+            // otherwise skip verification entirely and accept the socket
+            // unconditionally — every sibling Twilio route (handleVoiceWebhook,
+            // handleSmsWebhook) instead 404s outright without a full,
+            // valid Twilio config, and this route must match that.
+            if (!twilioAuthToken || !twilioPublicBaseUrl) {
+              return new Response("Not found", { status: 404 });
+            }
+            const publicUrl = new URL(url.pathname + url.search, twilioPublicBaseUrl).toString();
+            const signature = req.headers.get("X-Twilio-Signature");
+            if (!verifyTwilioSignature(twilioAuthToken, publicUrl, {}, signature)) {
+              console.error("[jarvis] rejected audio-stream upgrade: invalid or missing Twilio signature");
+              return new Response("Forbidden", { status: 403 });
             }
             return server.upgrade(req, { data: { kind: "audio-ingest" } })
               ? undefined

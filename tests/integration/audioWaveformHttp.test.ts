@@ -70,7 +70,7 @@ describe("Audio waveform routes", () => {
 
   test("a dashboard viewer receives a real-time level broadcast when Twilio sends a media event", async () => {
     const broadcaster = new AudioLevelBroadcaster();
-    const { handle, port } = setupServer(broadcaster);
+    const { handle, port } = setupServer(broadcaster, true);
     activeHandle = handle;
 
     const viewerSocket = new WebSocket(`ws://localhost:${port}/dashboard/audio-ws`);
@@ -84,7 +84,10 @@ describe("Audio waveform routes", () => {
       viewerSocket.onerror = () => reject(new Error("viewer socket failed to open"));
     });
 
-    const ingestSocket = new WebSocket(`ws://localhost:${port}/voice/audio-stream`);
+    const signature = sign(`${PUBLIC_BASE_URL}/voice/audio-stream`);
+    const ingestSocket = new WebSocket(`ws://localhost:${port}/voice/audio-stream`, {
+      headers: { "X-Twilio-Signature": signature },
+    } as unknown as string[]);
     await new Promise<void>((resolve, reject) => {
       ingestSocket.onopen = () => resolve();
       ingestSocket.onerror = () => reject(new Error("ingest socket failed to open"));
@@ -149,12 +152,32 @@ describe("Audio waveform routes", () => {
     ingestSocket.close();
   });
 
-  test("non-media Twilio events (connected/start/stop) are ignored without error", async () => {
-    const broadcaster = new AudioLevelBroadcaster();
-    const { handle, port } = setupServer(broadcaster);
+  test("rejects a /voice/audio-stream upgrade with 404 when audioLevelBroadcaster is configured but twilioAuthToken is missing (fails closed, not open)", async () => {
+    // The waveform feature only requires audioWaveformEnabled +
+    // twilioPublicBaseUrl to construct AudioLevelBroadcaster (see
+    // index.ts) — it does NOT require twilioAuthToken. Without this
+    // route explicitly requiring the token too, a deploy with the
+    // waveform on but no TWILIO_AUTH_TOKEN set (e.g. rotated out, or
+    // tried without the phone gateway) would skip signature
+    // verification entirely and accept any connection.
+    const { handle, port } = setupServer(new AudioLevelBroadcaster(), false);
     activeHandle = handle;
 
-    const ingestSocket = new WebSocket(`ws://localhost:${port}/voice/audio-stream`);
+    const response = await fetch(`http://localhost:${port}/voice/audio-stream`, {
+      headers: { Upgrade: "websocket", Connection: "Upgrade" },
+    });
+    expect(response.status).toBe(404);
+  });
+
+  test("non-media Twilio events (connected/start/stop) are ignored without error", async () => {
+    const broadcaster = new AudioLevelBroadcaster();
+    const { handle, port } = setupServer(broadcaster, true);
+    activeHandle = handle;
+
+    const signature = sign(`${PUBLIC_BASE_URL}/voice/audio-stream`);
+    const ingestSocket = new WebSocket(`ws://localhost:${port}/voice/audio-stream`, {
+      headers: { "X-Twilio-Signature": signature },
+    } as unknown as string[]);
     await new Promise<void>((resolve, reject) => {
       ingestSocket.onopen = () => resolve();
       ingestSocket.onerror = () => reject(new Error("ingest socket failed to open"));
