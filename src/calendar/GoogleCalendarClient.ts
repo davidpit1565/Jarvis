@@ -44,6 +44,13 @@ const MAX_RESULTS_CAP = 50;
 
 const NO_ACCOUNT_LINKED_ERROR = "No Google account linked yet — visit GET /calendar/oauth/start to connect one.";
 
+// How far back searchEvents looks — bounds a genuinely unlimited historical
+// scan (which the Calendar API has no way to sort by relevance/proximity
+// to now, only ascending time) to something that still comfortably covers
+// "when was my dentist appointment" without pulling a decade of history
+// for every search.
+const SEARCH_LOOKBACK_MS = 730 * 24 * 60 * 60 * 1000; // ~2 years
+
 interface RawGoogleEvent {
   id: string;
   summary?: string;
@@ -367,17 +374,52 @@ export class GoogleCalendarClient {
     });
   }
 
-  /** Events matching a free-text query (Google's own `q` search over summary/description/location/attendees), soonest first, not limited to upcoming ones — across every linked account (or just `account`, if given). */
+  /**
+   * Events matching a free-text query (Google's own `q` search over
+   * summary/description/location/attendees), nearest-to-now first — past
+   * or future, since this isn't limited to upcoming events — across every
+   * linked account (or just `account`, if given).
+   *
+   * Unlike `listUpcomingEvents`/`listEventsInRange`, this can't just ask
+   * Google to sort by proximity to now: the Calendar API's `orderBy` only
+   * supports ascending `startTime` (or `updated`), and with no `timeMin`
+   * at all that means ascending from the very first event that ever
+   * existed in the calendar — a years-old recurring match (e.g. a
+   * "Dentist" appointment since 2019) would otherwise silently push out
+   * the actually-relevant recent/upcoming occurrence once `maxResults` is
+   * hit. So this fetches a full `MAX_RESULTS_CAP`-sized candidate pool
+   * (regardless of the caller's own `maxResults`) within a generous
+   * lookback window, then re-ranks by |eventStart - now| client-side
+   * before slicing to what the caller actually asked for.
+   */
   async searchEvents(query: string, maxResults: number = 10, account?: string): Promise<CalendarEvent[]> {
     const capped = Math.min(maxResults, MAX_RESULTS_CAP);
-    return this.fetchAcrossAccounts(account, capped, (perAccountCap) => {
+    const buildParams = () => {
       const params = new URLSearchParams();
       params.set("q", query);
-      params.set("maxResults", String(perAccountCap));
+      params.set("timeMin", new Date(Date.now() - SEARCH_LOOKBACK_MS).toISOString());
+      params.set("maxResults", String(MAX_RESULTS_CAP));
       params.set("singleEvents", "true");
       params.set("orderBy", "startTime");
       return params;
-    });
+    };
+
+    const nowMs = Date.now();
+    const byProximityToNow = (a: CalendarEvent, b: CalendarEvent) =>
+      Math.abs(Date.parse(a.start || "") - nowMs) - Math.abs(Date.parse(b.start || "") - nowMs);
+
+    if (account) {
+      this.resolveAccount(account);
+      const events = await this.fetchEventsFor(account, buildParams());
+      return events.sort(byProximityToNow).slice(0, capped);
+    }
+
+    const accounts = this.tokenStore.getAll();
+    if (accounts.length === 0) throw new Error(NO_ACCOUNT_LINKED_ERROR);
+    const perAccountResults = await Promise.all(accounts.map((a) => this.fetchEventsFor(a.email, buildParams())));
+    const merged = perAccountResults.flat();
+    merged.sort(byProximityToNow);
+    return merged.slice(0, capped);
   }
 
   /** One event's full detail by id, including description and attendees — not returned by list/search. Searches every linked account for it unless `account` is given. */

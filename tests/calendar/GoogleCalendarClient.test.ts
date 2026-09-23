@@ -332,6 +332,48 @@ describe("GoogleCalendarClient.searchEvents", () => {
 
     expect(capturedMaxResults as unknown as string).toBe("50");
   });
+
+  test("sends a timeMin bound rather than searching all of history", async () => {
+    let capturedTimeMin: string | null = null;
+    global.fetch = (async (url: string) => {
+      capturedTimeMin = new URL(url).searchParams.get("timeMin");
+      return new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.searchEvents("dentist");
+
+    expect(capturedTimeMin).not.toBeNull();
+    expect(Date.now() - Date.parse(capturedTimeMin!)).toBeGreaterThan(300 * 24 * 60 * 60 * 1000);
+  });
+
+  test("returns the match nearest to now first, not the chronologically oldest match, when more matches exist than maxResults", async () => {
+    // Google's own ascending-by-startTime order would put the 2019 match
+    // first and truncate out the 2026 one at maxResults=1 — this asserts
+    // the client re-ranks by proximity to "now" before slicing.
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [
+            { id: "old", summary: "Dentist", start: { dateTime: "2019-03-01T09:00:00Z" }, end: { dateTime: "2019-03-01T09:30:00Z" } },
+            { id: "recent", summary: "Dentist", start: { dateTime: "2026-01-20T09:00:00Z" }, end: { dateTime: "2026-01-20T09:30:00Z" } },
+          ],
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const fixedNow = Date.parse("2026-01-15T00:00:00Z");
+    const originalNow = Date.now;
+    Date.now = () => fixedNow;
+    try {
+      const { client } = makeClient(makeLinkedTokenStore());
+      const events = await client.searchEvents("dentist", 1);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.id).toBe("recent");
+    } finally {
+      Date.now = originalNow;
+    }
+  });
 });
 
 describe("GoogleCalendarClient.getEvent", () => {
