@@ -1017,7 +1017,10 @@ function main() {
     // Twilio fields (account sid, auth token, from number) plus somewhere
     // to send to (ownerPhoneNumber).
     const smsSender = new TwilioSmsSender(config.twilioAccountSid!, config.twilioAuthToken!, config.twilioFromNumber!);
-    toolRegistry.registerTool(createSendSmsTool(smsSender, config.ownerPhoneNumber!));
+    const smsSendGuard = new TwilioCostGuard(config.maxSmsPerDay);
+    toolRegistry.registerTool(
+      createSendSmsTool(smsSender, config.ownerPhoneNumber!, smsSendGuard, () => formatDateKey(new Date(), config.timezone))
+    );
     permissionService.grant(DEFAULT_USER_ID, "SEND_SMS");
 
     // WakeUpCallStore's lastTriggeredDate check makes each tick idempotent

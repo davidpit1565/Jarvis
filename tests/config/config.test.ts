@@ -37,6 +37,7 @@ const ENV_KEYS = [
   "TWILIO_FROM_NUMBER",
   "JARVIS_OWNER_PHONE_NUMBER",
   "JARVIS_MAX_OUTBOUND_CALLS_PER_DAY",
+  "JARVIS_MAX_SMS_PER_DAY",
   "JARVIS_WAKEUP_CALL_DB_PATH",
   "JARVIS_ANTHROPIC_BASE_URL",
   "JARVIS_FALLBACK_MODEL",
@@ -311,6 +312,27 @@ describe("loadConfig", () => {
 
   test("throws for a non-integer JARVIS_MAX_OUTBOUND_CALLS_PER_DAY", () => {
     process.env.JARVIS_MAX_OUTBOUND_CALLS_PER_DAY = "2.5";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults maxSmsPerDay to 20", () => {
+    const config = loadConfig();
+    expect(config.maxSmsPerDay).toBe(20);
+  });
+
+  test("reads JARVIS_MAX_SMS_PER_DAY when set", () => {
+    process.env.JARVIS_MAX_SMS_PER_DAY = "5";
+    const config = loadConfig();
+    expect(config.maxSmsPerDay).toBe(5);
+  });
+
+  test("throws for a non-positive JARVIS_MAX_SMS_PER_DAY", () => {
+    process.env.JARVIS_MAX_SMS_PER_DAY = "0";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("throws for a non-integer JARVIS_MAX_SMS_PER_DAY", () => {
+    process.env.JARVIS_MAX_SMS_PER_DAY = "2.5";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 
