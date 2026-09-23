@@ -39,6 +39,28 @@ describe("MemoryStore", () => {
     store.close();
   });
 
+  test("a literal underscore in the search fragment is not treated as a single-character wildcard", () => {
+    const store = new MemoryStore(":memory:");
+    store.save({ key: "wifi_password", value: "Home5G!" });
+    store.save({ key: "wifi.password", value: "Guest99" }); // differs only by _ vs .
+
+    const results = store.search("wifi_password");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.key).toBe("wifi_password");
+    store.close();
+  });
+
+  test("a literal percent sign in the search fragment is not treated as a multi-character wildcard", () => {
+    const store = new MemoryStore(":memory:");
+    store.save({ key: "costco.membership", value: "50% loyalty discount" });
+    store.save({ key: "other.deal", value: "50 xyz loyalty program" }); // would wrongly match "50% loyalty" as a LIKE pattern
+
+    const results = store.search("50% loyalty");
+    expect(results).toHaveLength(1);
+    expect(results[0]?.key).toBe("costco.membership");
+    store.close();
+  });
+
   test("deletes a record", () => {
     const store = new MemoryStore(":memory:");
     const record = store.save({ key: "temp", value: "value" });

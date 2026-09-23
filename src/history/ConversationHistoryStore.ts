@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ConversationHistoryEntry } from "@/types/conversationHistory";
+import { escapeLikeFragment } from "@/core/db/likeEscape";
 
 const MAX_ROWS = 5000;
 
@@ -50,11 +51,14 @@ export class ConversationHistoryStore {
 
   /** Case-insensitive substring search over past conversation content, most recent first. */
   search(query: string, limit: number = 10): ConversationHistoryEntry[] {
+    // escapeLikeFragment — see its doc comment: a literal `_` or `%` in
+    // the query would otherwise act as a LIKE wildcard instead of a
+    // literal character, silently matching unrelated transcript rows.
     return this.db
       .query(
-        `SELECT id, role, content, timestamp FROM conversation_history WHERE content LIKE ? COLLATE NOCASE ORDER BY id DESC LIMIT ?`
+        `SELECT id, role, content, timestamp FROM conversation_history WHERE content LIKE ? ESCAPE '\\' COLLATE NOCASE ORDER BY id DESC LIMIT ?`
       )
-      .all(`%${query}%`, limit) as ConversationHistoryEntry[];
+      .all(`%${escapeLikeFragment(query)}%`, limit) as ConversationHistoryEntry[];
   }
 
   /** Total number of retained turns (bounded by MAX_ROWS), for a dashboard summary. */

@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { escapeLikeFragment } from "@/core/db/likeEscape";
 import type {
   MemoryCategory,
   MemoryHistoryEntry,
@@ -361,11 +362,16 @@ export class MemoryStore {
    * row in the table. See `DEFAULT_QUERY_LIMIT`'s own doc comment.
    */
   search(fragment: string, limit: number = DEFAULT_QUERY_LIMIT): MemoryRecord[] {
+    // escapeLikeFragment: a literal `_` or `%` in the search fragment
+    // (e.g. "wifi_password") would otherwise be interpreted as a LIKE
+    // wildcard instead of a literal character, silently matching
+    // unrelated rows like "wifi.password" — see the helper's doc comment.
+    const pattern = `%${escapeLikeFragment(fragment)}%`;
     const rows = this.db
       .query(
-        `SELECT ${SELECT_COLUMNS} FROM memory_records WHERE key LIKE ? OR value LIKE ? ORDER BY created_at DESC LIMIT ?`
+        `SELECT ${SELECT_COLUMNS} FROM memory_records WHERE key LIKE ? ESCAPE '\\' OR value LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?`
       )
-      .all(`%${fragment}%`, `%${fragment}%`, limit) as MemoryRow[];
+      .all(pattern, pattern, limit) as MemoryRow[];
     return rows.map(rowToRecord);
   }
 
