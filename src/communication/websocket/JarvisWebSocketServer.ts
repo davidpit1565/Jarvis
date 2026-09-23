@@ -1328,7 +1328,8 @@ export class JarvisWebSocketServer {
       return new Response(`<?xml version="1.0" encoding="UTF-8"?><Response/>`, { headers: { "Content-Type": "text/xml" } });
     }
 
-    return await smsGateway.handleIncomingSms(fromNumber, params.Body ?? "");
+    const mediaCount = Number.parseInt(params.NumMedia ?? "0", 10) || 0;
+    return await smsGateway.handleIncomingSms(fromNumber, params.Body ?? "", mediaCount);
   }
 
   /**

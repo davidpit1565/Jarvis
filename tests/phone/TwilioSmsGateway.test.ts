@@ -34,6 +34,34 @@ describe("TwilioSmsGateway.handleIncomingSms", () => {
     expect(body).not.toContain("<Message>");
   });
 
+  test("replies with a graceful not-yet-supported message for an MMS with no caption, instead of staying silent", async () => {
+    const gateway = new TwilioSmsGateway(
+      (): SmsSession => ({ orchestrator: makeStubOrchestrator(async () => "unused"), userId: "local-user" })
+    );
+
+    const response = await gateway.handleIncomingSms("+15551234567", "", 2);
+    const body = await textOf(response);
+
+    expect(body).toContain("<Message>");
+    expect(body).toMatch(/photos or attachments/i);
+  });
+
+  test("tells the model about attached media it can't see, alongside a caption", async () => {
+    let messageSeenByBrain = "";
+    const gateway = new TwilioSmsGateway((): SmsSession => ({
+      orchestrator: makeStubOrchestrator(async (_userId, message) => {
+        messageSeenByBrain = message;
+        return "ok";
+      }),
+      userId: "local-user",
+    }));
+
+    await gateway.handleIncomingSms("+15551234567", "check this out", 1);
+
+    expect(messageSeenByBrain).toContain("check this out");
+    expect(messageSeenByBrain).toMatch(/attached 1 image/i);
+  });
+
   test("reuses the same session/conversation across multiple texts from the same number", async () => {
     let sessionsCreated = 0;
     const gateway = new TwilioSmsGateway((): SmsSession => {
