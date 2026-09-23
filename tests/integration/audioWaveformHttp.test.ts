@@ -6,6 +6,9 @@ import { PairingService } from "@/devices/pairing/PairingService";
 import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnectionManager";
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { AudioLevelBroadcaster } from "@/communication/websocket/AudioLevelBroadcaster";
+import { WebAuthnStore } from "@/auth/WebAuthnStore";
+import { WebAuthnService } from "@/auth/WebAuthnService";
+import { SessionStore } from "@/auth/SessionStore";
 
 const AUTH_TOKEN = "test-auth-token";
 const PUBLIC_BASE_URL = "https://example.ngrok.io";
@@ -167,6 +170,40 @@ describe("Audio waveform routes", () => {
       headers: { Upgrade: "websocket", Connection: "Upgrade" },
     });
     expect(response.status).toBe(404);
+  });
+
+  test("/dashboard/audio-ws requires the same session as the locked dashboard once a WebAuthn credential exists", async () => {
+    // The dashboard page itself (GET /) locks behind a session once any
+    // credential is registered — the audio-ws socket feeding its live
+    // waveform must be gated the same way, not reachable by anyone who
+    // discovers the deterministic wss:// URL with no session at all.
+    const store = new WebAuthnStore();
+    store.save({ id: "cred-1", publicKey: new Uint8Array([1, 2, 3]), counter: 0 });
+    const webAuthnService = new WebAuthnService(store);
+    const sessionStore = new SessionStore();
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      audioLevelBroadcaster: new AudioLevelBroadcaster(),
+      webAuthnService,
+      sessionStore,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const unauthedResponse = await fetch(`http://localhost:${handle.port}/dashboard/audio-ws`, {
+      headers: { Upgrade: "websocket", Connection: "Upgrade" },
+    });
+    expect(unauthedResponse.status).toBe(401);
+
+    const token = sessionStore.create();
+    const authedResponse = await fetch(`http://localhost:${handle.port}/dashboard/audio-ws`, {
+      headers: { Upgrade: "websocket", Connection: "Upgrade", Cookie: `jarvis_session=${token}` },
+    });
+    expect(authedResponse.status).not.toBe(401);
   });
 
   test("non-media Twilio events (connected/start/stop) are ignored without error", async () => {
