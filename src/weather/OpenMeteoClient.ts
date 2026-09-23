@@ -1,3 +1,5 @@
+import { apiError } from "@/core/net/apiError";
+
 export interface CurrentWeather {
   temperatureC: number;
   windSpeedKph: number;
@@ -85,7 +87,7 @@ export class OpenMeteoClient {
 
     const response = await fetch(url.toString());
     if (!response.ok) {
-      throw new Error(`Open-Meteo request failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Open-Meteo request failed", response);
     }
 
     const data = (await response.json()) as {
@@ -118,7 +120,7 @@ export class OpenMeteoClient {
 
     const response = await fetch(url.toString());
     if (!response.ok) {
-      throw new Error(`Open-Meteo request failed (${response.status}): ${await response.text().catch(() => "")}`);
+      throw await apiError("Open-Meteo request failed", response);
     }
 
     const data = (await response.json()) as {

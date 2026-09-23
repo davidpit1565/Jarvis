@@ -48,6 +48,19 @@ describe("OpenMeteoClient.getCurrentWeather", () => {
     await expect(client.getCurrentWeather()).rejects.toThrow(/400/);
   });
 
+  test("does not leak the raw response body into the thrown error", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ reason: "internal upstream detail" }), { status: 400 })) as unknown as typeof fetch;
+
+    const client = new OpenMeteoClient(0, 0);
+    let error: Error | undefined;
+    await client.getCurrentWeather().catch((e) => {
+      error = e as Error;
+    });
+    expect(error?.message).not.toContain("internal upstream detail");
+    expect(error?.message).toContain("400");
+  });
+
   test("throws if the response is missing current_weather", async () => {
     global.fetch = (async () => new Response(JSON.stringify({}), { status: 200 })) as unknown as typeof fetch;
 
@@ -122,6 +135,19 @@ describe("OpenMeteoClient.getDailyForecast", () => {
 
     const client = new OpenMeteoClient(0, 0);
     await expect(client.getDailyForecast()).rejects.toThrow(/400/);
+  });
+
+  test("does not leak the raw response body into the thrown error", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ reason: "internal upstream detail" }), { status: 400 })) as unknown as typeof fetch;
+
+    const client = new OpenMeteoClient(0, 0);
+    let error: Error | undefined;
+    await client.getDailyForecast().catch((e) => {
+      error = e as Error;
+    });
+    expect(error?.message).not.toContain("internal upstream detail");
+    expect(error?.message).toContain("400");
   });
 
   test("throws if the response is missing daily", async () => {
