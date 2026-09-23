@@ -17,6 +17,20 @@ import { cosineSimilarity } from "@/core/embeddings/similarity";
 const DEFAULT_CATEGORY: MemoryCategory = "fact";
 const DEFAULT_IMPORTANCE: MemoryImportance = 3;
 const DEFAULT_TRUST: MemoryTrust = "USER_STATED";
+
+// expires_at is compared/sorted as raw SQLite TEXT everywhere it's read
+// (getActive/searchSemantic/purgeExpired all do `expires_at > ?`/`<= ?`
+// against a canonical `now.toISOString()`), so a caller-supplied
+// expiresAt must be canonicalized to the same "Z" form before storage —
+// otherwise a valid-but-differently-formatted ISO string (e.g. a
+// "+05:00" offset instead of "Z") parses to the correct instant but
+// isn't lexicographically comparable to a "Z"-form timestamp, and can
+// silently never expire (or appear already-expired) depending on how
+// its digits happen to compare as plain text. Same fix as the
+// equivalent ReminderStore.dueAt normalization.
+function normalizeExpiresAt(expiresAt: string | null): string | null {
+  return expiresAt !== null ? new Date(expiresAt).toISOString() : null;
+}
 /** A "temporary" memory saved with no explicit expiry gets one day — long enough to survive the rest of a session, short enough that it doesn't quietly become permanent. */
 const DEFAULT_TEMPORARY_TTL_MS = 24 * 60 * 60 * 1000;
 /**
@@ -267,7 +281,7 @@ export class MemoryStore {
     const expiresAt =
       existing && !categoryChanged
         ? input.expiresAt !== undefined
-          ? input.expiresAt
+          ? normalizeExpiresAt(input.expiresAt)
           : existing.expiresAt
         : this.resolveExpiresAt(category, input.expiresAt, createdAt);
 
@@ -360,7 +374,7 @@ export class MemoryStore {
     explicit: string | null | undefined,
     createdAt: string
   ): string | null {
-    if (explicit !== undefined) return explicit;
+    if (explicit !== undefined) return normalizeExpiresAt(explicit);
     if (category === "temporary") {
       return new Date(new Date(createdAt).getTime() + DEFAULT_TEMPORARY_TTL_MS).toISOString();
     }
