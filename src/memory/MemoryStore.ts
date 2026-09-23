@@ -245,8 +245,14 @@ export class MemoryStore {
     if (existing) {
       const valueChanged = existing.value.trim() !== input.value.trim();
 
-      if (valueChanged && TRUST_RANK[source] < TRUST_RANK[existing.source]) {
-        // Poisoning defense: log the attempt, but never apply it.
+      if (TRUST_RANK[source] < TRUST_RANK[existing.source]) {
+        // Poisoning defense: a lower-trust source can never take over this
+        // key, even via a same-value resave — the unconditional UPDATE
+        // below writes `source` regardless of whether the text changed, so
+        // gating this only on `valueChanged` would let a same-value
+        // MODEL_INFERRED resave silently downgrade an existing
+        // USER_STATED record's trust rank, defeating the defense on the
+        // very next write. Log the attempt, but never apply it.
         this.db
           .query(
             `INSERT INTO memory_history (id, memory_key, old_value, new_value, changed_at, old_trust, new_trust, flagged_conflict) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
