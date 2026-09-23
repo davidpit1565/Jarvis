@@ -1225,11 +1225,35 @@ export class JarvisWebSocketServer {
    * never grants itself a role by claiming one in its own payload.
    */
   approveDevice(deviceId: string, code: string): { credential: string } {
-    const { pairingService, deviceConnectionManager, deviceRegistry, permissionService, defaultUserId, autoGrantToolIdsOnApproval } =
-      this.deps;
+    const {
+      pairingService,
+      deviceConnectionManager,
+      deviceRegistry,
+      permissionService,
+      defaultUserId,
+      autoGrantToolIdsOnApproval,
+      eventBus,
+    } = this.deps;
     const { secret } = pairingService.approvePairing(deviceId, code);
 
+    // Captured before maybeAssignRequestedRole: a device revoked and then
+    // re-approved already holds its prior role (revokeDevice never clears
+    // DeviceRegistry's role column — see its own doc comment), so
+    // maybeAssignRequestedRole's "already has a role" guard skips it and
+    // never re-emits "device.roleGranted". Without this, a re-approved
+    // primary device's role-based standing tool grants (QUIT_APPLICATION,
+    // SCHEDULE_MAC_NOTIFICATION — cleared by the earlier device.revoked)
+    // stay missing until the whole process restarts, even though the
+    // device still shows role: "primary" everywhere. Re-emitting here
+    // re-derives them; it's a no-op for a brand-new role assignment, which
+    // maybeAssignRequestedRole below already emits for on its own.
+    const preExistingRole = deviceRegistry.getDevice(deviceId)?.role ?? null;
+
     this.maybeAssignRequestedRole(deviceId);
+
+    if (preExistingRole) {
+      eventBus.emit("device.roleGranted", { deviceId, role: preExistingRole });
+    }
 
     if (permissionService && defaultUserId && autoGrantToolIdsOnApproval?.length) {
       for (const toolId of autoGrantToolIdsOnApproval) {
