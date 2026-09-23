@@ -112,3 +112,61 @@ describe("morning briefing delivery gate", () => {
     expect(pending.dateKey).toBe("2026-01-19");
   });
 });
+
+/**
+ * Mirrors the in-flight-guard fix for all three schedulers above:
+ * setInterval fires on a fixed wall-clock schedule regardless of whether
+ * the previous tick's async send has resolved yet, and each "already sent"
+ * commit only happens after that send resolves — so without a guard, a
+ * slow send straddling a tick boundary lets a second tick see the same
+ * "not sent yet" state and send a duplicate. A boolean flag set before the
+ * async call and cleared in `finally` (checked at the top of the next
+ * tick) prevents a second concurrent send while one is still in flight —
+ * the same pattern already used by the automation-rule and wake-up-call
+ * schedulers.
+ */
+describe("proactive-push in-flight guard", () => {
+  async function tick(state: { sendInFlight: boolean; sent: number }, due: boolean, send: () => Promise<void>) {
+    if (state.sendInFlight) return;
+    if (!due) return;
+    state.sendInFlight = true;
+    try {
+      await send();
+      state.sent++;
+    } finally {
+      state.sendInFlight = false;
+    }
+  }
+
+  test("a second tick landing while a send is still in flight does not start a duplicate send", async () => {
+    const state = { sendInFlight: false, sent: 0 };
+    let resolveFirstSend!: () => void;
+    const firstSend = new Promise<void>((resolve) => {
+      resolveFirstSend = resolve;
+    });
+
+    // Tick 1 starts a slow send and doesn't await it here (mirrors the
+    // real scheduler: the interval callback is what awaits it, not the
+    // test) — Tick 2 fires while it's still pending.
+    const tick1 = tick(state, true, () => firstSend);
+    const tick2 = tick(state, true, async () => {
+      state.sent++;
+    });
+
+    resolveFirstSend();
+    await Promise.all([tick1, tick2]);
+
+    // Only the first tick's send actually ran — the second saw
+    // sendInFlight already true and returned immediately.
+    expect(state.sent).toBe(1);
+  });
+
+  test("once the in-flight send settles, the next tick can send normally", async () => {
+    const state = { sendInFlight: false, sent: 0 };
+    await tick(state, true, async () => {});
+    expect(state.sendInFlight).toBe(false);
+
+    await tick(state, true, async () => {});
+    expect(state.sent).toBe(2);
+  });
+});
