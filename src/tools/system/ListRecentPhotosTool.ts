@@ -36,4 +36,15 @@ export const listRecentPhotosTool: DeviceTool = {
   },
   requiredPermission: PermissionLevel.READ,
   target: "device",
+  validateInput(input) {
+    if (input.limit !== undefined) {
+      if (typeof input.limit !== "number" || !Number.isFinite(input.limit) || !Number.isInteger(input.limit)) {
+        return { valid: false, reason: "limit must be an integer" };
+      }
+      if (input.limit < 1 || input.limit > 50) {
+        return { valid: false, reason: "limit must be between 1 and 50" };
+      }
+    }
+    return { valid: true };
+  },
 };
