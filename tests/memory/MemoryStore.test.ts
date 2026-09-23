@@ -249,6 +249,25 @@ describe("MemoryStore", () => {
       store.close();
     });
 
+    test("normalizes a non-Z offset-form expiresAt to canonical UTC, so it stays comparable to getActive's raw-text `now` check", () => {
+      // "+05:00" denotes the same instant as "...T03:00:00.000Z" but is not
+      // lexicographically comparable to a canonical "Z" timestamp the way
+      // getActive/purgeExpired's raw SQL text comparisons require.
+      const store = new MemoryStore(":memory:");
+      const record = store.save({
+        key: "session.topic",
+        value: "x",
+        category: "temporary",
+        expiresAt: "2026-09-24T08:00:00+05:00",
+      });
+
+      expect(record.expiresAt).toBe("2026-09-24T03:00:00.000Z");
+
+      const active = store.getActive("2026-09-24T04:00:00.000Z");
+      expect(active.find((r) => r.key === "session.topic")).toBeUndefined();
+      store.close();
+    });
+
     test("a resave that omits expiresAt preserves the existing record's expiry instead of recomputing it", () => {
       const store = new MemoryStore(":memory:");
       const explicit = new Date(Date.now() + 60_000).toISOString();
