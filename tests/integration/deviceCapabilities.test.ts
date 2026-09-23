@@ -191,7 +191,13 @@ describe("device.capabilities (capability discovery / permission status)", () =>
     wsB.close();
   });
 
-  test("a device.capabilities message for an unregistered deviceId is ignored, not an error", async () => {
+  test("a device.capabilities message from a socket that never authenticated via device.register is rejected", async () => {
+    // Security fix: a self-declared deviceId in the payload is never
+    // enough on its own (device ids aren't secret) — this socket never
+    // sent device.register at all, so it must be rejected outright
+    // rather than silently no-op'd, which would otherwise let an
+    // attacker claiming a REAL, already-registered device's id corrupt
+    // its stored capability map with zero credential.
     const { handle, port } = setupServer();
     activeHandle = handle;
 
@@ -220,6 +226,61 @@ describe("device.capabilities (capability discovery / permission status)", () =>
     );
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(errors).toHaveLength(0);
+    expect(errors).toHaveLength(1);
+  });
+
+  test("a device.capabilities message claiming a REAL device's id, from a socket that never authenticated, is rejected", async () => {
+    // The concrete exploit this closes: an attacker who knows/guesses a
+    // real, already-paired device's id (ids aren't secret) opens a raw
+    // socket and declares that id without ever presenting its
+    // credential. Before this fix, since the target device genuinely
+    // exists in the registry, DeviceRegistry.updateCapabilities would
+    // have succeeded and silently corrupted its real permission map.
+    const { handle, port, deviceRegistry } = setupServer();
+    activeHandle = handle;
+
+    const realDeviceId = "capabilities-device-real";
+    const legitWs = await registerAndApprove(port!, realDeviceId);
+    legitWs.send(
+      JSON.stringify({
+        requestId: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        deviceId: realDeviceId,
+        type: "device.capabilities",
+        payload: { permissions: { accessibility: "granted" } },
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(deviceRegistry.getDevice(realDeviceId)?.permissions).toEqual({ accessibility: "granted" });
+
+    const attackerWs = new WebSocket(`ws://localhost:${port}`);
+    activeSocket = attackerWs;
+    await new Promise<void>((resolve, reject) => {
+      attackerWs.onopen = () => resolve();
+      attackerWs.onerror = () => reject(new Error("WebSocket error"));
+      setTimeout(() => reject(new Error("Timed out opening socket")), 2000);
+    });
+
+    const errors: unknown[] = [];
+    attackerWs.onmessage = (event) => {
+      const message = JSON.parse(event.data as string);
+      if (message.type === "error") errors.push(message);
+    };
+
+    attackerWs.send(
+      JSON.stringify({
+        requestId: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        deviceId: realDeviceId,
+        type: "device.capabilities",
+        payload: { permissions: { accessibility: "denied", microphone: "denied" } },
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(errors).toHaveLength(1);
+    expect(deviceRegistry.getDevice(realDeviceId)?.permissions).toEqual({ accessibility: "granted" });
+
+    legitWs.close();
   });
 });
