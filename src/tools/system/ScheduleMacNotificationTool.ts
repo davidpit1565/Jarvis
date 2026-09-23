@@ -34,4 +34,20 @@ export const scheduleMacNotificationTool: DeviceTool = {
   },
   requiredPermission: PermissionLevel.SAFE_ACTION,
   target: "device",
+  validateInput(input) {
+    if (typeof input.message !== "string" || input.message.trim().length === 0) {
+      return { valid: false, reason: "message must be a non-empty string" };
+    }
+    if (input.delaySeconds !== undefined) {
+      if (
+        typeof input.delaySeconds !== "number" ||
+        !Number.isFinite(input.delaySeconds) ||
+        input.delaySeconds < 0 ||
+        input.delaySeconds > 86400
+      ) {
+        return { valid: false, reason: "delaySeconds must be a number between 0 and 86400" };
+      }
+    }
+    return { valid: true };
+  },
 };
