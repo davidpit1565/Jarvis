@@ -254,11 +254,22 @@ export class MemoryStore {
     // only applies when there's no existing record to fall back to.
     const category = input.category ?? existing?.category ?? DEFAULT_CATEGORY;
     const importance = input.importance ?? existing?.importance ?? DEFAULT_IMPORTANCE;
-    const expiresAt = existing
-      ? input.expiresAt !== undefined
-        ? input.expiresAt
-        : existing.expiresAt
-      : this.resolveExpiresAt(category, input.expiresAt, createdAt);
+    // A category change needs its expiry recomputed from scratch (via
+    // resolveExpiresAt, same as a brand-new record) rather than reusing
+    // the old category's expiresAt as-is — otherwise resaving an
+    // existing "fact" (expiresAt: null) with category: "temporary" and no
+    // explicit expiresAt would keep the inherited null forever, silently
+    // defeating the entire point of marking it temporary (getActive()'s
+    // "expires_at IS NULL" filter treats it as never-expiring). Only a
+    // resave that leaves the category as it already was preserves the
+    // existing expiresAt untouched.
+    const categoryChanged = existing !== null && category !== existing.category;
+    const expiresAt =
+      existing && !categoryChanged
+        ? input.expiresAt !== undefined
+          ? input.expiresAt
+          : existing.expiresAt
+        : this.resolveExpiresAt(category, input.expiresAt, createdAt);
 
     if (existing) {
       const valueChanged = existing.value.trim() !== input.value.trim();
