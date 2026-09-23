@@ -21,6 +21,9 @@ function twiml(message: string): Response {
 
 const emptyTwiml = () => new Response(`<?xml version="1.0" encoding="UTF-8"?><Response/>`, { headers: { "Content-Type": "text/xml" } });
 
+const MMS_NOT_SUPPORTED_MESSAGE =
+  "Sorry, I can't view photos or attachments over text yet — try describing what's in it, or send it via Telegram instead.";
+
 /**
  * A real texting channel — the same Twilio number the phone gateway
  * already answers calls on, reused for SMS at zero extra setup: no new
@@ -60,13 +63,29 @@ export class TwilioSmsGateway {
    * caller can always send this Response back to Twilio regardless of
    * what went wrong inside.
    */
-  async handleIncomingSms(fromNumber: string, body: string): Promise<Response> {
+  async handleIncomingSms(fromNumber: string, body: string, mediaCount = 0): Promise<Response> {
     const text = body.trim();
-    if (text.length === 0) return emptyTwiml();
+    if (text.length === 0) {
+      // An MMS with only an attachment (a photo, no caption) arrives with
+      // an empty Body — without this check that silently returned no
+      // reply at all, the same "looks broken" failure mode just fixed for
+      // Telegram's own photo/voice/document messages.
+      if (mediaCount > 0) return twiml(MMS_NOT_SUPPORTED_MESSAGE);
+      return emptyTwiml();
+    }
+
+    // A caption alongside media still only ever gives the model the
+    // caption text — the image itself never reaches it — so the model is
+    // told explicitly rather than risk it confidently describing an
+    // attachment it never received.
+    const messageForBrain =
+      mediaCount > 0
+        ? `${text}\n\n[The user also attached ${mediaCount} image(s)/file(s) over MMS, which are not visible to you.]`
+        : text;
 
     const session = this.getOrCreateSession(fromNumber);
     try {
-      const reply = await session.orchestrator.handleUserMessage(session.userId, text);
+      const reply = await session.orchestrator.handleUserMessage(session.userId, messageForBrain);
       return twiml(reply);
     } catch (error) {
       console.error(`[jarvis] SMS message handling failed for ${fromNumber}:`, error);
