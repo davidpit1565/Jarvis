@@ -53,4 +53,19 @@ describe("TwilioCostGuard", () => {
 
     expect(guard.remaining("2026-01-15")).toBe(0);
   });
+
+  test("release() refunds a consumed use, so a failed call doesn't burn quota", () => {
+    const guard = new TwilioCostGuard(1);
+
+    expect(guard.tryConsume("2026-01-15")).toBe(true);
+    guard.release("2026-01-15");
+    expect(guard.tryConsume("2026-01-15")).toBe(true);
+  });
+
+  test("release() is a no-op once today's count is already 0", () => {
+    const guard = new TwilioCostGuard(1);
+
+    guard.release("2026-01-15");
+    expect(guard.remaining("2026-01-15")).toBe(1);
+  });
 });

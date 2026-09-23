@@ -1066,6 +1066,11 @@ function main() {
             activityLog.record(`Placed wake-up call${call.label ? ` (${call.label})` : ""}`);
           })
           .catch((error) => {
+            // The consumed slot was for a call that never actually went
+            // out — refund it so a transient Twilio failure doesn't burn
+            // real quota and falsely block every subsequent wake-up call
+            // for the rest of the day.
+            outboundCallCostGuard.release(todayDateStr);
             const message = error instanceof Error ? error.message : String(error);
             console.error(`[jarvis] failed to place wake-up call ${call.id}:`, message);
             activityLog.record(`Failed to place wake-up call${call.label ? ` (${call.label})` : ""}: ${message}`);

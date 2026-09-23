@@ -46,6 +46,19 @@ export class TwilioCostGuard {
     return Math.max(0, this.maxPerDay - (this.countsByDay.get(todayKey) ?? 0));
   }
 
+  /**
+   * Refunds one consumed use for `todayKey` — call this when a
+   * `tryConsume()`-gated action actually failed (e.g. the Twilio API call
+   * itself threw), so a run of transient failures doesn't burn through
+   * the daily cap with zero real calls placed and then silently block
+   * every legitimate call for the rest of the day. A no-op once today's
+   * count is already 0.
+   */
+  release(todayKey: string): void {
+    const count = this.countsByDay.get(todayKey) ?? 0;
+    if (count > 0) this.countsByDay.set(todayKey, count - 1);
+  }
+
   // A long-running process would otherwise grow this map by one entry per
   // calendar day forever; nothing needs more than the current day's count,
   // so every other day's entry is dropped as soon as a new day shows up.
