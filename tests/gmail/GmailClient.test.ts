@@ -217,6 +217,59 @@ describe("GmailClient.getMessageBody", () => {
     expect(message.body).toBe(plainText);
   });
 
+  test("finds a text/plain part nested behind an earlier text/html leaf sibling, instead of returning that leaf's raw HTML", async () => {
+    // Real-world MIME shape: multipart/mixed[ text/html-only leaf,
+    // multipart/alternative[ text/html, text/plain ] ] — the text/plain
+    // part exists, but only inside the SECOND top-level part, after an
+    // earlier sibling that's a bare text/html leaf with no nested parts.
+    const plainText = "the real plain-text body";
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          payload: {
+            mimeType: "multipart/mixed",
+            headers: [{ name: "Subject", value: "Nested" }],
+            parts: [
+              { mimeType: "text/html", body: { data: Buffer.from("<p>banner</p>", "utf8").toString("base64url") } },
+              {
+                mimeType: "multipart/alternative",
+                parts: [
+                  { mimeType: "text/html", body: { data: Buffer.from("<p>html version</p>", "utf8").toString("base64url") } },
+                  { mimeType: "text/plain", body: { data: Buffer.from(plainText, "utf8").toString("base64url") } },
+                ],
+              },
+            ],
+          },
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const message = await client.getMessageBody("m1");
+
+    expect(message.body).toBe(plainText);
+  });
+
+  test("falls back to raw HTML only when no text/plain part exists anywhere in the payload", async () => {
+    const htmlBody = "<p>html only, no plain-text part exists</p>";
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          payload: {
+            mimeType: "multipart/mixed",
+            headers: [{ name: "Subject", value: "HTML only" }],
+            parts: [{ mimeType: "text/html", body: { data: Buffer.from(htmlBody, "utf8").toString("base64url") } }],
+          },
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const message = await client.getMessageBody("m1");
+
+    expect(message.body).toBe(htmlBody);
+  });
+
   test("falls back to an empty body when nothing decodable is found", async () => {
     global.fetch = (async () =>
       new Response(JSON.stringify({ payload: { headers: [] } }), { status: 200 })) as unknown as typeof fetch;
