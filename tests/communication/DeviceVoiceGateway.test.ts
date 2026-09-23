@@ -141,4 +141,20 @@ describe("DeviceVoiceGateway.awaitConfirmation", () => {
 
     expect(calls[calls.length - 1]).toEqual({ deviceId: "mac-1", text: "Please say yes or no." });
   });
+
+  test("an unanswered confirmation times out to false and clears the pending entry, instead of bricking the device", async () => {
+    const { manager, calls } = stubDeviceConnectionManager();
+    const { orchestrator, receivedMessages } = makeCapturingOrchestrator();
+    const gateway = new DeviceVoiceGateway(manager, () => ({ orchestrator, userId: "local-user" }));
+
+    const resultPromise = gateway.awaitConfirmation("mac-1", "Run the dangerous tool?", 10);
+    expect(await resultPromise).toBe(false);
+
+    // A normal transcript sent afterward must reach the orchestrator like
+    // any other — not get treated as a stale yes/no answer.
+    await gateway.handleTranscript("mac-1", "what's on my calendar");
+
+    expect(receivedMessages).toContain("what's on my calendar");
+    expect(calls.some((c) => c.text === "Please say yes or no.")).toBe(false);
+  });
 });

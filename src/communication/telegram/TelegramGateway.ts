@@ -102,13 +102,35 @@ export class TelegramGateway {
    * bidirectional text channel, so it gets the same real confirmation UX as
    * the terminal instead of being auto-denied. Only one confirmation can be
    * pending per chat at a time; a new one silently replaces (and orphans)
-   * any prior unanswered entry for that chat, which is fine because
-   * `ConfirmationService`'s own timeout already resolves the caller waiting
-   * on that stale prompt with `false`.
+   * any prior unanswered entry for that chat.
+   *
+   * Owns its own timeout rather than relying solely on
+   * `ConfirmationService`'s: that one resolves its own promise `false` on
+   * timeout but has no way to reach back into this gateway's
+   * `pendingConfirmations` map, so without this, an unanswered prompt left
+   * a stale entry there forever — every future message from that chat
+   * would then be treated as a yes/no answer to the long-dead prompt
+   * ("Please reply yes or no.") and never reach the Orchestrator, silently
+   * bricking the conversation until the user stumbled onto "yes"/"no".
    */
-  async awaitConfirmation(chatId: string, questionText: string): Promise<boolean> {
+  async awaitConfirmation(chatId: string, questionText: string, timeoutMs = 60_000): Promise<boolean> {
     const resultPromise = new Promise<boolean>((resolve) => {
-      this.pendingConfirmations.set(chatId, resolve);
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        if (this.pendingConfirmations.get(chatId) === settle) this.pendingConfirmations.delete(chatId);
+        resolve(false);
+      }, timeoutMs);
+
+      const settle = (answer: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(answer);
+      };
+
+      this.pendingConfirmations.set(chatId, settle);
     });
     await this.sendMessage(chatId, questionText);
     return resultPromise;
