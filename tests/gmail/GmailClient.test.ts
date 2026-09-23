@@ -548,4 +548,20 @@ describe("GmailClient non-ASCII header encoding", () => {
     expect(toLine).not.toContain("José");
     expect(toLine).toMatch(/^To: =\?UTF-8\?B\?.+\?= <jose@example\.com>$/);
   });
+
+  test("declares Content-Transfer-Encoding: 8bit so a non-ASCII body isn't sent under the implied 7bit default", async () => {
+    let capturedRaw = "";
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse((init?.body as string) ?? "{}");
+      capturedRaw = body.raw;
+      return new Response(JSON.stringify({ id: "sent-1" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.sendMessage("to@example.com", "Subject", "Café meeting at 3pm — see you there 🎉");
+
+    const message = decodeRawMessage(capturedRaw);
+    expect(message).toContain("Content-Transfer-Encoding: 8bit");
+    expect(message).toContain("Café meeting at 3pm — see you there 🎉");
+  });
 });
