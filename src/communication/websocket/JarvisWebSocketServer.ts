@@ -1142,19 +1142,36 @@ export class JarvisWebSocketServer {
     // socket establishes its identity in the first place) carries its own
     // self-declared `deviceId` straight from the client's JSON body —
     // never verified against the identity this specific socket actually
-    // authenticated as during registration/pairing. Without this check, a
-    // legitimately-paired device A could send device.status/
-    // device.capabilities/voice.transcript/tool.result claiming to be a
-    // different device B (device ids aren't secret — they're logged, shown
-    // in pairing UI, echoed back in device.command acks), and Core would
-    // silently act on it as if it came from B: flipping B's online status,
-    // corrupting B's stored capability map, or injecting a voice command
-    // under B's identity. Same "trust a device-controlled field as if it
-    // were the Core-verified identity" shape as the device-role-
-    // self-escalation fix.
-    if (message.type !== "device.register" && ws.data.deviceId && message.deviceId && message.deviceId !== ws.data.deviceId) {
-      ws.send(JSON.stringify({ type: "error", reason: "deviceId does not match the authenticated connection" }));
-      return;
+    // authenticated as. `ws.data.connection` (not `ws.data.deviceId`) is
+    // the right signal here: `deviceId` is already set the moment a
+    // device.register is *received*, even for a still-unapproved pending
+    // pairing with no valid credential at all (see handleRegister's
+    // unauthenticated branch), whereas `connection` is only ever set once
+    // this socket has been approved/authenticated (registerConnection()
+    // is called in lockstep with it). Requiring only "has sent
+    // device.register at least once" would still let an attacker send a
+    // register claiming any real device's id, get parked in
+    // pendingConnections with no credential, and then send
+    // device.status/device.capabilities/voice.transcript for that same
+    // id and pass an identity check that only asked "did this socket
+    // register", not "was it actually approved." Device ids aren't
+    // secret (logged, shown in pairing UI, echoed back in
+    // device.command acks), so without requiring real authentication
+    // here, anyone could flip a real device's online status, corrupt its
+    // stored capability map, or — worst of all — run a full orchestrator
+    // turn (arbitrary tool execution) under its identity via
+    // voice.transcript, since DeviceVoiceGateway.handleTranscript() does
+    // no auth check of its own; it just trusts whatever deviceId it's
+    // handed.
+    if (message.type !== "device.register") {
+      if (!ws.data.connection) {
+        ws.send(JSON.stringify({ type: "error", reason: "Device is not authenticated on this connection" }));
+        return;
+      }
+      if (message.deviceId && message.deviceId !== ws.data.deviceId) {
+        ws.send(JSON.stringify({ type: "error", reason: "deviceId does not match the authenticated connection" }));
+        return;
+      }
     }
 
     switch (message.type) {

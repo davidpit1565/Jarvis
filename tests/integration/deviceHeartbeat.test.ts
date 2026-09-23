@@ -99,7 +99,13 @@ describe("Device heartbeat (ping/pong)", () => {
     expect(afterLastSeen).not.toBe(beforeLastSeen);
   });
 
-  test("a pong for an unregistered device is silently ignored, not an error", async () => {
+  test("a pong from a socket that never authenticated via device.register is rejected, not silently accepted", async () => {
+    // Security fix: a socket must actually authenticate (device.register
+    // with a valid credential) before Core accepts ANY other message
+    // type from it — a self-declared deviceId in the payload alone
+    // (device ids aren't secret) is never enough. Without this, an
+    // attacker could open a raw socket and claim to be any real,
+    // already-paired device without ever presenting its credential.
     const { handle, port } = setupServer();
     activeHandle = handle;
 
@@ -128,7 +134,7 @@ describe("Device heartbeat (ping/pong)", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    expect(errors).toHaveLength(0);
+    expect(errors).toHaveLength(1);
   });
 
   test("a pending (not-yet-approved) device is pinged too", async () => {
