@@ -1333,23 +1333,46 @@ function main() {
     const due = reminderStore.getDueUnnotified(nowIso);
 
     for (const reminder of due) {
-      reminderStore.markNotified(reminder.id, nowIso);
       const message = `⏰ Reminder: ${reminder.text}`;
-      activityLog.record(`Reminder notification sent: ${reminder.text.slice(0, 100)}`);
-      if (telegramGateway && config.telegramOwnerChatId) {
-        telegramGateway.sendMessage(config.telegramOwnerChatId, message).catch((error) => {
-          console.error(
-            "[jarvis] failed to send reminder notification:",
-            error instanceof Error ? error.message : String(error)
-          );
-        });
-      }
+
       // Native on-device push, independent of Telegram being configured
       // at all — a paired Mac already has everything this needs, no
-      // separate bot/account setup required.
+      // separate bot/account setup required. Deliberately not gated on:
+      // DeviceConnectionManager.sendNotification is itself silent
+      // best-effort by design (no delivery confirmation to wait on), so
+      // there's nothing reliable here to condition markNotified on.
       const primaryDevice = deviceRegistry.getPrimaryDevice();
       if (primaryDevice) {
         deviceConnectionManager.sendNotification(primaryDevice.id, "JARVIS Reminder", reminder.text);
+      }
+
+      if (telegramGateway && config.telegramOwnerChatId) {
+        // markNotified only fires once Telegram confirms the send — a
+        // reminder is otherwise the exact "silently lost forever" failure
+        // mode UNDO_LAST_ACTION had: getDueUnnotified() filters on
+        // notified_at, so marking it before delivery is known to have
+        // worked means a transient Telegram hiccup (rate limit, expired
+        // token, a blip) permanently drops the alert with no retry and no
+        // sign anything went wrong. Leaving notified_at unset lets the
+        // next 30s tick just try again.
+        telegramGateway
+          .sendMessage(config.telegramOwnerChatId, message)
+          .then(() => {
+            reminderStore.markNotified(reminder.id, nowIso);
+            activityLog.record(`Reminder notification sent: ${reminder.text.slice(0, 100)}`);
+          })
+          .catch((error) => {
+            console.error(
+              "[jarvis] failed to send reminder notification (will retry next tick):",
+              error instanceof Error ? error.message : String(error)
+            );
+          });
+      } else {
+        // No Telegram configured — the on-device push above is the only
+        // channel, and it has no reliable success signal by design, so
+        // there's nothing better to gate on than firing it and moving on.
+        reminderStore.markNotified(reminder.id, nowIso);
+        activityLog.record(`Reminder notification sent: ${reminder.text.slice(0, 100)}`);
       }
     }
   }, 30_000);
