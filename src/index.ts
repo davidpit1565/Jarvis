@@ -1360,6 +1360,7 @@ function main() {
   const staleCommitmentThresholdMs = config.staleCommitmentDays * 24 * 60 * 60 * 1000;
   const inFlightStaleCommitmentIds = new Set<string>();
   const staleCommitmentInterval = setInterval(() => {
+    schedulerHealthTracker.tick("staleCommitments");
     const nowIso = new Date().toISOString();
     const stale = getStaleCommitments(
       commitmentStore.list("open"),
