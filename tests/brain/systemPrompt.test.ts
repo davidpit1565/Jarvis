@@ -7,6 +7,11 @@ describe("JARVIS_SYSTEM_PROMPT", () => {
     expect(JARVIS_SYSTEM_PROMPT).toMatch(/only the person\s+you're actually talking to/i);
   });
 
+  test("tells the model not to repeat the raw image URL after generate_image already delivered the photo", () => {
+    expect(JARVIS_SYSTEM_PROMPT).toMatch(/must not also include the raw image URL/i);
+    expect(JARVIS_SYSTEM_PROMPT).toMatch(/send it as a second, unprompted message/i);
+  });
+
   test("sets a J.A.R.V.I.S.-inspired persona that still prioritizes brevity", () => {
     expect(JARVIS_SYSTEM_PROMPT).toMatch(/J\.A\.R\.V\.I\.S\. from Iron Man/);
     expect(JARVIS_SYSTEM_PROMPT).toMatch(/address the\s+user as "sir\."/);
