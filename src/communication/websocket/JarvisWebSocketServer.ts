@@ -2239,6 +2239,15 @@ export class JarvisWebSocketServer {
       );
     }
 
+    if (req.method === "POST" && url.pathname === "/auth/logout") {
+      sessionStore.revoke(readCookie(req, SESSION_COOKIE));
+      const secure = origin.startsWith("https://") ? "; Secure" : "";
+      return Response.json(
+        { success: true },
+        { headers: { "Set-Cookie": `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure}` } }
+      );
+    }
+
     return new Response("Not found", { status: 404 });
   }
 

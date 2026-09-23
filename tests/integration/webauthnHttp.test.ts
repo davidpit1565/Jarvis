@@ -193,6 +193,44 @@ describe("WebAuthn (Face ID / Touch ID) HTTP routes", () => {
     expect(response.status).toBe(400);
   });
 
+  test("POST /auth/logout revokes the session cookie, locking the dashboard again", async () => {
+    const store = new WebAuthnStore();
+    store.save({ id: "cred-1", publicKey: new Uint8Array([1, 2, 3]), counter: 0 });
+    const webAuthnService = new WebAuthnService(store);
+    const sessionStore = new SessionStore();
+
+    const eventBus = new EventBus();
+    const server = new JarvisWebSocketServer({
+      deviceRegistry: new DeviceRegistry(),
+      deviceConnectionManager: new DeviceConnectionManager(eventBus),
+      pairingService: new PairingService(),
+      eventBus,
+      adminToken: ADMIN_TOKEN,
+      webAuthnService,
+      sessionStore,
+    });
+    const handle = server.start(0);
+    activeHandle = handle;
+
+    const token = sessionStore.create();
+    const beforeLogout = await fetch(`http://localhost:${handle.port}/status`, {
+      headers: { Cookie: `jarvis_session=${token}` },
+    });
+    expect(beforeLogout.status).toBe(200);
+
+    const logoutResponse = await fetch(`http://localhost:${handle.port}/auth/logout`, {
+      method: "POST",
+      headers: { Cookie: `jarvis_session=${token}` },
+    });
+    expect(logoutResponse.status).toBe(200);
+    expect(logoutResponse.headers.get("Set-Cookie")).toContain("Max-Age=0");
+
+    const afterLogout = await fetch(`http://localhost:${handle.port}/status`, {
+      headers: { Cookie: `jarvis_session=${token}` },
+    });
+    expect(afterLogout.status).toBe(401);
+  });
+
   test("a login attempt with a bogus assertion is rejected, not crashed", async () => {
     const { handle, port } = setupServer({ withAuth: true });
     activeHandle = handle;
