@@ -293,6 +293,23 @@ describe("AIRouter", () => {
       await expect(router.chat(REQUEST)).rejects.toThrow(BudgetExceededError);
     });
 
+    test("excludes an already-tried free provider from the hard-budget-exceeded fallback, trying a different free provider instead", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", failingBrain("groq down"), "free");
+      registry.register("anthropic", okBrain("paid reply — should never be used"), "paid");
+      registry.register("openrouter", okBrain("openrouter reply"), "free");
+      const costTracker = new CostTracker(":memory:");
+      costTracker.record("anthropic", 10); // already over the daily cap below
+      const router = new AIRouter(registry, costTracker, { freeFirst: true, maxDailyCostUsd: 5 });
+
+      // Primary (free-first) is groq, which fails; routeToFallback resolves
+      // anthropic (paid) as the fallback candidate, but the daily cap is
+      // exceeded — applyBudget must not hand back groq (already tried and
+      // already failed this same request) as the "free" substitute.
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("openrouter reply");
+    });
+
     test("never restricts a free provider, even past the cap", async () => {
       const registry = new AIProviderRegistry();
       registry.register("groq", okBrain("free reply"), "free");
