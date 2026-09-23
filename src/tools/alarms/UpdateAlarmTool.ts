@@ -26,7 +26,7 @@ export function createUpdateAlarmTool(alarmStore: AlarmStore): LocalTool<UpdateA
       properties: {
         id: { type: "string", description: "The alarm's id." },
         timeOfDay: { type: "string", description: 'New 24-hour "HH:MM". Omit to leave unchanged.' },
-        label: { type: "string", description: "New label. Omit to leave unchanged." },
+        label: { type: ["string", "null"], description: "New label, or null to clear it. Omit to leave unchanged." },
         enabled: { type: "boolean", description: "Pause (false) or resume (true) this alarm. Omit to leave unchanged." },
       },
       required: ["id"],
