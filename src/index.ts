@@ -1135,12 +1135,24 @@ function main() {
         return;
       }
 
-      lastWeeklyDigestDateKey = todayDateKey;
       const cost = estimateCostUsd(tokenUsageStore.totals(), DEFAULT_MODEL);
       const message = formatWeeklyDigest(toolAuditLog.summary(), tokenUsageStore.totals(), cost);
-      telegramGateway!.sendMessage(config.telegramOwnerChatId!, message).catch((error) => {
-        console.error("[jarvis] failed to send weekly digest:", error instanceof Error ? error.message : String(error));
-      });
+      // Only marked sent once Telegram confirms the send — otherwise a
+      // transient failure permanently skips that week's digest, since
+      // isWeeklyDigestDue never re-captures the same dateKey (same "mark
+      // before an operation that can fail" bug already fixed for reminder
+      // notifications).
+      telegramGateway!
+        .sendMessage(config.telegramOwnerChatId!, message)
+        .then(() => {
+          lastWeeklyDigestDateKey = todayDateKey;
+        })
+        .catch((error) => {
+          console.error(
+            "[jarvis] failed to send weekly digest (will retry next tick):",
+            error instanceof Error ? error.message : String(error)
+          );
+        });
     }, 30_000);
   }
 
@@ -1160,12 +1172,23 @@ function main() {
         return;
       }
 
-      checkinSentSinceLastInteraction = true;
       const hours = Math.round((Date.now() - lastInteractionAt.getTime()) / 3_600_000);
       const message = `Haven't heard from you in about ${hours} hours — just checking in.`;
-      telegramGateway!.sendMessage(config.telegramOwnerChatId!, message).catch((error) => {
-        console.error("[jarvis] failed to send check-in:", error instanceof Error ? error.message : String(error));
-      });
+      // Only marked sent once Telegram confirms the send — a failed send
+      // otherwise leaves the flag true anyway, so isCheckinDue silently
+      // never fires again for that idle period, defeating the whole point
+      // of a check-in (same bug class already fixed for reminders/digest).
+      telegramGateway!
+        .sendMessage(config.telegramOwnerChatId!, message)
+        .then(() => {
+          checkinSentSinceLastInteraction = true;
+        })
+        .catch((error) => {
+          console.error(
+            "[jarvis] failed to send check-in (will retry next tick):",
+            error instanceof Error ? error.message : String(error)
+          );
+        });
     }, 60_000);
   }
 
@@ -1189,12 +1212,13 @@ function main() {
       const unreadEmailCount = gmailClient ? await gmailClient.getMessageCount("is:unread").catch(() => undefined) : undefined;
 
       const message = formatMorningBriefing(weather, todaysEvents, dueOrOverdueReminders, unreadEmailCount);
-      telegramGateway!.sendMessage(config.telegramOwnerChatId!, message).catch((error) => {
-        console.error(
-          "[jarvis] failed to send morning briefing:",
-          error instanceof Error ? error.message : String(error)
-        );
-      });
+      // Deliberately not caught here — the caller needs to know whether
+      // the send actually succeeded, so it only commits
+      // lastMorningBriefingDateKey/clears pendingMorningBriefingDateKey on
+      // real success and retries on the next tick otherwise (same "mark
+      // before an operation that can fail" bug already fixed for
+      // reminders/digest/check-in).
+      await telegramGateway!.sendMessage(config.telegramOwnerChatId!, message);
     }
 
     morningBriefingInterval = setInterval(async () => {
@@ -1205,20 +1229,39 @@ function main() {
       const quiet = isSuppressibleByQuietHours("morning_briefing") && isQuietHours(nowTimeOfDay, quietHoursWindow);
 
       if (isMorningBriefingDue(config.morningBriefingTime!, nowTimeOfDay, todayDateKey, lastMorningBriefingDateKey)) {
-        lastMorningBriefingDateKey = todayDateKey;
         if (quiet) {
           // Queued: nothing sent now, but flushed below the first time a
-          // later tick lands outside the quiet-hours window.
+          // later tick lands outside the quiet-hours window. A plain
+          // variable assignment can't fail the way a real send can, so
+          // marking it captured immediately here is safe — it just stops
+          // isMorningBriefingDue from re-capturing the same day again
+          // while still in quiet hours.
+          lastMorningBriefingDateKey = todayDateKey;
           pendingMorningBriefingDateKey = todayDateKey;
         } else {
-          await sendMorningBriefing(now);
+          try {
+            await sendMorningBriefing(now);
+            lastMorningBriefingDateKey = todayDateKey;
+          } catch (error) {
+            console.error(
+              "[jarvis] failed to send morning briefing (will retry next tick):",
+              error instanceof Error ? error.message : String(error)
+            );
+          }
         }
         return;
       }
 
       if (pendingMorningBriefingDateKey === todayDateKey && !quiet) {
-        pendingMorningBriefingDateKey = null;
-        await sendMorningBriefing(now);
+        try {
+          await sendMorningBriefing(now);
+          pendingMorningBriefingDateKey = null;
+        } catch (error) {
+          console.error(
+            "[jarvis] failed to send queued morning briefing (will retry next tick):",
+            error instanceof Error ? error.message : String(error)
+          );
+        }
       }
     }, 30_000);
   }
