@@ -103,6 +103,35 @@ describe("MemoryStore", () => {
     store.close();
   });
 
+  test("saving the same key with different casing replaces the value instead of adding a second row", () => {
+    const store = new MemoryStore(":memory:");
+    store.save({ key: "user.timezone", value: "America/New_York" });
+    store.save({ key: "user.Timezone", value: "Europe/London" });
+
+    expect(store.getByKey("user.timezone")?.value).toBe("Europe/London");
+    // Only one row exists regardless of which casing is used to search.
+    expect(store.search("timezone")).toHaveLength(1);
+    store.close();
+  });
+
+  test("getByKey matches regardless of the key's casing", () => {
+    const store = new MemoryStore(":memory:");
+    store.save({ key: "user.name", value: "David" });
+
+    expect(store.getByKey("User.Name")?.value).toBe("David");
+    expect(store.getByKey("USER.NAME")?.value).toBe("David");
+    store.close();
+  });
+
+  test("deleteByKey matches regardless of the key's casing", () => {
+    const store = new MemoryStore(":memory:");
+    store.save({ key: "user.name", value: "David" });
+
+    expect(store.deleteByKey("User.Name")).toBe(true);
+    expect(store.getByKey("user.name")).toBeNull();
+    store.close();
+  });
+
   test("a file-backed store uses WAL journal mode", () => {
     const dbPath = `/tmp/jarvis-memory-test-${crypto.randomUUID()}.sqlite`;
     const store = new MemoryStore(dbPath);
@@ -328,6 +357,19 @@ describe("MemoryStore", () => {
 
       expect(attempt.conflict).toBe(true);
       expect(store.getByKey("user.bank_account")?.value).toBe("the account the user actually told JARVIS");
+      store.close();
+    });
+
+    test("a differently-cased key cannot dodge the poisoning defense — it's still the same logical key", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.address", value: "123 Real St", source: "USER_STATED" });
+
+      const attempt = store.save({ key: "User.Address", value: "456 Fake Ave", source: "MODEL_INFERRED" });
+
+      expect(attempt.conflict).toBe(true);
+      expect(store.getByKey("user.address")?.value).toBe("123 Real St");
+      // No second row was created under the case-variant key.
+      expect(store.search("address")).toHaveLength(1);
       store.close();
     });
 
