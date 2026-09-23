@@ -28,6 +28,21 @@ describe("RssNewsClient.getTopHeadlines", () => {
     ]);
   });
 
+  test("decodes &amp; last so a doubly-escaped entity isn't over-decoded", async () => {
+    const feed = `<?xml version="1.0"?>
+<rss><channel>
+  <item><title>How to use &amp;lt;script&amp;gt; tags safely</title><link>https://example.com/1</link></item>
+</channel></rss>`;
+    global.fetch = (async () => new Response(feed, { status: 200 })) as unknown as typeof fetch;
+
+    const client = new RssNewsClient("https://example.com/feed.xml");
+    const headlines = await client.getTopHeadlines();
+
+    expect(headlines).toEqual([
+      { title: "How to use &lt;script&gt; tags safely", link: "https://example.com/1" },
+    ]);
+  });
+
   test("caps results at maxItems", async () => {
     global.fetch = (async () => new Response(SAMPLE_FEED, { status: 200 })) as unknown as typeof fetch;
 
