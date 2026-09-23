@@ -47,12 +47,15 @@ export function createUndoLastActionTool(
         }
         if (action.type === "calendar_event_deleted") {
           if (!calendarClient) return { success: false, error: "Calendar isn't linked; can't undo this" };
-          await calendarClient.createEvent({
-            summary: action.summary,
-            start: action.start,
-            end: action.end,
-            location: action.location,
-          });
+          await calendarClient.createEvent(
+            {
+              summary: action.summary,
+              start: action.start,
+              end: action.end,
+              location: action.location,
+            },
+            action.account
+          );
           return { success: true, data: { undone: action.type, summary: action.summary } };
         }
         if (action.type === "calendar_event_updated") {

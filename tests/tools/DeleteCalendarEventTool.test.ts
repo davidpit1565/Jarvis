@@ -73,7 +73,35 @@ describe("DELETE_CALENDAR_EVENT tool", () => {
       start: "2026-01-20T10:00:00Z",
       end: "2026-01-20T10:30:00Z",
       location: "Clinic",
+      account: "me@example.com",
     });
+  });
+
+  test("records which linked account the deleted event belonged to, so undo recreates it on the right one", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("personal@example.com", { refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("work@example.com", { refreshToken: "r2", accessToken: "a2", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    const client = new GoogleCalendarClient("id", "secret", "https://example.com/callback", tokenStore);
+
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return new Response(
+        JSON.stringify({
+          id: "event-1",
+          summary: "Standup",
+          location: null,
+          start: { dateTime: "2026-01-20T10:00:00Z" },
+          end: { dateTime: "2026-01-20T10:30:00Z" },
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    const tool = createDeleteCalendarEventTool(client, undoStore);
+    await tool.execute({ eventId: "event-1", account: "work@example.com" }, context);
+
+    expect(undoStore.takeLast()).toMatchObject({ account: "work@example.com" });
   });
 
   test("still deletes successfully even if fetching the event's details first fails", async () => {

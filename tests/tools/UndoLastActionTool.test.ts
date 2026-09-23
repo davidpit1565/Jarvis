@@ -108,6 +108,7 @@ describe("UNDO_LAST_ACTION tool", () => {
       start: "2026-01-20T10:00:00Z",
       end: "2026-01-20T10:30:00Z",
       location: "Clinic",
+      account: "me@example.com",
     });
     const tool = createUndoLastActionTool(undoStore, makeClient());
 
@@ -117,6 +118,35 @@ describe("UNDO_LAST_ACTION tool", () => {
     const body = JSON.parse(capturedBody!);
     expect(body.summary).toBe("Dentist");
     expect(body.location).toBe("Clinic");
+  });
+
+  test("recreates the event on the same linked account it was deleted from, in a multi-account setup", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("personal@example.com", { refreshToken: "r1", accessToken: "personal-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("work@example.com", { refreshToken: "r2", accessToken: "work-token", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    const client = new GoogleCalendarClient("id", "secret", "https://example.com/callback", tokenStore);
+
+    let capturedAuth: string | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      capturedAuth = (init?.headers as Record<string, string>)?.Authorization;
+      return new Response(JSON.stringify({ id: "new-id", summary: "Standup", start: {}, end: {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const undoStore = new UndoStore();
+    undoStore.record({
+      type: "calendar_event_deleted",
+      summary: "Standup",
+      start: "2026-01-20T10:00:00Z",
+      end: "2026-01-20T10:30:00Z",
+      location: null,
+      account: "work@example.com",
+    });
+    const tool = createUndoLastActionTool(undoStore, client);
+
+    const result = await tool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    expect(capturedAuth).toBe("Bearer work-token");
   });
 
   test("restores a just-updated calendar event's previous values", async () => {
