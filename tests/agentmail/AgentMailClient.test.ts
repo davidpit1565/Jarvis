@@ -146,6 +146,19 @@ describe("AgentMailClient.listMessages", () => {
     const client = makeClient();
     await expect(client.listMessages()).rejects.toThrow(/400/);
   });
+
+  test("does not leak the raw response body into the thrown error", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ error: "internal upstream detail" }), { status: 400 })) as unknown as typeof fetch;
+
+    const client = makeClient();
+    let error: Error | undefined;
+    await client.listMessages().catch((e) => {
+      error = e as Error;
+    });
+    expect(error?.message).not.toContain("internal upstream detail");
+    expect(error?.message).toContain("400");
+  });
 });
 
 describe("AgentMailClient.getMessage", () => {

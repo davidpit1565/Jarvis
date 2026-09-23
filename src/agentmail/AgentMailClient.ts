@@ -1,4 +1,5 @@
 import { fetchWithRetry } from "@/core/net/fetchWithRetry";
+import { apiError } from "@/core/net/apiError";
 import type { AgentMailMessage, AgentMailMessageSummary, AgentMailSendResult } from "@/types/agentmail";
 
 const AGENTMAIL_BASE_URL = "https://api.agentmail.to";
@@ -166,11 +167,11 @@ export class AgentMailClient {
 
   /**
    * Builds a caller-facing error message from a non-2xx response —
-   * status + AgentMail's own response body, exactly like GmailClient's
-   * inline error handling, but centralized here since three methods need
-   * it. Never includes the Authorization header or the raw API key: the
-   * body text comes straight from AgentMail's own server, which never
-   * echoes the request's credentials back.
+   * centralized here since three methods need it. 401/403/429 get a
+   * fixed, sanitized message; everything else routes through apiError()
+   * (status code only — the raw body is logged server-side, never
+   * returned) so AgentMail's own response body never reaches the
+   * model/user via ToolResult.error.
    */
   private async describeFailure(label: string, response: Response): Promise<string> {
     if (response.status === 401 || response.status === 403) {
@@ -179,7 +180,12 @@ export class AgentMailClient {
     if (response.status === 429) {
       return `${label} failed (429): AgentMail rate limit hit — try again shortly.`;
     }
-    const bodyText = await response.text().catch(() => "");
-    return `${label} failed (${response.status}): ${bodyText}`;
+    // Every other status (400 validation errors, 404, 5xx, etc.) falls
+    // through to here — routes through apiError() like every sibling HTTP
+    // client (Gmail/Calendar/Spotify/OpenMeteo/Twilio) so AgentMail's raw
+    // response body (which can include internal reason strings or echoed
+    // request fragments) is logged server-side only, never surfaced to
+    // the model/user via ToolResult.error.
+    return (await apiError(label, response)).message;
   }
 }
