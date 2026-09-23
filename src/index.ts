@@ -741,9 +741,16 @@ function main() {
 
   // Media Streams is a real, small extra Twilio cost (~$0.004/min on top
   // of call minutes) — only wired up when explicitly enabled, and only
-  // meaningful once the phone gateway itself is configured.
+  // meaningful once the phone gateway itself is configured. Requires
+  // twilioAuthToken too (not just twilioPublicBaseUrl) — the ingest route
+  // in JarvisWebSocketServer needs it to verify Twilio's signature and
+  // now fails closed without it, so constructing the broadcaster (and
+  // advertising audioStreamUrl below) without it would just produce a
+  // waveform feature whose ingest endpoint permanently 404s.
   const audioLevelBroadcaster =
-    config.audioWaveformEnabled && config.twilioPublicBaseUrl ? new AudioLevelBroadcaster() : undefined;
+    config.audioWaveformEnabled && config.twilioAuthToken && config.twilioPublicBaseUrl
+      ? new AudioLevelBroadcaster()
+      : undefined;
   const audioStreamUrl = audioLevelBroadcaster
     ? new URL("/voice/audio-stream", config.twilioPublicBaseUrl!.replace(/^http/, "ws")).toString()
     : undefined;
