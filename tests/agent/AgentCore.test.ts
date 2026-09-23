@@ -373,6 +373,13 @@ describe("AgentCore", () => {
     expect(result.state).toBe("CANCELLED");
     expect(firstStepRan).toBe(false);
     expect(secondStepRan).toBe(false);
+
+    // Regression: cancel() must not leak the task id in the internal
+    // `cancelled` Set forever once the task has actually settled — this
+    // process runs indefinitely, and cancelling a task ("stop", "never
+    // mind") is an everyday action.
+    const cancelledSet = (agentCore as unknown as { cancelled: Set<string> }).cancelled;
+    expect(cancelledSet.has(task!.id)).toBe(false);
   });
 
   test("Orchestrator.requestStop cancels an in-flight multi-step agent task, leaving it cleanly CANCELLED with no further tool calls", async () => {

@@ -346,6 +346,23 @@ export class AgentCore {
       task = this.emitTransition(task, "PLANNING", task.state === "WAITING" ? "dependency resolved; resuming" : "task started");
     }
 
+    try {
+      return await this.runTaskLoopSteps(taskId, task, startedAtMs);
+    } finally {
+      // Cancellation only needs to matter while this loop can still check
+      // it — once the loop ends (however it ends: CANCELLED, COMPLETED, a
+      // failure, or an exception), the entry has done its job. Without
+      // this, every cancelled task's id stays in `cancelled` forever: a
+      // slow, unbounded memory leak on this long-running process, since
+      // interrupting an in-flight task ("stop", "never mind") is a normal,
+      // everyday action.
+      this.cancelled.delete(taskId);
+    }
+  }
+
+  private async runTaskLoopSteps(taskId: string, task: AgentTaskRecord, startedAtMs: number): Promise<AgentTaskRecord> {
+    const { maxTotalSteps, maxStepRetries, maxRecoveryCycles, stepTimeoutMs, taskTimeoutMs } = this.options;
+
     // eslint-disable-next-line no-constant-condition
     while (true) {
       if (this.isCancelled(taskId)) {
