@@ -89,6 +89,22 @@ describe("Telegram webhook HTTP routing", () => {
     expect(response.status).toBe(403);
   });
 
+  test("a secret token that shares a long prefix with the real one is still rejected with 403", async () => {
+    const { handle, port } = setupServer(makeStubSessionFactory(async () => "unused"));
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${port}/telegram/webhook`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Telegram-Bot-Api-Secret-Token": `${WEBHOOK_SECRET.slice(0, -1)}x`,
+      },
+      body: JSON.stringify({ message: { chat: { id: 123 }, text: "hi" } }),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
   test("malformed JSON is rejected with 400", async () => {
     const { handle, port } = setupServer(makeStubSessionFactory(async () => "unused"));
     activeHandle = handle;

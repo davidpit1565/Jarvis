@@ -1432,8 +1432,8 @@ export class JarvisWebSocketServer {
       return new Response("Too many attempts, try again later", { status: 429 });
     }
 
-    const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
-    if (secret !== telegramWebhookSecret) {
+    const secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token") ?? "";
+    if (!constantTimeEqual(secret, telegramWebhookSecret)) {
       console.error("[jarvis] rejected Telegram webhook: invalid or missing secret token");
       return new Response("Forbidden", { status: 403 });
     }
