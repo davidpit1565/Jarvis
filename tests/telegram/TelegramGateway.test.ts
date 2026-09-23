@@ -191,6 +191,41 @@ describe("TelegramGateway.sendMessage", () => {
   });
 });
 
+describe("TelegramGateway send retry safety", () => {
+  test("does not retry a network-level failure on sendMessage (ambiguous whether Telegram already received it)", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      throw new Error("connection reset");
+    }) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await expect(gateway.sendMessage("123", "hi")).rejects.toThrow("connection reset");
+    expect(fetchCalls).toBe(1);
+  });
+
+  test("still retries a 429 on sendMessage (request never reached processing)", async () => {
+    let fetchCalls = 0;
+    global.fetch = (async () => {
+      fetchCalls++;
+      if (fetchCalls === 1) return new Response(null, { status: 429 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await gateway.sendMessage("123", "hi");
+    expect(fetchCalls).toBe(2);
+  });
+});
+
 describe("TelegramGateway.sendDocument", () => {
   test("uploads the decoded bytes as multipart form data", async () => {
     let capturedUrl: string | undefined;
