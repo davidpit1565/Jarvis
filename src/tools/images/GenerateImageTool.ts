@@ -33,8 +33,20 @@ export function createGenerateImageTool(
     description:
       "Generates a real image from a text prompt (free, no cost) and returns its URL. If a Telegram owner " +
       'chat is configured, also sends it there as a photo. Use for "make me an image of...", "generate a ' +
-      'picture of...", etc. Write a clear, descriptive prompt — this is a real generative model, not a search ' +
-      "engine, so specificity (style, subject, composition) matters.",
+      'picture of...", etc. This is a real generative model, not a search engine — prompt quality directly ' +
+      "determines result quality, so build it yourself rather than passing the user's request through " +
+      "verbatim. When the request is more than a simple subject, expand it into a single detailed prompt " +
+      "that explicitly names: every distinct object/subject the user mentioned (a model is far more likely " +
+      "to drop something you never wrote down than something you did — enumerate them, don't summarize " +
+      "them away), composition/framing, camera angle or lens style if relevant, lighting, materials/colors, " +
+      "and overall style (e.g. photorealistic, cinematic, illustration). State any exact text that must " +
+      "appear verbatim in quotes, but set expectations honestly afterward: text rendering inside generated " +
+      "images is unreliable on this provider, so exact spelling is not guaranteed even when requested " +
+      "correctly. Don't invent creative details the user didn't ask for and that would change the meaning " +
+      "of the request, but concrete technical descriptors that help the model realize what was actually " +
+      "asked (framing, lighting, material) are expected, not optional. This provider has no negative-prompt " +
+      "or reference-image support and a single generation attempt — if the result clearly missed something " +
+      "critical the user asked for, say so plainly rather than presenting it as if it matched perfectly.",
     inputSchema: {
       type: "object",
       properties: {

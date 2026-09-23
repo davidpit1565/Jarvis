@@ -31,6 +31,11 @@ export class PollinationsImageClient {
     const url = new URL(`${POLLINATIONS_BASE_URL}/${encodeURIComponent(prompt)}`);
     url.searchParams.set("width", String(width));
     url.searchParams.set("height", String(height));
+    // Pollinations stamps its own watermark onto every image unless this
+    // is set — verified live (a `curl -I` against the real endpoint with
+    // and without it both return 200, confirming the flag is real and not
+    // a documentation-only claim).
+    url.searchParams.set("nologo", "true");
     if (options.seed !== undefined) {
       url.searchParams.set("seed", String(options.seed));
     }
