@@ -238,6 +238,39 @@ describe("CREATE_CALENDAR_EVENT tool", () => {
     expect(data.conflicts).toEqual([]);
   });
 
+  test("flags a duplicate even when the existing event starts shortly after a short new event ends", async () => {
+    global.fetch = (async (url: string) => {
+      if (url.includes("timeMin") && url.includes("timeMax")) {
+        // Existing "Standup" 09:04-09:34 — starts after the new event's
+        // 09:00-09:01 end, so a query only widened on the START side
+        // (timeMax left at input.end = 09:01) would never return it
+        // either (Google's timeMax is an exclusive upper bound on the
+        // event's START time), even though its start is only 4 minutes
+        // off and well within the duplicate window.
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: "existing", summary: "Standup", start: { dateTime: "2026-01-15T09:04:00Z" }, end: { dateTime: "2026-01-15T09:34:00Z" } },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({ id: "e1", summary: "Standup", start: { dateTime: "2026-01-15T09:00:00Z" }, end: { dateTime: "2026-01-15T09:01:00Z" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const tool = createCreateCalendarEventTool(makeClient());
+    const result = await tool.execute({ summary: "Standup", start: "2026-01-15T09:00:00Z", end: "2026-01-15T09:01:00Z" }, context);
+
+    expect(result.success).toBe(true);
+    const data = result.data as { duplicate: unknown; conflicts: unknown[] };
+    expect(data.duplicate).not.toBeNull();
+    expect(data.conflicts).toEqual([]);
+  });
+
   test("does not record anything in the undo store on failure", async () => {
     global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
 
