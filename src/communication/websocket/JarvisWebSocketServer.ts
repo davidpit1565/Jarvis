@@ -810,8 +810,25 @@ export class JarvisWebSocketServer {
           }
 
           if (isUpgradeRequest && url.pathname === "/voice/audio-stream") {
-            if (!this.deps.audioLevelBroadcaster) {
+            const { audioLevelBroadcaster, twilioAuthToken, twilioPublicBaseUrl } = this.deps;
+            if (!audioLevelBroadcaster) {
               return new Response("Not found", { status: 404 });
+            }
+            // Same signature check as every other Twilio-facing route
+            // (/voice, /voice/status, /voice/gather, /sms/incoming) —
+            // without it, anyone who discovers this deterministic wss://
+            // URL could open it directly and feed fabricated audio into
+            // the dashboard's live waveform with no real call involved.
+            // Twilio signs the Media Streams connection's initial HTTP
+            // handshake the same way it signs its webhook POSTs, just
+            // with no form body to include in the signed payload.
+            if (twilioAuthToken && twilioPublicBaseUrl) {
+              const publicUrl = new URL(url.pathname + url.search, twilioPublicBaseUrl).toString();
+              const signature = req.headers.get("X-Twilio-Signature");
+              if (!verifyTwilioSignature(twilioAuthToken, publicUrl, {}, signature)) {
+                console.error("[jarvis] rejected audio-stream upgrade: invalid or missing Twilio signature");
+                return new Response("Forbidden", { status: 403 });
+              }
             }
             return server.upgrade(req, { data: { kind: "audio-ingest" } })
               ? undefined
