@@ -1422,12 +1422,21 @@ function main() {
   // deliberately one of the notification types quiet hours DOES apply to
   // (see JarvisConfig.quietHoursStart's own doc comment for which types
   // opt out instead).
+  // Guards against the same reminder being sent twice: setInterval fires
+  // every 30s regardless of whether the previous tick's sendMessage calls
+  // have resolved yet, and markNotified only runs once a send actually
+  // succeeds (see below) — so a slow/rate-limited Telegram send still in
+  // flight when the next tick's getDueUnnotified() runs would otherwise
+  // find the same reminder (notified_at still null) and fire a second
+  // send for it before the first one's .then() clears it. Same
+  // in-flight-id-set pattern staleCommitmentInterval below already uses.
+  const inFlightReminderIds = new Set<string>();
   const reminderNotificationInterval = setInterval(() => {
     schedulerHealthTracker.tick("reminderNotifications");
     const now = new Date();
     const nowIso = now.toISOString();
     if (isSuppressibleByQuietHours("reminder") && isQuietHours(formatTimeOfDay(now, config.timezone), quietHoursWindow)) return;
-    const due = reminderStore.getDueUnnotified(nowIso);
+    const due = reminderStore.getDueUnnotified(nowIso).filter((r) => !inFlightReminderIds.has(r.id));
 
     for (const reminder of due) {
       const message = `⏰ Reminder: ${reminder.text}`;
@@ -1452,6 +1461,7 @@ function main() {
         // token, a blip) permanently drops the alert with no retry and no
         // sign anything went wrong. Leaving notified_at unset lets the
         // next 30s tick just try again.
+        inFlightReminderIds.add(reminder.id);
         telegramGateway
           .sendMessage(config.telegramOwnerChatId, message)
           .then(() => {
@@ -1463,6 +1473,9 @@ function main() {
               "[jarvis] failed to send reminder notification (will retry next tick):",
               error instanceof Error ? error.message : String(error)
             );
+          })
+          .finally(() => {
+            inFlightReminderIds.delete(reminder.id);
           });
       } else {
         // No Telegram configured — the on-device push above is the only
