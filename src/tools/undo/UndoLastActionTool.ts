@@ -65,7 +65,12 @@ export function createUndoLastActionTool(
         }
         if (action.type === "reminder_deleted") {
           if (!reminderStore) return { success: false, error: "Reminders aren't available; can't undo this" };
-          reminderStore.create({ text: action.text, dueAt: action.dueAt, recurrence: action.recurrence });
+          reminderStore.create({
+            text: action.text,
+            dueAt: action.dueAt,
+            recurrence: action.recurrence,
+            completed: action.completed,
+          });
           return { success: true, data: { undone: action.type, text: action.text } };
         }
         if (action.type === "memory_deleted") {

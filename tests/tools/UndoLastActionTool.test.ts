@@ -183,6 +183,7 @@ describe("UNDO_LAST_ACTION tool", () => {
       text: "Buy milk",
       dueAt: "2026-09-19T18:00:00.000Z",
       recurrence: "daily",
+      completed: false,
     });
     const tool = createUndoLastActionTool(undoStore, undefined, reminderStore);
 
@@ -192,12 +193,34 @@ describe("UNDO_LAST_ACTION tool", () => {
     const [recreated] = reminderStore.list();
     expect(recreated?.text).toBe("Buy milk");
     expect(recreated?.recurrence).toBe("daily");
+    expect(recreated?.completed).toBe(false);
+    reminderStore.close();
+  });
+
+  test("restores a just-deleted reminder as completed, not as a fresh pending task", async () => {
+    const reminderStore = new ReminderStore(":memory:");
+    const undoStore = new UndoStore();
+    undoStore.record({
+      type: "reminder_deleted",
+      text: "Pick up dry cleaning",
+      dueAt: null,
+      recurrence: null,
+      completed: true,
+    });
+    const tool = createUndoLastActionTool(undoStore, undefined, reminderStore);
+
+    const result = await tool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const [recreated] = reminderStore.list(true);
+    expect(recreated?.text).toBe("Pick up dry cleaning");
+    expect(recreated?.completed).toBe(true);
     reminderStore.close();
   });
 
   test("fails to undo a reminder deletion when no reminderStore was given", async () => {
     const undoStore = new UndoStore();
-    undoStore.record({ type: "reminder_deleted", text: "Buy milk", dueAt: null, recurrence: null });
+    undoStore.record({ type: "reminder_deleted", text: "Buy milk", dueAt: null, recurrence: null, completed: false });
     const tool = createUndoLastActionTool(undoStore, makeClient());
 
     const result = await tool.execute({}, context);

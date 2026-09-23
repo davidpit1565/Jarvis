@@ -37,6 +37,8 @@ export interface UndoableReminderDeletion {
   text: string;
   dueAt: string | null;
   recurrence: ReminderRecurrence | null;
+  /** Whether the deleted reminder was already completed — DELETE_REMINDER works on any reminder, including completed ones being cleared from history, so undoing it must restore that status rather than always resurrecting it as a fresh pending task. */
+  completed: boolean;
 }
 
 export interface UndoableMemoryDeletion {

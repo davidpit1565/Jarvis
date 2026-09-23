@@ -52,6 +52,7 @@ export function createDeleteReminderTool(reminderStore: ReminderStore, undoStore
           text: reminderBeforeDelete.text,
           dueAt: reminderBeforeDelete.dueAt,
           recurrence: reminderBeforeDelete.recurrence,
+          completed: reminderBeforeDelete.completed,
         });
       }
       return { success: true, data: { id: input.id } };
