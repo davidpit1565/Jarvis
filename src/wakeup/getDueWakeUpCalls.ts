@@ -30,9 +30,18 @@ export function getDueWakeUpCalls(
 
 /** "HH:MM" for `date` in `timeZone`, e.g. "07:00". */
 export function formatTimeOfDay(date: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hour12: false }).format(
-    date
-  );
+  const formatted = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+  // Some environments report midnight as hour 24 under h23 (the same
+  // quirk ReminderStore.getZonedParts and quietHours.getOffsetMinutes
+  // already normalize) — without this, a "00:00" alarm/wake-up
+  // call/automation rule would never match this string and could never
+  // fire at true midnight.
+  return formatted.startsWith("24:") ? `00:${formatted.slice(3)}` : formatted;
 }
 
 /** "YYYY-MM-DD" for `date` in `timeZone`. */

@@ -58,6 +58,24 @@ describe("formatTimeOfDay", () => {
     const date = new Date("2026-01-15T05:03:00Z");
     expect(formatTimeOfDay(date, "UTC")).toBe("05:03");
   });
+
+  test("normalizes ICU's hour-24 midnight quirk to 00:MM, matching ReminderStore/quietHours' own normalization", () => {
+    // Some ICU builds render hour12: false midnight as "24:00" instead of
+    // "00:00" — simulate that engine behavior directly, since it isn't
+    // reproducible on every host running these tests.
+    const OriginalDateTimeFormat = Intl.DateTimeFormat;
+    // @ts-expect-error — deliberately swapping in a stub constructor for this one test.
+    Intl.DateTimeFormat = class {
+      format() {
+        return "24:15";
+      }
+    };
+    try {
+      expect(formatTimeOfDay(new Date("2026-01-15T00:15:00Z"), "UTC")).toBe("00:15");
+    } finally {
+      Intl.DateTimeFormat = OriginalDateTimeFormat;
+    }
+  });
 });
 
 describe("formatDateKey", () => {
