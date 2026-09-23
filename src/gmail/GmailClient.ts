@@ -394,6 +394,37 @@ export class GmailClient {
     return value.replace(/[\r\n]+/g, " ").trim();
   }
 
+  /**
+   * RFC 5322 header field values are restricted to US-ASCII; a raw
+   * non-ASCII value (a subject with accents/CJK/emoji, or a display name
+   * in a `To` address) has to be wrapped in an RFC 2047 encoded-word or
+   * it gets misdecoded byte-by-byte by the recipient's mail client
+   * (mojibake), since nothing else in this message declares an encoding
+   * for header values themselves — the `Content-Type: charset` line only
+   * covers the body.
+   */
+  private encodeHeaderValue(value: string): string {
+    if (/^[\x00-\x7F]*$/.test(value)) return value;
+    return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
+  }
+
+  /**
+   * Same encoded-word need as `encodeHeaderValue`, but for an address
+   * field (`To`, or a `From` header reused as the reply's `To`) — those
+   * can be `"Display Name" <addr@example.com>` rather than a bare
+   * subject string. Only the display name may be RFC 2047-encoded; the
+   * `<addr@example.com>` part must stay literal ASCII or mail clients
+   * fail to parse the address out of it.
+   */
+  private encodeAddressValue(value: string): string {
+    const match = value.match(/^(.*)<([^<>]+)>\s*$/);
+    if (!match) return this.encodeHeaderValue(value);
+    const [, namePart, email] = match;
+    const trimmedName = (namePart ?? "").trim();
+    if (!trimmedName) return `<${email}>`;
+    return `${this.encodeHeaderValue(trimmedName)} <${email}>`;
+  }
+
   /** Base64url — required for Gmail's `raw` message field, distinct from Buffer's plain base64. */
   private toBase64Url(input: string): string {
     return Buffer.from(input, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -406,8 +437,8 @@ export class GmailClient {
     inReplyTo?: string;
     references?: string;
   }): string {
-    const to = this.sanitizeHeaderValue(params.to);
-    const subject = this.sanitizeHeaderValue(params.subject);
+    const to = this.encodeAddressValue(this.sanitizeHeaderValue(params.to));
+    const subject = this.encodeHeaderValue(this.sanitizeHeaderValue(params.subject));
     const headers = [`To: ${to}`, `Subject: ${subject}`, "MIME-Version: 1.0", 'Content-Type: text/plain; charset="UTF-8"'];
     if (params.inReplyTo) headers.push(`In-Reply-To: ${this.sanitizeHeaderValue(params.inReplyTo)}`);
     if (params.references) headers.push(`References: ${this.sanitizeHeaderValue(params.references)}`);

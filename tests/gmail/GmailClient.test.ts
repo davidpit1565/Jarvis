@@ -488,3 +488,64 @@ describe("GmailClient.sendMessage account targeting", () => {
     await expect(client.sendMessage("to@example.com", "Subject", "Body", "nobody@example.com")).rejects.toThrow(/nobody@example\.com/);
   });
 });
+
+describe("GmailClient non-ASCII header encoding", () => {
+  function decodeRawMessage(raw: string): string {
+    const base64 = raw.replace(/-/g, "+").replace(/_/g, "/");
+    return Buffer.from(base64, "base64").toString("utf8");
+  }
+
+  test("RFC 2047-encodes a non-ASCII subject instead of embedding raw UTF-8 bytes", async () => {
+    let capturedRaw = "";
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse((init?.body as string) ?? "{}");
+      capturedRaw = body.raw;
+      return new Response(JSON.stringify({ id: "sent-1" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.sendMessage("to@example.com", "Café risotto — 明日の会議", "Body");
+
+    const message = decodeRawMessage(capturedRaw);
+    const subjectLine = message.split("\r\n").find((line) => line.startsWith("Subject:"));
+    expect(subjectLine).not.toContain("Café");
+    expect(subjectLine).toMatch(/^Subject: =\?UTF-8\?B\?.+\?=$/);
+
+    const encoded = subjectLine!.replace("Subject: ", "");
+    const base64Payload = encoded.match(/^=\?UTF-8\?B\?(.+)\?=$/)![1] ?? "";
+    expect(Buffer.from(base64Payload, "base64").toString("utf8")).toBe("Café risotto — 明日の会議");
+  });
+
+  test("leaves an ASCII subject untouched", async () => {
+    let capturedRaw = "";
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse((init?.body as string) ?? "{}");
+      capturedRaw = body.raw;
+      return new Response(JSON.stringify({ id: "sent-1" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.sendMessage("to@example.com", "Plain subject", "Body");
+
+    const message = decodeRawMessage(capturedRaw);
+    expect(message).toContain("Subject: Plain subject");
+  });
+
+  test("RFC 2047-encodes only the display name of a non-ASCII 'To' address, leaving the address itself literal", async () => {
+    let capturedRaw = "";
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse((init?.body as string) ?? "{}");
+      capturedRaw = body.raw;
+      return new Response(JSON.stringify({ id: "sent-1" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.sendMessage('"José García" <jose@example.com>', "Subject", "Body");
+
+    const message = decodeRawMessage(capturedRaw);
+    const toLine = message.split("\r\n").find((line) => line.startsWith("To:"))!;
+    expect(toLine).toContain("<jose@example.com>");
+    expect(toLine).not.toContain("José");
+    expect(toLine).toMatch(/^To: =\?UTF-8\?B\?.+\?= <jose@example\.com>$/);
+  });
+});
