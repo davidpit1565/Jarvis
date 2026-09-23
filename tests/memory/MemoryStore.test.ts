@@ -260,6 +260,29 @@ describe("MemoryStore", () => {
       store.close();
     });
 
+    test("changing an existing record's category to 'temporary' with no explicit expiresAt applies the default TTL, instead of inheriting the old category's null expiry forever", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "note.wifi_guest_password", value: "guest123" }); // category defaults to "fact", expiresAt: null
+
+      const record = store.save({ key: "note.wifi_guest_password", value: "guest456", category: "temporary" });
+
+      expect(record.category).toBe("temporary");
+      expect(record.expiresAt).not.toBeNull();
+      expect(new Date(record.expiresAt as string).getTime()).toBeGreaterThan(Date.now());
+      store.close();
+    });
+
+    test("changing an existing 'temporary' record's category away from temporary, with no explicit expiresAt, clears the inherited expiry", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "session.topic", value: "x", category: "temporary" });
+
+      const record = store.save({ key: "session.topic", value: "y", category: "fact" });
+
+      expect(record.category).toBe("fact");
+      expect(record.expiresAt).toBeNull();
+      store.close();
+    });
+
     test("getActive excludes expired memories but includes non-expired and never-expiring ones", () => {
       const store = new MemoryStore(":memory:");
       const past = new Date(Date.now() - 60_000).toISOString();
