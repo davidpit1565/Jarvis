@@ -110,6 +110,18 @@ describe("ReminderStore", () => {
     store.close();
   });
 
+  test("completing an already-completed reminder is a no-op — it doesn't duplicate the next recurring occurrence", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Take medication", dueAt: "2026-01-15T08:00:00.000Z", recurrence: "daily" });
+
+    expect(store.complete(record.id)).toBe(true);
+    expect(store.complete(record.id)).toBe(false);
+    expect(store.complete(record.id)).toBe(false);
+
+    expect(store.list()).toHaveLength(1);
+    store.close();
+  });
+
   test("completing a weekly recurring reminder creates the next occurrence, seven days later", () => {
     const store = new ReminderStore(":memory:");
     const record = store.create({ text: "Water the plants", dueAt: "2026-01-15T08:00:00.000Z", recurrence: "weekly" });

@@ -180,7 +180,15 @@ export class ReminderStore {
    */
   complete(id: string): boolean {
     const existing = this.get(id);
-    const result = this.db.query(`UPDATE reminders SET completed = 1 WHERE id = ?`).run(id);
+    // AND completed = 0: SQLite's `changes` reflects rows the WHERE
+    // clause matched, not rows whose value actually changed — without
+    // this, re-completing an already-completed id would still report
+    // changes === 1, and the recurrence-advance branch below would fire
+    // again on every repeat call, creating a duplicate next-occurrence
+    // reminder each time (which itself recurs, compounding the
+    // duplication). Same idiom as CommitmentStore.markStale's
+    // `WHERE id = ? AND status = 'open'`.
+    const result = this.db.query(`UPDATE reminders SET completed = 1 WHERE id = ? AND completed = 0`).run(id);
     if (result.changes === 0) return false;
 
     if (existing?.recurrence && existing.dueAt) {
