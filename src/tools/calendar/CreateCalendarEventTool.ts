@@ -96,17 +96,24 @@ export function createCreateCalendarEventTool(
         // account, which is the more useful warning anyway (a duplicate
         // in another linked account is still worth flagging).
         //
-        // Widened past [input.start, input.end) to also reach a short
-        // existing event that ends before input.start but still starts
-        // within the duplicate window — listEventsInRange's timeMin is an
-        // exclusive lower bound on an event's END time (Google Calendar
-        // API semantics), so a 2-minute "Standup" ending just before a
-        // new "Standup" starts 3 minutes later would otherwise never be
-        // returned at all, even though it's exactly the same-title,
-        // near-identical-start-time case this dedup check exists for.
+        // Widened past [input.start, input.end) on BOTH ends to reach any
+        // existing event whose start is within the duplicate window,
+        // regardless of direction — listEventsInRange's timeMin is an
+        // exclusive lower bound on an event's END time, and timeMax is an
+        // exclusive upper bound on an event's START time (Google Calendar
+        // API semantics). A 2-minute "Standup" ending just before
+        // input.start, OR one starting just after a short input.end
+        // (e.g. a 1-minute new event, with the duplicate starting 4
+        // minutes later — still inside the 5-minute window), would
+        // otherwise never be returned at all despite being exactly the
+        // same-title, near-identical-start-time case this check exists
+        // for. Only widening one side (as an earlier version of this fix
+        // did) still missed the other.
         const inputStartMs = Date.parse(input.start);
         const widenedRangeStart = new Date(inputStartMs - DUPLICATE_START_WINDOW_MS).toISOString();
-        const nearby = await calendarClient.listEventsInRange(widenedRangeStart, input.end, input.account).catch(() => []);
+        const widenedRangeEnd = new Date(inputStartMs + DUPLICATE_START_WINDOW_MS).toISOString();
+        const rangeEnd = Date.parse(widenedRangeEnd) > Date.parse(input.end) ? widenedRangeEnd : input.end;
+        const nearby = await calendarClient.listEventsInRange(widenedRangeStart, rangeEnd, input.account).catch(() => []);
 
         // `conflicts` means a genuine time overlap — computed client-side
         // against the real [input.start, input.end) range rather than
