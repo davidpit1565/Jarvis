@@ -438,13 +438,34 @@ describe("MemoryStore", () => {
       store.close();
     });
 
-    test("saving the exact same value again is never a conflict, even at lower trust", () => {
+    test("re-saving the exact same value at a lower trust is still a rejected conflict — it can't silently downgrade the record's trust rank", () => {
       const store = new MemoryStore(":memory:");
       store.save({ key: "user.name", value: "David", source: "USER_STATED" });
       const resave = store.save({ key: "user.name", value: "David", source: "MODEL_INFERRED" });
 
+      expect(resave.conflict).toBe(true);
+      expect(resave.source).toBe("USER_STATED");
+      store.close();
+    });
+
+    test("a same-value lower-trust resave cannot be used to soften up a record for a later real downgrade", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.name", value: "David", source: "USER_STATED" });
+      store.save({ key: "user.name", value: "David", source: "MODEL_INFERRED" }); // rejected, must not downgrade `source`
+
+      const attempt = store.save({ key: "user.name", value: "Dave (a guess)", source: "MODEL_INFERRED" });
+
+      expect(attempt.conflict).toBe(true);
+      expect(store.getByKey("user.name")?.value).toBe("David");
+      store.close();
+    });
+
+    test("saving the exact same value at equal or higher trust is never a conflict", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.name", value: "David", source: "USER_STATED" });
+      const resave = store.save({ key: "user.name", value: "David", source: "USER_STATED" });
+
       expect(resave.conflict).toBeFalsy();
-      expect(store.getHistory("user.name")).toHaveLength(0);
       store.close();
     });
   });
