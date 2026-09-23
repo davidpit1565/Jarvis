@@ -127,9 +127,25 @@ function twimlResponse(body: string): Response {
  * `X-Twilio-Signature` before invoking these handlers — this class trusts
  * that it's only ever called with genuine Twilio requests.
  */
+/**
+ * How long a callSid stays remembered as "already ended" after
+ * handleCallEnded fires. Twilio's call-status and speech-gather webhooks
+ * for the same call are independent HTTP requests with no ordering
+ * guarantee — if status arrives first, a /voice/gather that lands
+ * immediately after would otherwise find nothing in `sessions` and
+ * recreate one via the "not started yet" fallback, leaking a fresh
+ * Orchestrator/conversation forever (no further /voice/status will ever
+ * arrive for a call that's already over to clean it up). Ten minutes is
+ * comfortably longer than any plausible webhook race, while still
+ * bounding this map's growth to "calls that ended in the last 10
+ * minutes" rather than every call this process has ever handled.
+ */
+const ENDED_CALL_TOMBSTONE_TTL_MS = 10 * 60 * 1000;
+
 export class TwilioVoiceGateway {
   private sessions: Map<string, PhoneSession> = new Map();
   private turnCounts: Map<string, number> = new Map();
+  private endedCallSids: Map<string, number> = new Map();
   private readonly voice: string;
   private readonly hebrewVoice: string;
   private readonly gatherLanguage: string;
@@ -205,6 +221,11 @@ export class TwilioVoiceGateway {
 
   /** POST /voice/incoming — Twilio calls this when a call comes in. */
   handleIncomingCall(callSid: string): Response {
+    // Twilio CallSids are globally unique and never reused in practice,
+    // but clearing any stale tombstone here is cheap defense-in-depth
+    // against ever mistaking this brand-new, genuinely active call for a
+    // late /voice/gather race against a call that already ended.
+    this.endedCallSids.delete(callSid);
     this.sessions.set(callSid, this.createSession(callSid));
     const streamTag = this.audioStreamUrl
       ? `<Start><Stream url="${escapeXml(this.audioStreamUrl)}" track="both_tracks" /></Start>`
@@ -222,6 +243,7 @@ export class TwilioVoiceGateway {
    * callSid finds it in `this.sessions` exactly like an inbound call would.
    */
   async handleWakeUpCallConnected(callSid: string): Promise<Response> {
+    this.endedCallSids.delete(callSid);
     const session = this.createWakeUpSession(callSid);
     this.sessions.set(callSid, session);
 
@@ -238,6 +260,14 @@ export class TwilioVoiceGateway {
 
   /** POST /voice/gather — Twilio calls this with the caller's transcribed speech. */
   async handleGather(callSid: string, speechResult: string | null): Promise<Response> {
+    if (this.endedCallSids.has(callSid)) {
+      // The call's /voice/status webhook already fired for this callSid —
+      // recreating a session here would leak a brand-new
+      // Orchestrator/conversation forever, since the call is over and no
+      // further /voice/status will ever arrive to clean it up.
+      return twimlResponse(`<Hangup/>`);
+    }
+
     const session = this.sessions.get(callSid) ?? this.createSession(callSid);
     this.sessions.set(callSid, session);
 
@@ -266,6 +296,15 @@ export class TwilioVoiceGateway {
   handleCallEnded(callSid: string): void {
     this.sessions.delete(callSid);
     this.turnCounts.delete(callSid);
+
+    const now = Date.now();
+    this.endedCallSids.set(callSid, now);
+    // Opportunistic sweep, same pattern as RateLimiter.maybeSweep — bounds
+    // this map to calls that ended within the TTL window instead of every
+    // call this process has ever handled.
+    for (const [sid, endedAt] of this.endedCallSids) {
+      if (now - endedAt > ENDED_CALL_TOMBSTONE_TTL_MS) this.endedCallSids.delete(sid);
+    }
   }
 
   hasActiveSession(callSid: string): boolean {
