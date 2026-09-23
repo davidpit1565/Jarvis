@@ -161,4 +161,58 @@ describe("OpenRouterBrain.chat", () => {
     expect(attempts).toBe(1);
     expect(thrown?.message).toContain("401");
   });
+
+  test("treats an HTTP 200 carrying OpenRouter's error envelope as a failed call, not an empty reply", async () => {
+    let attempts = 0;
+    global.fetch = (async () => {
+      attempts++;
+      // Verbatim shape OpenRouter returns when the upstream provider is
+      // down — status 200, no `choices` at all.
+      return new Response(
+        JSON.stringify({
+          id: "gen-1",
+          error: { message: "Upstream error from Nvidia: Service temporarily overloaded", code: 503 },
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const brain = new OpenRouterBrain("or-test-key", { retryDelayMs: 0 });
+    let thrown: Error | undefined;
+    try {
+      await brain.chat({ messages: [{ role: "user", content: "hi" }], tools: [] });
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    // An embedded 503 is retried on exactly the same terms as a real HTTP
+    // 503 would be, then surfaces as an error the router can fall back on.
+    expect(attempts).toBeGreaterThan(1);
+    expect(thrown?.message).toContain("503");
+    expect(thrown?.message).toContain("Service temporarily overloaded");
+  });
+
+  test("retries an embedded 503 and returns the reply once the upstream recovers", async () => {
+    let attempts = 0;
+    global.fetch = (async () => {
+      attempts++;
+      if (attempts === 1) {
+        return new Response(JSON.stringify({ error: { message: "overloaded", code: 503 } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const brain = new OpenRouterBrain("or-test-key", { retryDelayMs: 0 });
+    const result = await brain.chat({ messages: [{ role: "user", content: "hi" }], tools: [] });
+
+    expect(result.text).toBe("ok");
+    expect(attempts).toBe(2);
+  });
+
+  test("a 200 with an empty choices array fails rather than returning a blank answer", async () => {
+    global.fetch = (async () => new Response(JSON.stringify({ choices: [] }), { status: 200 })) as unknown as typeof fetch;
+
+    const brain = new OpenRouterBrain("or-test-key", { retryDelayMs: 0 });
+    await expect(brain.chat({ messages: [{ role: "user", content: "hi" }], tools: [] })).rejects.toThrow("no choices");
+  });
 });

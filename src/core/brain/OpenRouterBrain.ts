@@ -122,7 +122,26 @@ export class OpenRouterBrain implements Brain {
       });
 
       if (response.ok) {
-        return fromOpenAIResponse((await response.json()) as OpenAIChatCompletionResponse);
+        const payload = (await response.json()) as OpenAIChatCompletionResponse;
+        // OpenRouter answers HTTP 200 with an *error-shaped* body (an
+        // `error` object, no `choices`) when the upstream provider behind
+        // a model fails — e.g. `{"error":{"code":503,"message":"Upstream
+        // error from Nvidia: Service temporarily overloaded"}}`, which the
+        // free tier returns often. Without this check `fromOpenAIResponse`
+        // defensively turned that into a perfectly "successful" empty
+        // reply: the user saw a blank answer, AIRouter recorded a success
+        // (so the circuit breaker never noticed), and the 503 never
+        // reached the retry logic five lines down. Observed live on
+        // 2026-09-23. Treat it as exactly what it is — a failed call.
+        const upstream = upstreamErrorIn(payload);
+        if (!upstream) return fromOpenAIResponse(payload);
+
+        if ((upstream.code === 429 || upstream.code === 503) && attempt < MAX_RETRIES) {
+          lastError = new Error(`OpenRouter chat completion failed (${upstream.code}): ${upstream.message}`);
+          await new Promise((resolve) => setTimeout(resolve, this.retryDelayMs * (attempt + 1)));
+          continue;
+        }
+        throw new Error(`OpenRouter chat completion failed (${upstream.code ?? 200}): ${upstream.message}`);
       }
 
       // Only 429 (rate limit) and 503 (transient overload) are worth
@@ -203,6 +222,25 @@ interface OpenAIChatCompletionResponse {
   usage?: { prompt_tokens: number; completion_tokens: number };
   /** The model that actually served this call, per the OpenAI-compatible response shape — echoed back for CostTracker's per-model ledger. */
   model?: string;
+}
+
+/**
+ * The failure hiding inside an HTTP 200: OpenRouter's own error envelope,
+ * or a body with no usable choice at all. Returns undefined for a normal
+ * completion, so the happy path stays a single check at the call site.
+ */
+function upstreamErrorIn(payload: OpenAIChatCompletionResponse): { code?: number; message: string } | undefined {
+  const error = (payload as { error?: { code?: unknown; message?: unknown } }).error;
+  if (error && typeof error === "object") {
+    return {
+      code: typeof error.code === "number" ? error.code : undefined,
+      message: typeof error.message === "string" ? error.message : JSON.stringify(error),
+    };
+  }
+  if (!Array.isArray(payload.choices) || payload.choices.length === 0) {
+    return { message: "response contained no choices" };
+  }
+  return undefined;
 }
 
 /** Exported for unit testing without a network call — pure response-shaping logic. */
