@@ -12,6 +12,14 @@ export type TelegramSessionFactory = (chatId: string) => TelegramSession;
 const TELEGRAM_API_BASE_URL = "https://api.telegram.org/bot";
 const ERROR_MESSAGE = "Sorry, something went wrong on my end. Please try again.";
 
+// Sending is not idempotent: unlike a read, retrying a send after a network
+// error or a Telegram-side 5xx risks posting the same text/photo/document a
+// second time if Telegram actually received and processed the first attempt
+// before the response was lost. Only retry 429 (rate-limited — the request
+// never reached processing), matching GmailClient/AgentMailClient's own
+// SEND_RETRY_OPTIONS for the same reason.
+const SEND_RETRY_OPTIONS = { retryableStatuses: (status: number) => status === 429, retryNetworkErrors: false };
+
 // Telegram's Bot API rejects any message text over 4096 characters with a
 // 400. Anything JARVIS actually says (a news digest, a long memory/reminder
 // listing) can easily exceed that, so outgoing text is split into chunks
@@ -114,11 +122,15 @@ export class TelegramGateway {
       // gateway's only outbound call site that user-visible activity (a
       // busy digest, a burst of automation replies) can realistically
       // drive into that limit.
-      const response = await fetchWithRetry(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text: chunk }),
-      });
+      const response = await fetchWithRetry(
+        `${TELEGRAM_API_BASE_URL}${this.botToken}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, text: chunk }),
+        },
+        SEND_RETRY_OPTIONS
+      );
 
       if (!response.ok) {
         throw new Error(`Telegram sendMessage failed (${response.status}): ${await response.text().catch(() => "")}`);
@@ -137,11 +149,15 @@ export class TelegramGateway {
     const body: Record<string, string> = { chat_id: chatId, photo: photoUrl };
     if (caption) body.caption = caption.slice(0, 1024); // Telegram's own caption length limit
 
-    const response = await fetchWithRetry(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendPhoto`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const response = await fetchWithRetry(
+      `${TELEGRAM_API_BASE_URL}${this.botToken}/sendPhoto`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      SEND_RETRY_OPTIONS
+    );
 
     if (!response.ok) {
       throw new Error(`Telegram sendPhoto failed (${response.status}): ${await response.text().catch(() => "")}`);
@@ -174,10 +190,14 @@ export class TelegramGateway {
     form.append("chat_id", chatId);
     form.append("document", new Blob([bytes]), filename);
 
-    const response = await fetchWithRetry(`${TELEGRAM_API_BASE_URL}${this.botToken}/sendDocument`, {
-      method: "POST",
-      body: form,
-    });
+    const response = await fetchWithRetry(
+      `${TELEGRAM_API_BASE_URL}${this.botToken}/sendDocument`,
+      {
+        method: "POST",
+        body: form,
+      },
+      SEND_RETRY_OPTIONS
+    );
 
     if (!response.ok) {
       throw new Error(`Telegram sendDocument failed (${response.status}): ${await response.text().catch(() => "")}`);
