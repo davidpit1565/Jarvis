@@ -81,6 +81,10 @@ export function createSendAgentEmailTool(
         const result = await agentMailClient.sendMessage(to, subject, body);
         return { success: true, data: { messageId: result.messageId, threadId: result.threadId, to, subject } };
       } catch (error) {
+        // The consumed slot was for a send that never actually happened —
+        // refund it so a transient AgentMail failure doesn't burn real
+        // quota and falsely trip the daily cap for the rest of the day.
+        sendGuard.release(todayDateKey());
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     },

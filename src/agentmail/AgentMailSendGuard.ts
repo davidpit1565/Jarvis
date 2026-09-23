@@ -39,6 +39,20 @@ export class AgentMailSendGuard {
     return Math.max(0, this.maxPerDay - (this.countsByDay.get(todayKey) ?? 0));
   }
 
+  /**
+   * Refunds one consumed slot for `todayKey` — call this when a
+   * `tryConsume()`-gated send actually failed (e.g. the AgentMail API
+   * call itself threw), so a transient failure doesn't permanently burn
+   * real quota. Without this, a run of failures (a bad API key, a
+   * network blip) could exhaust the daily cap with zero real sends,
+   * blocking every legitimate SEND_AGENT_EMAIL call for the rest of the
+   * day. A no-op once today's count is already 0.
+   */
+  release(todayKey: string): void {
+    const count = this.countsByDay.get(todayKey) ?? 0;
+    if (count > 0) this.countsByDay.set(todayKey, count - 1);
+  }
+
   // A long-running process would otherwise grow this map by one entry per
   // calendar day forever; nothing needs more than the current day's count.
   private pruneOldDays(todayKey: string): void {
