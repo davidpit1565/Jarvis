@@ -51,6 +51,35 @@ describe("SAVE_MEMORY tool", () => {
     expect(result.success).toBe(false);
   });
 
+  test("accepts a valid ISO 8601 expiresAt", async () => {
+    const tool = createSaveMemoryTool(store);
+    const result = await tool.execute(
+      { key: "session.topic", value: "x", category: "temporary", expiresAt: "2030-01-01T00:00:00.000Z" },
+      context
+    );
+    expect(result.success).toBe(true);
+    expect(store.getByKey("session.topic")?.expiresAt).toBe("2030-01-01T00:00:00.000Z");
+  });
+
+  test("accepts an explicit null expiresAt", async () => {
+    const tool = createSaveMemoryTool(store);
+    const result = await tool.execute({ key: "user.name", value: "David", expiresAt: null }, context);
+    expect(result.success).toBe(true);
+  });
+
+  test("rejects a non-ISO expiresAt instead of silently persisting an unsortable value", async () => {
+    // expires_at is compared against `now` with plain SQL text comparison
+    // (MemoryStore.getActive/purge), which only works because ISO 8601
+    // timestamps sort lexicographically the same as chronologically — a
+    // garbage string like "next week" would silently never expire (or
+    // always appear already-expired) depending on its lexicographic
+    // relationship to the current ISO timestamp, instead of failing loudly.
+    const tool = createSaveMemoryTool(store);
+    const result = await tool.execute({ key: "session.topic", value: "x", expiresAt: "next week" }, context);
+    expect(result.success).toBe(false);
+    expect(store.getByKey("session.topic")).toBeNull();
+  });
+
   describe("embedding computation (opt-in, additive)", () => {
     test("with no embeddings client, no embedding is stored (identical to before this feature existed)", async () => {
       const tool = createSaveMemoryTool(store);

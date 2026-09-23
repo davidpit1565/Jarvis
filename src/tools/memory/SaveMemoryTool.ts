@@ -116,6 +116,11 @@ export function createSaveMemoryTool(
       if (input.source !== undefined && !MEMORY_SOURCES.includes(input.source)) {
         return { success: false, error: `source must be one of: ${MEMORY_SOURCES.join(", ")}` };
       }
+      if (input.expiresAt !== undefined && input.expiresAt !== null) {
+        if (typeof input.expiresAt !== "string" || Number.isNaN(Date.parse(input.expiresAt))) {
+          return { success: false, error: "expiresAt must be a valid ISO 8601 timestamp" };
+        }
+      }
 
       let embedding: number[] | undefined;
       if (embeddingsClient) {
