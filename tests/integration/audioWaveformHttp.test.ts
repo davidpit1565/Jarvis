@@ -1,4 +1,5 @@
 import { describe, test, expect, afterEach } from "bun:test";
+import { createHmac } from "node:crypto";
 import { EventBus } from "@/core/events/EventBus";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { PairingService } from "@/devices/pairing/PairingService";
@@ -6,7 +7,14 @@ import { DeviceConnectionManager } from "@/communication/websocket/DeviceConnect
 import { JarvisWebSocketServer } from "@/communication/websocket/JarvisWebSocketServer";
 import { AudioLevelBroadcaster } from "@/communication/websocket/AudioLevelBroadcaster";
 
-function setupServer(audioLevelBroadcaster?: AudioLevelBroadcaster) {
+const AUTH_TOKEN = "test-auth-token";
+const PUBLIC_BASE_URL = "https://example.ngrok.io";
+
+function sign(url: string): string {
+  return createHmac("sha1", AUTH_TOKEN).update(url, "utf8").digest("base64");
+}
+
+function setupServer(audioLevelBroadcaster?: AudioLevelBroadcaster, requireTwilioSignature = false) {
   const eventBus = new EventBus();
   const server = new JarvisWebSocketServer({
     deviceRegistry: new DeviceRegistry(),
@@ -14,6 +22,7 @@ function setupServer(audioLevelBroadcaster?: AudioLevelBroadcaster) {
     pairingService: new PairingService(),
     eventBus,
     audioLevelBroadcaster,
+    ...(requireTwilioSignature ? { twilioAuthToken: AUTH_TOKEN, twilioPublicBaseUrl: PUBLIC_BASE_URL } : {}),
   });
   const handle = server.start(0);
   return { handle, port: handle.port };
@@ -98,6 +107,45 @@ describe("Audio waveform routes", () => {
     expect(received.level).toBeGreaterThan(0.9);
 
     viewerSocket.close();
+    ingestSocket.close();
+  });
+
+  test("rejects a /voice/audio-stream upgrade with no Twilio signature once twilioAuthToken/twilioPublicBaseUrl are configured", async () => {
+    const { handle, port } = setupServer(new AudioLevelBroadcaster(), true);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${port}/voice/audio-stream`, {
+      headers: { Upgrade: "websocket", Connection: "Upgrade" },
+    });
+    expect(response.status).toBe(403);
+  });
+
+  test("rejects a /voice/audio-stream upgrade with a wrong Twilio signature", async () => {
+    const { handle, port } = setupServer(new AudioLevelBroadcaster(), true);
+    activeHandle = handle;
+
+    const response = await fetch(`http://localhost:${port}/voice/audio-stream`, {
+      headers: { Upgrade: "websocket", Connection: "Upgrade", "X-Twilio-Signature": "forged" },
+    });
+    expect(response.status).toBe(403);
+  });
+
+  test("accepts a /voice/audio-stream upgrade carrying a correctly signed X-Twilio-Signature", async () => {
+    const broadcaster = new AudioLevelBroadcaster();
+    const { handle, port } = setupServer(broadcaster, true);
+    activeHandle = handle;
+
+    const signature = sign(`${PUBLIC_BASE_URL}/voice/audio-stream`);
+    const ingestSocket = new WebSocket(`ws://localhost:${port}/voice/audio-stream`, {
+      headers: { "X-Twilio-Signature": signature },
+    } as unknown as string[]);
+
+    await new Promise<void>((resolve, reject) => {
+      ingestSocket.onopen = () => resolve();
+      ingestSocket.onerror = () => reject(new Error("ingest socket failed to open with a valid signature"));
+      setTimeout(() => reject(new Error("timed out waiting for the signed socket to open")), 2000);
+    });
+
     ingestSocket.close();
   });
 
