@@ -1122,8 +1122,18 @@ function main() {
   );
   if (weeklyDigestEnabled) {
     let lastWeeklyDigestDateKey: string | null = null;
+    // Guards against two ticks starting a send concurrently — setInterval
+    // fires on a fixed wall-clock schedule regardless of whether the
+    // previous tick's async work (the Telegram send here) has resolved
+    // yet, and lastWeeklyDigestDateKey is only committed once that send
+    // succeeds. Without this, a slow send straddling a tick boundary
+    // would let a second tick see the same "not sent yet" state and send
+    // the digest twice. Same in-flight-guard pattern the automation-rule
+    // and wake-up-call schedulers already use.
+    let sendInFlight = false;
     weeklyDigestInterval = setInterval(() => {
       schedulerHealthTracker.tick("weeklyDigest");
+      if (sendInFlight) return;
       const now = new Date();
       const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
       const todayDateKey = formatDateKey(now, config.timezone);
@@ -1149,6 +1159,7 @@ function main() {
       // isWeeklyDigestDue never re-captures the same dateKey (same "mark
       // before an operation that can fail" bug already fixed for reminder
       // notifications).
+      sendInFlight = true;
       telegramGateway!
         .sendMessage(config.telegramOwnerChatId!, message)
         .then(() => {
@@ -1159,6 +1170,9 @@ function main() {
             "[jarvis] failed to send weekly digest (will retry next tick):",
             error instanceof Error ? error.message : String(error)
           );
+        })
+        .finally(() => {
+          sendInFlight = false;
         });
     }, 30_000);
   }
@@ -1173,8 +1187,14 @@ function main() {
       checkinSentSinceLastInteraction = false;
     });
 
+    // Same in-flight guard as the weekly digest above — a send straddling
+    // a tick boundary would otherwise let a second tick see
+    // checkinSentSinceLastInteraction still false and send the check-in
+    // twice.
+    let sendInFlight = false;
     checkinInterval = setInterval(() => {
       schedulerHealthTracker.tick("checkin");
+      if (sendInFlight) return;
       if (!isCheckinDue(new Date(), lastInteractionAt, config.checkinAfterHours!, checkinSentSinceLastInteraction)) {
         return;
       }
@@ -1185,6 +1205,7 @@ function main() {
       // otherwise leaves the flag true anyway, so isCheckinDue silently
       // never fires again for that idle period, defeating the whole point
       // of a check-in (same bug class already fixed for reminders/digest).
+      sendInFlight = true;
       telegramGateway!
         .sendMessage(config.telegramOwnerChatId!, message)
         .then(() => {
@@ -1195,6 +1216,9 @@ function main() {
             "[jarvis] failed to send check-in (will retry next tick):",
             error instanceof Error ? error.message : String(error)
           );
+        })
+        .finally(() => {
+          sendInFlight = false;
         });
     }, 60_000);
   }
@@ -1210,6 +1234,18 @@ function main() {
     // becomes due (not when it's actually sent), so isMorningBriefingDue
     // never re-captures it a second time that day.
     let pendingMorningBriefingDateKey: string | null = null;
+    // Guards against two ticks running sendMorningBriefing concurrently.
+    // The interval callback is async but setInterval never waits for a
+    // previous invocation to settle before firing the next one on
+    // schedule — sendMorningBriefing does several sequential network
+    // calls (weather, calendar, Gmail, then the Telegram send itself),
+    // and lastMorningBriefingDateKey/pendingMorningBriefingDateKey are
+    // only committed after it resolves. Without this, a slow run
+    // straddling a 30s tick boundary would let the next tick see the
+    // same "not sent yet" state and send the briefing twice. Same
+    // in-flight-guard pattern the automation-rule and wake-up-call
+    // schedulers already use.
+    let sendInFlight = false;
 
     async function sendMorningBriefing(now: Date): Promise<void> {
       const weather = await weatherClient?.getCurrentWeather().catch(() => undefined);
@@ -1230,6 +1266,7 @@ function main() {
 
     morningBriefingInterval = setInterval(async () => {
       schedulerHealthTracker.tick("morningBriefing");
+      if (sendInFlight) return;
       const now = new Date();
       const nowTimeOfDay = formatTimeOfDay(now, config.timezone);
       const todayDateKey = formatDateKey(now, config.timezone);
@@ -1246,6 +1283,7 @@ function main() {
           lastMorningBriefingDateKey = todayDateKey;
           pendingMorningBriefingDateKey = todayDateKey;
         } else {
+          sendInFlight = true;
           try {
             await sendMorningBriefing(now);
             lastMorningBriefingDateKey = todayDateKey;
@@ -1254,12 +1292,15 @@ function main() {
               "[jarvis] failed to send morning briefing (will retry next tick):",
               error instanceof Error ? error.message : String(error)
             );
+          } finally {
+            sendInFlight = false;
           }
         }
         return;
       }
 
       if (pendingMorningBriefingDateKey === todayDateKey && !quiet) {
+        sendInFlight = true;
         try {
           await sendMorningBriefing(now);
           pendingMorningBriefingDateKey = null;
@@ -1268,6 +1309,8 @@ function main() {
             "[jarvis] failed to send queued morning briefing (will retry next tick):",
             error instanceof Error ? error.message : String(error)
           );
+        } finally {
+          sendInFlight = false;
         }
       }
     }, 30_000);
