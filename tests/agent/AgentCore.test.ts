@@ -305,6 +305,42 @@ describe("AgentCore", () => {
     expect(result.failureReason).toMatch(/timed out/i);
   });
 
+  test("fails cleanly on a hung VERIFYING step instead of wedging the task forever", async () => {
+    // Mirrors the EXECUTING-branch timeout test above: verification (the
+    // planner.verify() call, which can itself invoke the AI provider and
+    // a real verification tool call) must be bounded by stepTimeoutMs the
+    // same way tool execution is — without it, a hung planner.verify()
+    // parks the loop inside one never-settling await, where even
+    // taskTimeoutMs's own check (only evaluated between loop iterations)
+    // can never fire.
+    const mutatingTool = makeTool({
+      name: "mutating_tool",
+      requiredPermission: PermissionLevel.SAFE_ACTION,
+      execute: async () => ({ success: true, data: { ok: true } }),
+    });
+
+    class HangingVerifyPlanner implements AgentPlanner {
+      async plan(): Promise<AgentStepProposal[]> {
+        return [{ toolName: "mutating_tool", input: {}, description: "will need verification" }];
+      }
+      verify(): Promise<AgentVerificationResult> {
+        return new Promise(() => {}); // never resolves
+      }
+    }
+
+    const { agentCore, permissionService } = setup({
+      tools: [mutatingTool],
+      planner: new HangingVerifyPlanner(),
+      agentCoreOptions: { stepTimeoutMs: 20, maxStepRetries: 0, maxRecoveryCycles: 0 },
+    });
+    permissionService.grant("user-1", "MUTATING_TOOL");
+
+    const result = await agentCore.runTask("user-1", "run a tool whose verification hangs");
+
+    expect(result.state).toBe("FAILED");
+    expect(result.failureReason).toMatch(/timed out/i);
+  });
+
   test("fails cleanly on a total task timeout", async () => {
     let calls = 0;
     const slowEachTime = makeTool({
