@@ -439,7 +439,23 @@ export class GmailClient {
   }): string {
     const to = this.encodeAddressValue(this.sanitizeHeaderValue(params.to));
     const subject = this.encodeHeaderValue(this.sanitizeHeaderValue(params.subject));
-    const headers = [`To: ${to}`, `Subject: ${subject}`, "MIME-Version: 1.0", 'Content-Type: text/plain; charset="UTF-8"'];
+    const headers = [
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      "MIME-Version: 1.0",
+      'Content-Type: text/plain; charset="UTF-8"',
+      // Without this, a body with no explicit Content-Transfer-Encoding
+      // defaults to 7bit per RFC 2045 — restricted to US-ASCII — while
+      // the body below is inserted as raw UTF-8 bytes verbatim. Any
+      // non-ASCII character (accents, non-Latin scripts, emoji) then
+      // makes this an internally inconsistent MIME message: declared
+      // 7bit/US-ASCII but actually containing 8-bit bytes, which a
+      // strict parser or a 7-bit-only relay is entitled to mangle. The
+      // message only ever travels to Gmail's API as base64-over-JSON
+      // (see toBase64Url below), so declaring 8bit here costs nothing
+      // and just makes the declaration match reality.
+      "Content-Transfer-Encoding: 8bit",
+    ];
     if (params.inReplyTo) headers.push(`In-Reply-To: ${this.sanitizeHeaderValue(params.inReplyTo)}`);
     if (params.references) headers.push(`References: ${this.sanitizeHeaderValue(params.references)}`);
     return `${headers.join("\r\n")}\r\n\r\n${params.body}`;
