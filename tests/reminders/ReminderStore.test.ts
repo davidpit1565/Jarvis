@@ -313,6 +313,31 @@ describe("ReminderStore", () => {
     store.close();
   });
 
+  test("create() canonicalizes a non-Z ISO offset dueAt to UTC, so it stays comparable to nowIso as raw text", () => {
+    // "+02:00" denotes the same instant as "...T07:00:00.000Z" but is not
+    // lexicographically comparable to a canonical "Z" timestamp the way
+    // getDueUnnotified/nowIso always are — storing it verbatim would make
+    // an actually-overdue reminder silently never match `dueAt <= nowIso`.
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Task", dueAt: "2026-01-15T09:00:00+02:00" });
+
+    expect(record.dueAt).toBe("2026-01-15T07:00:00.000Z");
+
+    const due = store.getDueUnnotified("2026-01-15T08:00:00.000Z");
+    expect(due).toHaveLength(1);
+    store.close();
+  });
+
+  test("update() canonicalizes a non-Z ISO offset dueAt to UTC the same way", () => {
+    const store = new ReminderStore(":memory:");
+    const record = store.create({ text: "Task", dueAt: "2026-01-15T08:00:00.000Z" });
+
+    const updated = store.update(record.id, { dueAt: "2026-01-15T09:00:00+02:00" });
+
+    expect(updated?.dueAt).toBe("2026-01-15T07:00:00.000Z");
+    store.close();
+  });
+
   test("getDueUnnotified excludes an undated reminder", () => {
     const store = new ReminderStore(":memory:");
     store.create({ text: "Task" });

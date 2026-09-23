@@ -129,7 +129,16 @@ export class ReminderStore {
     const record: ReminderRecord = {
       id: randomUUID(),
       text: input.text,
-      dueAt: input.dueAt ?? null,
+      // Canonicalized to UTC "Z" form rather than stored verbatim: due_at
+      // is compared/sorted as raw TEXT elsewhere (the due_at index, ORDER
+      // BY due_at, and getDueUnnotified's `r.dueAt <= nowIso`, where nowIso
+      // is always a canonical toISOString()) — a valid-but-non-canonical
+      // ISO string (e.g. a "+02:00" offset form instead of "Z") parses to
+      // the correct instant but is NOT lexicographically comparable to a
+      // "Z"-form timestamp, so an overdue reminder could silently never
+      // fire (or sort out of order) depending on how its digits happen to
+      // compare as plain text.
+      dueAt: input.dueAt != null ? new Date(input.dueAt).toISOString() : null,
       completed: input.completed ?? false,
       createdAt: new Date().toISOString(),
       recurrence: input.recurrence ?? null,
@@ -214,11 +223,16 @@ export class ReminderStore {
     if (!existing) return null;
 
     const text = changes.text ?? existing.text;
-    const dueAt = changes.dueAt !== undefined ? changes.dueAt : existing.dueAt;
+    // Same UTC canonicalization as create() — see its comment.
+    const dueAt =
+      changes.dueAt !== undefined ? (changes.dueAt != null ? new Date(changes.dueAt).toISOString() : null) : existing.dueAt;
     const recurrence = changes.recurrence !== undefined ? changes.recurrence : existing.recurrence;
     // A re-dated reminder should get a fresh notification at its new
     // time, not stay silenced by one already sent for the old time.
-    const notifiedAt = changes.dueAt !== undefined && changes.dueAt !== existing.dueAt ? null : existing.notifiedAt;
+    // Compared against the normalized `dueAt` (not the raw `changes.dueAt`)
+    // so a re-supplied due time that's merely a different ISO spelling of
+    // the same instant isn't mistaken for an actual change.
+    const notifiedAt = changes.dueAt !== undefined && dueAt !== existing.dueAt ? null : existing.notifiedAt;
 
     this.db
       .query(`UPDATE reminders SET text = ?, due_at = ?, recurrence = ?, notified_at = ? WHERE id = ?`)
