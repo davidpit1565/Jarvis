@@ -234,13 +234,31 @@ export class MemoryStore {
     // of an existing USER_STATED key. search()'s LIKE already matches
     // case-insensitively, so this makes exact-key lookups agree with it.
     const existing = this.db
-      .query(`SELECT id, value, COALESCE(source, 'USER_STATED') as source FROM memory_records WHERE key = ? COLLATE NOCASE`)
-      .get(input.key) as { id: string; value: string; source: MemoryTrust } | null;
+      .query(
+        `SELECT id, value, category, importance, expires_at as expiresAt, COALESCE(source, 'USER_STATED') as source FROM memory_records WHERE key = ? COLLATE NOCASE`
+      )
+      .get(input.key) as
+      | { id: string; value: string; category: MemoryCategory; importance: MemoryImportance; expiresAt: string | null; source: MemoryTrust }
+      | null;
     const createdAt = new Date().toISOString();
-    const category = input.category ?? DEFAULT_CATEGORY;
-    const importance = input.importance ?? DEFAULT_IMPORTANCE;
     const source = input.source ?? DEFAULT_TRUST;
-    const expiresAt = this.resolveExpiresAt(category, input.expiresAt, createdAt);
+
+    // A caller updating one field (e.g. just correcting `value`) doesn't
+    // repeat category/importance/expiresAt on every call — SaveMemoryTool's
+    // own schema marks them all optional. Falling back to DEFAULT_* here
+    // (as this used to) would silently downgrade an existing record's
+    // category/importance/expiry on every partial resave instead of
+    // preserving it, the same "changes.X !== undefined ? changes.X :
+    // existing.X" partial-update pattern already used correctly elsewhere
+    // (GoogleCalendarClient.updateEvent, AlarmStore.update, etc.) — DEFAULT_*
+    // only applies when there's no existing record to fall back to.
+    const category = input.category ?? existing?.category ?? DEFAULT_CATEGORY;
+    const importance = input.importance ?? existing?.importance ?? DEFAULT_IMPORTANCE;
+    const expiresAt = existing
+      ? input.expiresAt !== undefined
+        ? input.expiresAt
+        : existing.expiresAt
+      : this.resolveExpiresAt(category, input.expiresAt, createdAt);
 
     if (existing) {
       const valueChanged = existing.value.trim() !== input.value.trim();
