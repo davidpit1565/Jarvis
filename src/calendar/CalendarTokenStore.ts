@@ -23,6 +23,18 @@ export interface LinkedGoogleAccount extends CalendarTokens {
 // linked account, and is trivial to detect.
 const LEGACY_PLACEHOLDER_EMAIL = "google";
 
+// Email addresses are universally case-insensitive, but every lookup here
+// is a raw SQLite TEXT comparison (case-sensitive/BINARY by default) — a
+// linked account stored as whatever casing Google's userinfo endpoint
+// returned (commonly lowercase) would otherwise silently fail to match a
+// caller who supplies (or a model who composes) the same address with
+// different casing, e.g. "Alice@Gmail.com" vs the stored "alice@gmail.com".
+// Normalizing at every boundary here makes every account keyed and looked
+// up consistently, regardless of the casing any caller passes in.
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 /**
  * Persists every linked Google account's OAuth tokens for Calendar/Gmail
  * access, one row per account, keyed by the account's own email address —
@@ -120,14 +132,14 @@ export class CalendarTokenStore {
          ON CONFLICT(email) DO UPDATE SET refresh_token = excluded.refresh_token, access_token = excluded.access_token,
            access_token_expires_at = excluded.access_token_expires_at`
       )
-      .run(email, tokens.refreshToken, tokens.accessToken, tokens.accessTokenExpiresAt, Date.now());
+      .run(normalizeEmail(email), tokens.refreshToken, tokens.accessToken, tokens.accessTokenExpiresAt, Date.now());
   }
 
   /** Updates just one account's access token after a refresh — its refresh token and link order are untouched. */
   updateAccessToken(email: string, accessToken: string, expiresAt: number): void {
     this.db
       .query(`UPDATE calendar_tokens SET access_token = ?, access_token_expires_at = ? WHERE email = ?`)
-      .run(accessToken, expiresAt, email);
+      .run(accessToken, expiresAt, normalizeEmail(email));
   }
 
   get(email: string): LinkedGoogleAccount | null {
@@ -137,7 +149,7 @@ export class CalendarTokenStore {
            access_token_expires_at as accessTokenExpiresAt, linked_at as linkedAt
          FROM calendar_tokens WHERE email = ?`
       )
-      .get(email) as LinkedGoogleAccount | null;
+      .get(normalizeEmail(email)) as LinkedGoogleAccount | null;
     return row ?? null;
   }
 
@@ -159,7 +171,7 @@ export class CalendarTokenStore {
 
   /** Re-keys a migrated legacy row onto the account's real, now-fetched email — same tokens, same link order, just its real identity. */
   rekey(oldEmail: string, newEmail: string): void {
-    this.db.query(`UPDATE calendar_tokens SET email = ? WHERE email = ?`).run(newEmail, oldEmail);
+    this.db.query(`UPDATE calendar_tokens SET email = ? WHERE email = ?`).run(normalizeEmail(newEmail), normalizeEmail(oldEmail));
   }
 
   isLinked(email: string): boolean {
@@ -173,7 +185,7 @@ export class CalendarTokenStore {
 
   /** Unlinks one account — a fresh /calendar/oauth/start (choosing that Google account at the consent screen) is required to reconnect it. */
   delete(email: string): void {
-    this.db.query(`DELETE FROM calendar_tokens WHERE email = ?`).run(email);
+    this.db.query(`DELETE FROM calendar_tokens WHERE email = ?`).run(normalizeEmail(email));
   }
 
   close(): void {

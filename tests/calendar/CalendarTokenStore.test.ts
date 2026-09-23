@@ -93,6 +93,41 @@ describe("CalendarTokenStore", () => {
     store.close();
   });
 
+  test("email lookups are case-insensitive — a linked account is found regardless of how the caller cases the address", () => {
+    const store = new CalendarTokenStore(":memory:");
+    store.save("Alice@Gmail.com", { refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: 111 });
+
+    // Stored normalized to lowercase, findable by any casing.
+    expect(store.get("Alice@Gmail.com")?.email).toBe("alice@gmail.com");
+    expect(store.get("alice@gmail.com")?.refreshToken).toBe("r1");
+    expect(store.get("ALICE@GMAIL.COM")?.refreshToken).toBe("r1");
+    expect(store.isLinked("Alice@Gmail.com")).toBe(true);
+    expect(store.count()).toBe(1);
+    store.close();
+  });
+
+  test("saving the same email under different casing updates the same row rather than creating a duplicate", () => {
+    const store = new CalendarTokenStore(":memory:");
+    store.save("alice@gmail.com", { refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: 111 });
+    store.save("Alice@Gmail.com", { refreshToken: "r2", accessToken: "a2", accessTokenExpiresAt: 222 });
+
+    expect(store.count()).toBe(1);
+    expect(store.get("alice@gmail.com")?.refreshToken).toBe("r2");
+    store.close();
+  });
+
+  test("updateAccessToken and delete also match regardless of casing", () => {
+    const store = new CalendarTokenStore(":memory:");
+    store.save("alice@gmail.com", { refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: 111 });
+
+    store.updateAccessToken("Alice@Gmail.com", "a1-new", 999);
+    expect(store.get("alice@gmail.com")?.accessToken).toBe("a1-new");
+
+    store.delete("ALICE@GMAIL.COM");
+    expect(store.isLinked("alice@gmail.com")).toBe(false);
+    store.close();
+  });
+
   test("survives across instances backed by the same SQLite file", () => {
     const dbPath = `/tmp/jarvis-calendar-token-test-${crypto.randomUUID()}.sqlite`;
 
