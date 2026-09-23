@@ -1287,7 +1287,7 @@ function main() {
             telegramGateway!
               .sendMessage(
                 config.telegramOwnerChatId!,
-                `⚠️ Automation rule failed (errorId ${errorId}): ${rule.instruction.slice(0, 100)} — ${message}`
+                `⚠️ An automation rule failed (errorId ${errorId}): "${rule.instruction.slice(0, 100)}". Check the logs or /automation-failures for details.`
               )
               .catch(() => {
                 // Best-effort notification about a best-effort rule — already recorded above either way.
