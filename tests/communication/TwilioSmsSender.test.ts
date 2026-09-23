@@ -30,7 +30,7 @@ describe("TwilioSmsSender", () => {
     expect(capturedAuth).toBe(`Basic ${Buffer.from("AC123:auth-token").toString("base64")}`);
   });
 
-  test("throws on a non-2xx response, without leaking the auth token", async () => {
+  test("throws on a non-2xx response without leaking Twilio's raw response body (or the auth token)", async () => {
     global.fetch = (async () => new Response("bad number", { status: 400 })) as unknown as typeof fetch;
 
     const sender = new TwilioSmsSender("AC123", "auth-token", "+15005550006");
@@ -42,7 +42,7 @@ describe("TwilioSmsSender", () => {
     }
 
     expect(thrown?.message).toContain("400");
-    expect(thrown?.message).toContain("bad number");
+    expect(thrown?.message).not.toContain("bad number");
     expect(thrown?.message).not.toContain("auth-token");
   });
 });

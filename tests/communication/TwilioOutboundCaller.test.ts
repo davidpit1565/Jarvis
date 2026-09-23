@@ -64,7 +64,7 @@ describe("TwilioOutboundCaller", () => {
     expect(body.get("StatusCallbackEvent")).toBeNull();
   });
 
-  test("throws with Twilio's error detail on a non-2xx response, without leaking the auth token", async () => {
+  test("throws on a non-2xx response without leaking Twilio's raw response body (or the auth token)", async () => {
     global.fetch = (async () => new Response("bad request detail", { status: 400 })) as unknown as typeof fetch;
 
     const caller = new TwilioOutboundCaller("ACxxx", "super-secret-token", "+15005550006");
@@ -76,7 +76,8 @@ describe("TwilioOutboundCaller", () => {
       error = e as Error;
     }
 
-    expect(error?.message).toContain("bad request detail");
+    expect(error?.message).toContain("400");
+    expect(error?.message).not.toContain("bad request detail");
     expect(error?.message).not.toContain("super-secret-token");
   });
 });
