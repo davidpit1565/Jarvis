@@ -70,12 +70,35 @@ export class DeviceVoiceGateway {
    * the phone's auto-deny, since a paired device is a reliable
    * bidirectional channel. Only one confirmation can be pending per device
    * at a time; a new one silently replaces (and orphans) any prior
-   * unanswered entry, which is fine because `ConfirmationService`'s own
-   * timeout already resolves the caller waiting on that stale prompt.
+   * unanswered entry.
+   *
+   * Owns its own timeout rather than relying solely on
+   * `ConfirmationService`'s: that one resolves its own promise `false` on
+   * timeout but has no way to reach back into this gateway's
+   * `pendingConfirmations` map, so without this, an unanswered prompt left
+   * a stale entry there forever — every future transcript from that device
+   * would then be treated as a yes/no answer to the long-dead prompt and
+   * never reach the Orchestrator, silently bricking the device's voice
+   * conversation until the user stumbled onto "yes"/"no".
    */
-  async awaitConfirmation(deviceId: string, questionText: string): Promise<boolean> {
+  async awaitConfirmation(deviceId: string, questionText: string, timeoutMs = 60_000): Promise<boolean> {
     const resultPromise = new Promise<boolean>((resolve) => {
-      this.pendingConfirmations.set(deviceId, resolve);
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        if (this.pendingConfirmations.get(deviceId) === settle) this.pendingConfirmations.delete(deviceId);
+        resolve(false);
+      }, timeoutMs);
+
+      const settle = (answer: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(answer);
+      };
+
+      this.pendingConfirmations.set(deviceId, settle);
     });
     this.sendReply(deviceId, questionText);
     return resultPromise;

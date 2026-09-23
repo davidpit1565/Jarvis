@@ -388,6 +388,24 @@ describe("TelegramGateway.awaitConfirmation", () => {
     await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "yes" } });
     expect(await confirmationPromise).toBe(true);
   });
+
+  test("an unanswered confirmation times out to false and clears the pending entry, instead of bricking the chat", async () => {
+    const { calls } = stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "a real reply"),
+      userId: "local-user",
+    }));
+
+    const confirmationPromise = gateway.awaitConfirmation("123", "Approve?", 10);
+    expect(await confirmationPromise).toBe(false);
+
+    // A normal message sent afterward must reach the orchestrator like any
+    // other — not get treated as a stale yes/no answer.
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "what's the weather" } });
+
+    expect(calls.some((c) => c.text === "a real reply")).toBe(true);
+    expect(calls.some((c) => c.text.match(/reply yes or no/i))).toBe(false);
+  });
 });
 
 describe("TelegramGateway /start and /help commands", () => {
