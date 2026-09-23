@@ -1004,12 +1004,35 @@ export class JarvisWebSocketServer {
     return this.activeWebChatSocket !== undefined;
   }
 
-  requestWebChatConfirmation(questionText: string): Promise<boolean> {
+  requestWebChatConfirmation(questionText: string, timeoutMs = 60_000): Promise<boolean> {
     const socket = this.activeWebChatSocket;
     if (!socket) return Promise.resolve(false);
 
+    // Owns its own timeout rather than relying solely on
+    // ConfirmationService's: that one resolves its own promise `false` on
+    // timeout but has no way to reach back into `pendingWebChatConfirmation`
+    // to clear it, so without this, an unanswered prompt left it set
+    // forever — every future message typed into the hologram chat would
+    // then be treated as a yes/no answer to the long-dead prompt and never
+    // reach the Orchestrator, silently bricking the browser conversation.
+    // Same fix as TelegramGateway.awaitConfirmation/DeviceVoiceGateway.awaitConfirmation.
     return new Promise<boolean>((resolve) => {
-      this.pendingWebChatConfirmation = resolve;
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        if (this.pendingWebChatConfirmation === settle) this.pendingWebChatConfirmation = undefined;
+        resolve(false);
+      }, timeoutMs);
+
+      const settle = (answer: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(answer);
+      };
+
+      this.pendingWebChatConfirmation = settle;
       socket.send(JSON.stringify({ type: "confirm", message: questionText }));
     });
   }

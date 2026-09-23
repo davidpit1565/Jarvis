@@ -174,4 +174,23 @@ describe("JarvisWebSocketServer web-chat confirmation", () => {
     ws1.close();
     ws2.close();
   });
+
+  test("an unanswered confirmation times out to false and clears the pending entry, instead of bricking the chat", async () => {
+    const { handle, port, server } = setupServer();
+    activeHandle = handle;
+
+    const ws = await connect(port);
+    const confirmPromise = server.requestWebChatConfirmation("Approve?", 10);
+    await nextMessage(ws); // the confirm prompt itself
+
+    expect(await confirmPromise).toBe(false);
+
+    // A normal message sent afterward must reach the orchestrator (echoed
+    // back as its real reply) — not get treated as a stale yes/no answer.
+    const replyPromise = nextMessage(ws);
+    ws.send(JSON.stringify({ text: "what's the weather" }));
+
+    expect(await replyPromise).toEqual({ type: "assistant", text: "unused" });
+    ws.close();
+  });
 });
