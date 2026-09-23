@@ -6,7 +6,7 @@ import type { ToolAuditLog } from "@/audit/ToolAuditLog";
 import type { ToolResult } from "@/types/tools";
 import { toolRequiresVerification } from "@/tools/verificationPolicy";
 import { AgentTaskStore, type AgentTaskProgress, type GoalProgress } from "./AgentTaskStore";
-import type { AgentPlanner, AgentTaskRecord } from "./types";
+import type { AgentPlanner, AgentTaskRecord, AgentVerificationResult } from "./types";
 import { classifyError } from "./errorClassification";
 import { AgentTimeoutError, withTimeout } from "./timeout";
 import { isTerminalState, phaseForAgentTaskState, type AgentTaskState } from "./AgentTaskStateMachine";
@@ -474,13 +474,33 @@ export class AgentCore {
           break;
         }
 
-        const verification = await this.deps.planner.verify({
-          taskId,
-          step,
-          result: step.lastResult,
-          runVerificationTool: (toolName, input) =>
-            this.deps.orchestrator.executeToolCall(task.userId, { id: randomUUID(), toolName, input }, taskId),
-        });
+        let verification: AgentVerificationResult;
+        try {
+          verification = await withTimeout(
+            this.deps.planner.verify({
+              taskId,
+              step,
+              result: step.lastResult,
+              runVerificationTool: (toolName, input) =>
+                this.deps.orchestrator.executeToolCall(task.userId, { id: randomUUID(), toolName, input }, taskId),
+            }),
+            stepTimeoutMs,
+            `Verification of step "${step.description}" timed out after ${stepTimeoutMs}ms`
+          );
+        } catch (error) {
+          // Same "hard safety boundary" this stepTimeoutMs wrap already
+          // gives the EXECUTING branch's tool call — without it here too,
+          // a hung AI provider call or a hung verification tool call left
+          // this await never settling, and the task-level taskTimeoutMs
+          // check (at the top of this loop) can only ever fire *between*
+          // iterations, never while parked inside a single await. The
+          // task would wedge in VERIFYING forever: never completing,
+          // never failing, with no automatic recovery.
+          const reason = error instanceof AgentTimeoutError ? error.message : error instanceof Error ? error.message : "Verification failed";
+          task = this.deps.taskStore.markStepVerified(taskId, step.id, false, reason);
+          task = await this.handleStepFailure(task, `Verification failed: ${reason}`, maxStepRetries, maxRecoveryCycles);
+          continue;
+        }
 
         this.deps.auditLog.recordAgentEvent(taskId, task.userId, "step.verification", {
           stepId: step.id,
