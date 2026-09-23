@@ -175,6 +175,38 @@ describe("JarvisWebSocketServer web-chat confirmation", () => {
     ws2.close();
   });
 
+  test("a different, still-connected web-chat socket cannot hijack a confirmation it never saw", async () => {
+    // ws1 connects first, then ws2 connects and becomes the active socket.
+    // A confirmation requested at that point is sent only to ws2. ws1 is
+    // still connected (a second open tab/window) but was never shown the
+    // prompt — it must not be able to answer it by coincidentally typing
+    // "yes" for something unrelated.
+    const { handle, port, server } = setupServer();
+    activeHandle = handle;
+
+    const ws1 = await connect(port);
+    const ws2 = await connect(port);
+
+    const confirmPromise = server.requestWebChatConfirmation("Send this email?");
+    const confirmMsg = await nextMessage(ws2);
+    expect(confirmMsg).toEqual({ type: "confirm", message: "Send this email?" });
+
+    // ws1 never received a prompt — its "yes" must be treated as an
+    // ordinary (if unrelated) chat message, not a confirmation answer.
+    const ws1ReplyPromise = nextMessage(ws1);
+    ws1.send(JSON.stringify({ text: "yes" }));
+    expect(await ws1ReplyPromise).toEqual({ type: "assistant", text: "unused" });
+
+    // The confirmation must still be pending — only ws2 can answer it.
+    const ws2ReplyPromise = nextMessage(ws2);
+    ws2.send(JSON.stringify({ text: "yes" }));
+    expect(await confirmPromise).toBe(true);
+    expect(await ws2ReplyPromise).toEqual({ type: "assistant", text: "Confirmed." });
+
+    ws1.close();
+    ws2.close();
+  });
+
   test("an unanswered confirmation times out to false and clears the pending entry, instead of bricking the chat", async () => {
     const { handle, port, server } = setupServer();
     activeHandle = handle;

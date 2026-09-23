@@ -465,6 +465,17 @@ export class JarvisWebSocketServer {
    */
   private activeWebChatSocket: ServerWebSocket<Extract<SocketData, { kind: "web-chat" }>> | undefined;
   private pendingWebChatConfirmation: ((answer: boolean) => void) | undefined;
+  // The one socket a pending confirmation's prompt was actually sent to —
+  // NOT necessarily the current activeWebChatSocket, since a new tab can
+  // become active while an older, still-connected tab still holds an
+  // unanswered prompt for a brief window (before that new tab's own
+  // `open` deny-and-clear fires — see the `open` handler below). Without
+  // this, handleWebChatMessage matched a yes/no reply from ANY connected
+  // web-chat socket, not just the one that actually saw the prompt: a
+  // second open tab (dashboard + hologram, or two browser windows) could
+  // silently approve/deny a CONFIRM/DANGEROUS tool call it never
+  // displayed, just by the user typing "yes" into it for something else.
+  private pendingWebChatConfirmationSocket: ServerWebSocket<Extract<SocketData, { kind: "web-chat" }>> | undefined;
 
   constructor(private readonly deps: JarvisWebSocketServerDependencies) {
     this.subscribeObserverBroadcast();
@@ -520,6 +531,7 @@ export class JarvisWebSocketServer {
             // hanging until its own 60s ConfirmationService timeout.
             this.pendingWebChatConfirmation?.(false);
             this.pendingWebChatConfirmation = undefined;
+            this.pendingWebChatConfirmationSocket = undefined;
             this.activeWebChatSocket = socket as ServerWebSocket<Extract<SocketData, { kind: "web-chat" }>>;
           }
           // Device sockets: a no-op here — only meaningful once they register.
@@ -570,10 +582,13 @@ export class JarvisWebSocketServer {
           } else if (socket.data.kind === "web-chat") {
             if (this.activeWebChatSocket === socket) {
               this.activeWebChatSocket = undefined;
-              // Nobody left to answer — deny rather than leave it
-              // hanging until ConfirmationService's own timeout.
+            }
+            if (this.pendingWebChatConfirmationSocket === socket) {
+              // Nobody left to answer THIS prompt — deny rather than leave
+              // it hanging until ConfirmationService's own timeout.
               this.pendingWebChatConfirmation?.(false);
               this.pendingWebChatConfirmation = undefined;
+              this.pendingWebChatConfirmationSocket = undefined;
             }
           }
         },
@@ -958,8 +973,14 @@ export class JarvisWebSocketServer {
     // "next message is the answer, not a new topic" UX as Telegram's own
     // awaitConfirmation(). An unparseable/non-yes/no reply re-prompts
     // rather than being silently treated as either an answer or a normal
-    // chat message.
-    if (this.pendingWebChatConfirmation) {
+    // chat message. Gated on `ws === pendingWebChatConfirmationSocket`
+    // (not just "is a confirmation pending at all") — with more than one
+    // web-chat socket connected at once (a second browser tab/window),
+    // the prompt is only ever sent to the socket that was active when it
+    // was requested; without this check, any OTHER still-connected
+    // socket typing "yes" for something unrelated would silently resolve
+    // a confirmation it never saw.
+    if (this.pendingWebChatConfirmation && ws === this.pendingWebChatConfirmationSocket) {
       let candidateText = "";
       try {
         const parsed = JSON.parse(raw);
@@ -970,6 +991,7 @@ export class JarvisWebSocketServer {
       if (WEB_CHAT_YES_PATTERN.test(candidateText)) {
         const resolve = this.pendingWebChatConfirmation;
         this.pendingWebChatConfirmation = undefined;
+        this.pendingWebChatConfirmationSocket = undefined;
         resolve(true);
         ws.send(JSON.stringify({ type: "assistant", text: "Confirmed." }));
         return;
@@ -977,6 +999,7 @@ export class JarvisWebSocketServer {
       if (WEB_CHAT_NO_PATTERN.test(candidateText)) {
         const resolve = this.pendingWebChatConfirmation;
         this.pendingWebChatConfirmation = undefined;
+        this.pendingWebChatConfirmationSocket = undefined;
         resolve(false);
         ws.send(JSON.stringify({ type: "assistant", text: "Cancelled." }));
         return;
@@ -1068,7 +1091,10 @@ export class JarvisWebSocketServer {
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        if (this.pendingWebChatConfirmation === settle) this.pendingWebChatConfirmation = undefined;
+        if (this.pendingWebChatConfirmation === settle) {
+          this.pendingWebChatConfirmation = undefined;
+          this.pendingWebChatConfirmationSocket = undefined;
+        }
         resolve(false);
       }, timeoutMs);
 
@@ -1080,6 +1106,7 @@ export class JarvisWebSocketServer {
       };
 
       this.pendingWebChatConfirmation = settle;
+      this.pendingWebChatConfirmationSocket = socket;
       socket.send(JSON.stringify({ type: "confirm", message: questionText }));
     });
   }
