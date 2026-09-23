@@ -54,6 +54,39 @@ describe("SpotifyClient.exchangeCodeForTokens", () => {
   });
 });
 
+describe("SpotifyClient token refresh", () => {
+  function makeExpiredTokenStore(): SpotifyTokenStore {
+    const tokenStore = new SpotifyTokenStore(":memory:");
+    tokenStore.save({ refreshToken: "old-refresh", accessToken: "stale", accessTokenExpiresAt: Date.now() - 1_000 });
+    return tokenStore;
+  }
+
+  test("persists a rotated refresh_token when Spotify's refresh response includes one", async () => {
+    const tokenStore = makeExpiredTokenStore();
+    const { client } = makeClient(tokenStore);
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 }),
+        { status: 200 }
+      )) as unknown as typeof fetch;
+
+    await client.getPlaybackState();
+
+    expect(tokenStore.get()?.refreshToken).toBe("new-refresh");
+  });
+
+  test("leaves the existing refresh_token untouched when Spotify's refresh response doesn't include a new one", async () => {
+    const tokenStore = makeExpiredTokenStore();
+    const { client } = makeClient(tokenStore);
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ access_token: "new-access", expires_in: 3600 }), { status: 200 })) as unknown as typeof fetch;
+
+    await client.getPlaybackState();
+
+    expect(tokenStore.get()?.refreshToken).toBe("old-refresh");
+  });
+});
+
 describe("SpotifyClient.getPlaybackState", () => {
   test("throws when no account is linked", async () => {
     const { client } = makeClient();

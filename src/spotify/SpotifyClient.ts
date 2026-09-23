@@ -110,9 +110,16 @@ export class SpotifyClient {
       throw await apiError("Spotify OAuth token refresh failed", response);
     }
 
-    const data = (await response.json()) as { access_token: string; expires_in: number };
+    const data = (await response.json()) as { access_token: string; expires_in: number; refresh_token?: string };
     const expiresAt = Date.now() + data.expires_in * 1000;
-    this.tokenStore.updateAccessToken(data.access_token, expiresAt);
+    // Spotify's OAuth service periodically rotates the refresh token on a
+    // refresh-grant response — documented behavior, not just PKCE-specific
+    // — and the previously-issued one becomes invalid once that happens.
+    // Dropping a rotated refresh_token here would work for exactly one
+    // more refresh (Spotify tolerates one use of the old token) before
+    // every subsequent refresh fails with invalid_grant, silently and
+    // permanently breaking the integration until a full unlink/re-link.
+    this.tokenStore.updateAccessToken(data.access_token, expiresAt, data.refresh_token);
     return data.access_token;
   }
 

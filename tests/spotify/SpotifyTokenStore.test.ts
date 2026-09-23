@@ -27,12 +27,21 @@ describe("SpotifyTokenStore", () => {
     store.close();
   });
 
-  test("updateAccessToken leaves the refresh token untouched", () => {
+  test("updateAccessToken leaves the refresh token untouched when no new one is given", () => {
     const store = new SpotifyTokenStore(":memory:");
     store.save({ refreshToken: "refresh-1", accessToken: "access-1", accessTokenExpiresAt: 111 });
     store.updateAccessToken("access-2", 999);
 
     expect(store.get()).toEqual({ refreshToken: "refresh-1", accessToken: "access-2", accessTokenExpiresAt: 999 });
+    store.close();
+  });
+
+  test("updateAccessToken replaces the refresh token too when Spotify rotates it", () => {
+    const store = new SpotifyTokenStore(":memory:");
+    store.save({ refreshToken: "refresh-1", accessToken: "access-1", accessTokenExpiresAt: 111 });
+    store.updateAccessToken("access-2", 999, "refresh-2");
+
+    expect(store.get()).toEqual({ refreshToken: "refresh-2", accessToken: "access-2", accessTokenExpiresAt: 999 });
     store.close();
   });
 
