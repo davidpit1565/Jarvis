@@ -68,6 +68,19 @@ function streamingBrain(text: string, deltas: string[]): Brain {
   };
 }
 
+/** Streams `deltas` and *then* throws — the "partial output already reached the caller" case, where falling back would restart a half-spoken reply. */
+function halfStreamedThenFailingBrain(deltas: string[], message: string): Brain {
+  return {
+    async chat(): Promise<BrainResponse> {
+      throw new Error(message);
+    },
+    async chatStream(_request, onTextDelta): Promise<BrainResponse> {
+      for (const delta of deltas) onTextDelta(delta);
+      throw new Error(message);
+    },
+  };
+}
+
 describe("AIRouter.chatStream", () => {
   test("forwards deltas from a provider that supports chatStream", async () => {
     const registry = new AIProviderRegistry();
@@ -115,6 +128,63 @@ describe("AIRouter.chatStream", () => {
     // nonzero estimate even with no usage data on the mock response) —
     // it never silently skips cost tracking for the streaming path.
     expect(costTracker.getTodaySpend()).toBeGreaterThan(0);
+  });
+
+  test("falls back to another provider when the primary fails before any delta", async () => {
+    const registry = new AIProviderRegistry();
+    const calls: string[] = [];
+    registry.register("groq", failingBrain("429 rate limit"), "free");
+    registry.register("openrouter", countingBrain("fallback reply", calls, "openrouter"), "free");
+    const costTracker = new CostTracker(":memory:");
+    const router = new AIRouter(registry, costTracker, {});
+
+    const received: string[] = [];
+    const response = await router.chatStream(REQUEST, (d) => received.push(d));
+
+    expect(response.text).toBe("fallback reply");
+    expect(calls).toEqual(["openrouter"]);
+    // Nothing had been streamed yet, so the whole fallback reply is
+    // delivered as one delta — the caller can't tell it apart from a
+    // provider that simply has no chatStream of its own.
+    expect(received).toEqual(["fallback reply"]);
+  });
+
+  test("never falls back once a delta has already reached the caller", async () => {
+    const registry = new AIProviderRegistry();
+    const calls: string[] = [];
+    registry.register("anthropic", halfStreamedThenFailingBrain(["Half a "], "stream broke mid-reply"), "paid");
+    registry.register("groq", countingBrain("second opinion", calls, "groq"), "free");
+    const costTracker = new CostTracker(":memory:");
+    // explicitProvider pins the failing streamer as primary despite it
+    // being the paid one, so this tests the delta guard and not provider
+    // selection.
+    const router = new AIRouter(registry, costTracker, { explicitProvider: "anthropic" });
+
+    const received: string[] = [];
+    await expect(router.chatStream(REQUEST, (d) => received.push(d))).rejects.toThrow("stream broke mid-reply");
+
+    expect(received).toEqual(["Half a "]);
+    // The half-spoken reply is never silently restarted elsewhere.
+    expect(calls).toEqual([]);
+  });
+
+  test("streams from the fallback when the primary's circuit is open", async () => {
+    const registry = new AIProviderRegistry();
+    const calls: string[] = [];
+    registry.register("groq", failingBrain("down"), "free");
+    registry.register("openrouter", countingBrain("fallback reply", calls, "openrouter"), "free");
+    const costTracker = new CostTracker(":memory:");
+    const router = new AIRouter(registry, costTracker, { circuitBreakerThreshold: 1 });
+
+    // First call trips groq's breaker (and already falls back); the
+    // second finds the circuit open before ever calling groq.
+    await router.chatStream(REQUEST, () => {});
+    const received: string[] = [];
+    const response = await router.chatStream(REQUEST, (d) => received.push(d));
+
+    expect(response.text).toBe("fallback reply");
+    expect(received).toEqual(["fallback reply"]);
+    expect(calls).toEqual(["openrouter", "openrouter"]);
   });
 });
 

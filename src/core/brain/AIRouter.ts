@@ -298,20 +298,63 @@ export class AIRouter implements Brain {
    * has to check provider capability itself; it just gets either real
    * streaming or a single "delta" that's the full answer.
    *
-   * Deliberately no cross-provider fallback here, unlike `chat`/
-   * `chatWithEscalation` — see `ClaudeBrain.chatStream`'s own doc comment
-   * for why a stream that's already emitted partial output to the caller
-   * must never be silently retried against a different provider. A
-   * failure here propagates to the caller exactly like any other failed
-   * brain call; provider fallback still applies to the *next* turn's
-   * `chat`/`chatStream` call, same as any other outage.
+   * Cross-provider fallback applies here too, but only up to the first
+   * delta. The moment any text has reached the caller this call is locked
+   * to its provider and a later failure propagates untouched — that is
+   * the real boundary the original "no fallback in a stream" rule was
+   * protecting (see `ClaudeBrain.chatStream`'s own doc comment): a
+   * half-spoken reply must never be silently restarted against another
+   * provider, because the caller has already displayed or spoken those
+   * words. A failure *before* the first delta has no partial output to
+   * protect and is, from the caller's side, indistinguishable from a
+   * plain `chat()` that failed, so it falls back exactly like `chat()`.
+   *
+   * Without that distinction every web-chat turn lost provider fallback
+   * entirely, since the orchestrator passes an `onTextDelta` on every
+   * turn that has one: a Groq rate-limit on the very first call killed
+   * the turn outright while a configured, healthy OpenRouter sat unused
+   * (observed 2026-09-23, Groq's 8k tokens/minute cap on a long
+   * conversation). The fallback response is not itself streamed — it
+   * arrives whole and is handed to `onTextDelta` in one piece, same as
+   * any provider with no `chatStream` of its own below.
    */
   async chatStream(request: BrainRequest, onTextDelta: (text: string) => void): Promise<BrainResponse> {
     const resolved = this.resolvePrimaryWithReason(request);
     const decisionRef: DecisionRef = { value: resolved.reason };
     const provider = this.applyBudget(resolved.provider, request, undefined, decisionRef);
+    const tried = new Set<ProviderName>([provider]);
+
+    // The single piece of state the fallback decision hangs on: has any
+    // text already reached the caller? Tracked in this wrapper rather
+    // than inferred from the response, because a provider can (and
+    // ClaudeBrain does) throw *after* streaming part of a reply, and that
+    // case must stay un-retried.
+    let emittedDelta = false;
+    const trackDelta = (text: string) => {
+      emittedDelta = true;
+      onTextDelta(text);
+    };
+
+    const streamFallback = async (reason: "call-failed" | "circuit-open", errorIfUnusable: unknown) => {
+      const response = await this.routeToFallback(
+        provider,
+        request,
+        reason,
+        tried,
+        errorIfUnusable,
+        undefined,
+        decisionRef
+      );
+      if (response.text) trackDelta(response.text);
+      return response;
+    };
+
     if (this.effectiveCircuitState(provider) === "open") {
-      throw new Error(`Provider ${provider} is currently unavailable (circuit open)`);
+      decisionRef.value = "circuit-open";
+      // Same error as before this method could fall back — it is what
+      // `routeToFallback` rethrows when no usable fallback exists, so a
+      // single-provider setup sees exactly the old behavior.
+      return streamFallback("circuit-open", new Error(`Provider ${provider} is currently unavailable (circuit open)`));
     }
 
     const brain = this.registry.get(provider)!;
@@ -319,9 +362,9 @@ export class AIRouter implements Brain {
     const start = performance.now();
     try {
       const response = brain.chatStream
-        ? await brain.chatStream(request, onTextDelta)
+        ? await brain.chatStream(request, trackDelta)
         : await brain.chat(request).then((full) => {
-            if (full.text) onTextDelta(full.text);
+            if (full.text) trackDelta(full.text);
             return full;
           });
       const latencyMs = performance.now() - start;
@@ -330,7 +373,9 @@ export class AIRouter implements Brain {
       return response;
     } catch (err) {
       this.recordOutcome(provider, false, performance.now() - start, wasHalfOpenTrial);
-      throw err;
+      if (emittedDelta) throw err;
+      decisionRef.value = "call-failed";
+      return streamFallback("call-failed", err);
     }
   }
 
