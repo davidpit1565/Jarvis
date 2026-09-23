@@ -228,6 +228,40 @@ describe("Pairing approval over HTTP", () => {
     expect(wrongDevice.allowed).toBe(false);
   });
 
+  test("re-approving a device that already holds a role (e.g. after a revoke) re-emits device.roleGranted", () => {
+    // A revoked device's role is never cleared in DeviceRegistry (see
+    // revokeDevice's own doc comment) — only its credential/connection are
+    // dropped. Re-approving the same device with a fresh pairing code must
+    // still re-derive its role-based standing tool grants (via
+    // device.roleGranted), not silently skip them just because
+    // maybeAssignRequestedRole sees a role is already set.
+    const eventBus = new EventBus();
+    const deviceRegistry = new DeviceRegistry();
+    const pairingService = new PairingService();
+    const deviceConnectionManager = new DeviceConnectionManager(eventBus);
+    const deviceId = "test-imac-reapprove";
+
+    deviceRegistry.registerDevice({
+      id: deviceId,
+      name: "Test iMac",
+      type: "mac",
+      platform: "macos",
+      agentVersion: "0.1.0",
+      protocolVersion: "1",
+    });
+    deviceRegistry.setRole(deviceId, "primary");
+
+    const roleGrantedEvents: { deviceId: string; role: string }[] = [];
+    eventBus.on("device.roleGranted", (event) => roleGrantedEvents.push(event));
+
+    const server = new JarvisWebSocketServer({ deviceRegistry, deviceConnectionManager, pairingService, eventBus });
+    const pairing = pairingService.requestPairing(deviceId);
+
+    server.approveDevice(deviceId, pairing.code);
+
+    expect(roleGrantedEvents).toEqual([{ deviceId, role: "primary" }]);
+  });
+
   test("approving a second device that requested primary does not steal the role, and approval still succeeds", async () => {
     const { handle, port, deviceRegistry } = setupServer();
     activeHandle = handle;
