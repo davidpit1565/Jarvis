@@ -84,14 +84,26 @@ describe("WakeUpCallStore", () => {
     store.close();
   });
 
-  test("update preserves lastTriggeredDate", () => {
+  test("update preserves lastTriggeredDate when timeOfDay is unchanged", () => {
     const store = new WakeUpCallStore(":memory:");
     const record = store.create({ timeOfDay: "07:00" });
     store.markTriggered(record.id, "2026-01-15");
 
-    const updated = store.update(record.id, { timeOfDay: "08:00" });
-    expect(updated?.timeOfDay).toBe("08:00");
+    const updated = store.update(record.id, { label: "later" });
+    expect(updated?.timeOfDay).toBe("07:00");
     expect(store.list()[0]?.lastTriggeredDate).toBe("2026-01-15");
+    store.close();
+  });
+
+  test("update resets lastTriggeredDate when timeOfDay actually changes, so a same-day reschedule can still fire today", () => {
+    const store = new WakeUpCallStore(":memory:");
+    const record = store.create({ timeOfDay: "07:00" });
+    store.markTriggered(record.id, "2026-01-15");
+
+    const updated = store.update(record.id, { timeOfDay: "20:00" });
+    expect(updated?.timeOfDay).toBe("20:00");
+    expect(updated?.lastTriggeredDate).toBeNull();
+    expect(store.list()[0]?.lastTriggeredDate).toBeNull();
     store.close();
   });
 

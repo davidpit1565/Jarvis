@@ -110,11 +110,15 @@ export class AutomationRuleStore {
     const timeOfDay = changes.timeOfDay ?? existing.timeOfDay;
     const instruction = changes.instruction ?? existing.instruction;
     const enabled = changes.enabled !== undefined ? changes.enabled : existing.enabled;
+    // Changing the actual scheduled time means today's earlier firing (if
+    // any) was under the OLD time — it says nothing about whether the rule
+    // has run at the new time yet, so it must be allowed to fire today too.
+    const lastTriggeredDate = timeOfDay === existing.timeOfDay ? existing.lastTriggeredDate : null;
 
     this.db
-      .query(`UPDATE automation_rules SET time_of_day = ?, instruction = ?, enabled = ? WHERE id = ?`)
-      .run(timeOfDay, instruction, enabled ? 1 : 0, id);
-    return { ...existing, timeOfDay, instruction, enabled };
+      .query(`UPDATE automation_rules SET time_of_day = ?, instruction = ?, enabled = ?, last_triggered_date = ? WHERE id = ?`)
+      .run(timeOfDay, instruction, enabled ? 1 : 0, lastTriggeredDate, id);
+    return { ...existing, timeOfDay, instruction, enabled, lastTriggeredDate };
   }
 
   delete(id: string): boolean {

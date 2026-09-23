@@ -101,11 +101,15 @@ export class WakeUpCallStore {
     const timeOfDay = changes.timeOfDay ?? existing.timeOfDay;
     const label = changes.label !== undefined ? changes.label : existing.label;
     const enabled = changes.enabled !== undefined ? changes.enabled : existing.enabled;
+    // Changing the actual scheduled time means today's earlier firing (if
+    // any) was under the OLD time — it says nothing about whether the call
+    // has gone out at the new time yet, so it must be allowed to fire today too.
+    const lastTriggeredDate = timeOfDay === existing.timeOfDay ? existing.lastTriggeredDate : null;
 
     this.db
-      .query(`UPDATE wakeup_calls SET time_of_day = ?, label = ?, enabled = ? WHERE id = ?`)
-      .run(timeOfDay, label, enabled ? 1 : 0, id);
-    return { ...existing, timeOfDay, label, enabled };
+      .query(`UPDATE wakeup_calls SET time_of_day = ?, label = ?, enabled = ?, last_triggered_date = ? WHERE id = ?`)
+      .run(timeOfDay, label, enabled ? 1 : 0, lastTriggeredDate, id);
+    return { ...existing, timeOfDay, label, enabled, lastTriggeredDate };
   }
 
   /** Records that this call actually went out today, so the scheduler doesn't fire it again until tomorrow. */

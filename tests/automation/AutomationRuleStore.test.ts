@@ -81,14 +81,36 @@ describe("AutomationRuleStore", () => {
     store.close();
   });
 
-  test("update preserves lastTriggeredDate", () => {
+  test("update preserves lastTriggeredDate when timeOfDay is unchanged", () => {
     const store = new AutomationRuleStore(":memory:");
     const record = store.create({ timeOfDay: "08:00", instruction: "check the weather" });
     store.markTriggered(record.id, "2026-01-15");
 
-    const updated = store.update(record.id, { timeOfDay: "09:00" });
-    expect(updated?.timeOfDay).toBe("09:00");
+    const updated = store.update(record.id, { instruction: "check the news" });
+    expect(updated?.timeOfDay).toBe("08:00");
     expect(store.list()[0]?.lastTriggeredDate).toBe("2026-01-15");
+    store.close();
+  });
+
+  test("update resets lastTriggeredDate when timeOfDay actually changes, so a same-day reschedule can still fire today", () => {
+    const store = new AutomationRuleStore(":memory:");
+    const record = store.create({ timeOfDay: "08:00", instruction: "check the weather" });
+    store.markTriggered(record.id, "2026-01-15");
+
+    const updated = store.update(record.id, { timeOfDay: "18:00" });
+    expect(updated?.timeOfDay).toBe("18:00");
+    expect(updated?.lastTriggeredDate).toBeNull();
+    expect(store.list()[0]?.lastTriggeredDate).toBeNull();
+    store.close();
+  });
+
+  test("update setting timeOfDay to its own current value does not reset lastTriggeredDate", () => {
+    const store = new AutomationRuleStore(":memory:");
+    const record = store.create({ timeOfDay: "08:00", instruction: "check the weather" });
+    store.markTriggered(record.id, "2026-01-15");
+
+    const updated = store.update(record.id, { timeOfDay: "08:00", instruction: "check the news" });
+    expect(updated?.lastTriggeredDate).toBe("2026-01-15");
     store.close();
   });
 
