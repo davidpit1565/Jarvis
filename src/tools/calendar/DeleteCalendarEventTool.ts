@@ -63,6 +63,7 @@ export function createDeleteCalendarEventTool(
             start: eventBeforeDelete.start,
             end: eventBeforeDelete.end,
             location: eventBeforeDelete.location,
+            account: eventBeforeDelete.account,
           });
         }
         return { success: true, data: { eventId: input.eventId } };

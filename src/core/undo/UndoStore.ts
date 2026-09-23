@@ -13,6 +13,16 @@ export interface UndoableCalendarEventDeletion {
   start: string;
   end: string;
   location: string | null;
+  /**
+   * Which linked Google account (its email) the deleted event belonged
+   * to. Undoing this recreates the event via createEvent(), which has no
+   * event id to resolve the account from (unlike undoing a create/update,
+   * which can look the still-valid id up across every linked account) —
+   * without this, a multi-account setup would recreate the event on
+   * whichever account happens to be primary, silently landing it on the
+   * wrong calendar.
+   */
+  account: string;
 }
 
 export interface UndoableCalendarEventUpdate {
