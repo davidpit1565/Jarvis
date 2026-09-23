@@ -22,7 +22,7 @@ import type { SpotifyClient } from "@/spotify/SpotifyClient";
 import type { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
 import type { PermissionService } from "@/permissions/PermissionService";
 import type { Orchestrator } from "@/core/orchestrator/Orchestrator";
-import { DeviceConnectionManager } from "./DeviceConnectionManager";
+import { DeviceConnectionManager, type DeviceConnection } from "./DeviceConnectionManager";
 import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGateway";
 import type { TwilioSmsGateway } from "@/communication/phone/TwilioSmsGateway";
 import type { TelegramGateway } from "@/communication/telegram/TelegramGateway";
@@ -54,7 +54,13 @@ import {
 } from "./protocol";
 
 type SocketData =
-  | { kind: "device"; deviceId: string | null; ip: string | null }
+  // `connection` is the exact DeviceConnection object registered with
+  // DeviceConnectionManager for this specific socket — carried so the
+  // close handler can tell DeviceConnectionManager "remove this only if
+  // it's still the one you have registered", not just "remove whatever's
+  // registered for this deviceId" (see DeviceConnectionManager.removeConnection's
+  // doc comment for why that distinction matters on a stale reconnect race).
+  | { kind: "device"; deviceId: string | null; ip: string | null; connection?: DeviceConnection }
   // Read-only spectator on /observer (e.g. the hologram UI) — never part
   // of the device protocol, just mirrored every EventBus event.
   | { kind: "observer" }
@@ -544,8 +550,20 @@ export class JarvisWebSocketServer {
             const deviceId = socket.data.deviceId;
             if (deviceId) {
               this.pendingConnections.delete(deviceId);
-              this.deps.deviceConnectionManager.handleDisconnect(deviceId, "socket_closed");
-              this.deps.deviceRegistry.updateStatus(deviceId, "offline");
+              // Passing this exact socket's own registered connection as
+              // `expectedConnection` means a stale socket's delayed close
+              // (network handoff/sleep — the device already reconnected
+              // on a new socket before this one's TCP teardown fired)
+              // can't tear down the newer, genuinely live connection —
+              // see DeviceConnectionManager.removeConnection's doc comment.
+              // Only marked offline when the disconnect actually applied —
+              // otherwise this stale close would wrongly flag a device
+              // that's still genuinely connected (on the newer socket) as
+              // offline.
+              const disconnected = this.deps.deviceConnectionManager.handleDisconnect(deviceId, "socket_closed", socket.data.connection);
+              if (disconnected) {
+                this.deps.deviceRegistry.updateStatus(deviceId, "offline");
+              }
             }
           } else if (socket.data.kind === "audio-viewer") {
             this.deps.audioLevelBroadcaster?.removeViewer(socket);
@@ -1185,7 +1203,9 @@ export class JarvisWebSocketServer {
 
     this.pendingConnections.delete(deviceId);
     ws.data.deviceId = deviceId;
-    deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data), close: () => ws.close() });
+    const connection: DeviceConnection = { send: (data) => ws.send(data), close: () => ws.close() };
+    ws.data.connection = connection;
+    deviceConnectionManager.registerConnection(deviceId, connection);
     deviceRegistry.updateStatus(deviceId, "online");
     this.maybeAssignRequestedRole(deviceId);
     this.send(ws, deviceId, "device.command", { command: "pairing.approved" });
@@ -1221,7 +1241,9 @@ export class JarvisWebSocketServer {
     if (ws) {
       this.pendingConnections.delete(deviceId);
       ws.data.deviceId = deviceId;
-      deviceConnectionManager.registerConnection(deviceId, { send: (data) => ws.send(data), close: () => ws.close() });
+      const connection: DeviceConnection = { send: (data) => ws.send(data), close: () => ws.close() };
+      ws.data.connection = connection;
+      deviceConnectionManager.registerConnection(deviceId, connection);
       deviceRegistry.updateStatus(deviceId, "online");
       this.send(ws, deviceId, "device.command", {
         command: "pairing.approved",

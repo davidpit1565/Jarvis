@@ -39,14 +39,29 @@ export class DeviceConnectionManager {
     this.eventBus.emit("device.connected", { deviceId });
   }
 
-  removeConnection(deviceId: string, reason: string = "disconnected"): void {
+  /**
+   * `expectedConnection`, when given, makes this a no-op unless it's
+   * still the currently-registered connection for `deviceId` — without
+   * it, a stale socket's delayed `close` event (network handoff/sleep:
+   * the old socket's TCP teardown fires well after the device already
+   * reconnected on a brand-new socket and re-registered) would tear down
+   * the NEWER, genuinely live connection instead of the one that
+   * actually closed, since both are keyed by the same deviceId string
+   * with nothing distinguishing which socket is which. Omitted entirely
+   * for an unconditional removal (e.g. revoking a device's credential —
+   * that must win regardless of which socket is currently registered).
+   */
+  /** Returns whether the connection was actually removed — false when `expectedConnection` no longer matches (see above), so the caller (e.g. deviceRegistry's online/offline status) doesn't act on a no-op. */
+  removeConnection(deviceId: string, reason: string = "disconnected", expectedConnection?: DeviceConnection): boolean {
     const connection = this.connections.get(deviceId);
+    if (expectedConnection !== undefined && connection !== expectedConnection) return false;
     const had = this.connections.delete(deviceId);
     this.rejectAllPendingForDevice(deviceId, new Error(`Device disconnected: ${deviceId}`));
     if (had) {
       connection?.close?.();
       this.eventBus.emit("device.disconnected", { deviceId, reason });
     }
+    return had;
   }
 
   hasConnection(deviceId: string): boolean {
@@ -154,8 +169,8 @@ export class DeviceConnectionManager {
     });
   }
 
-  handleDisconnect(deviceId: string, reason: string = "disconnected"): void {
-    this.removeConnection(deviceId, reason);
+  handleDisconnect(deviceId: string, reason: string = "disconnected", expectedConnection?: DeviceConnection): boolean {
+    return this.removeConnection(deviceId, reason, expectedConnection);
   }
 
   private rejectAllPendingForDevice(deviceId: string, error: Error): void {
