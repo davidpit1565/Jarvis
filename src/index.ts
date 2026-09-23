@@ -840,7 +840,26 @@ function main() {
 
   // Rides the same Twilio number/credentials the phone gateway already
   // requires — no new account, number, or secret needed to turn this on.
-  const smsGateway = config.twilioAuthToken && config.twilioPublicBaseUrl ? new TwilioSmsGateway(createSmsSession) : undefined;
+  // Also rides the phone gateway's own fail-closed allowlist gate
+  // (phoneGatewayAllowlistOk, above): handleSmsWebhook enforces
+  // twilioAllowedCallers exactly like the phone gateway does, but only
+  // when one is actually configured — without gating construction on
+  // phoneGatewayAllowlistOk too, an operator who sets the Twilio
+  // credentials but forgets TWILIO_ALLOWED_CALLERS (and never opts into
+  // TWILIO_ALLOW_OPEN_ACCESS) would have the phone gateway correctly
+  // refuse to start while the SMS gateway silently accepted texts from
+  // any phone number.
+  if (config.twilioAuthToken && config.twilioPublicBaseUrl && !phoneGatewayAllowlistOk) {
+    console.error(
+      "[jarvis] SMS gateway NOT started: TWILIO_AUTH_TOKEN/TWILIO_PUBLIC_BASE_URL are set but " +
+        "TWILIO_ALLOWED_CALLERS is empty. Set TWILIO_ALLOWED_CALLERS to the E.164 numbers that may text in, " +
+        "or set TWILIO_ALLOW_OPEN_ACCESS=true to intentionally accept texts from anyone."
+    );
+  }
+  const smsGateway =
+    config.twilioAuthToken && config.twilioPublicBaseUrl && phoneGatewayAllowlistOk
+      ? new TwilioSmsGateway(createSmsSession)
+      : undefined;
 
   // A Telegram chat gets its own conversation thread, like a phone call,
   // but kept for the life of the process rather than one call's duration —
@@ -1712,10 +1731,11 @@ function main() {
   // an empty allowlist with no opt-in never gets this far (see
   // phoneGatewayAllowlistOk above), so this is a reminder of a choice
   // already made, not a warning about an accidental gap.
-  if (phoneGateway && (!config.twilioAllowedCallers || config.twilioAllowedCallers.length === 0)) {
+  if ((phoneGateway || smsGateway) && (!config.twilioAllowedCallers || config.twilioAllowedCallers.length === 0)) {
+    const channels = [phoneGateway && "calls", smsGateway && "texts"].filter(Boolean).join(" and ");
     console.warn(
-      "[jarvis] WARNING: phone gateway is running open (TWILIO_ALLOW_OPEN_ACCESS=true, no " +
-        "TWILIO_ALLOWED_CALLERS) — anyone who calls the configured number reaches full JARVIS, " +
+      `[jarvis] WARNING: phone/SMS gateway is running open (TWILIO_ALLOW_OPEN_ACCESS=true, no ` +
+        `TWILIO_ALLOWED_CALLERS) — anyone who ${channels} the configured number reaches full JARVIS, ` +
         "including tools like SAVE_MEMORY and SEND_EMAIL."
     );
   }
