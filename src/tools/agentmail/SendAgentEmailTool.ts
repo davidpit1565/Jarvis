@@ -70,7 +70,15 @@ export function createSendAgentEmailTool(
         return { success: false, error: "body must be a non-empty string" };
       }
 
-      if (!sendGuard.tryConsume(todayDateKey())) {
+      // Captured once and reused for both tryConsume/release below — the
+      // sendMessage() call below awaits a real network round trip, and
+      // re-invoking todayDateKey() separately at each point could land on
+      // a different day if local midnight ticks over while that call is
+      // in flight, silently consuming one day's slot but refunding a
+      // different (untouched) day's counter instead.
+      const dayKey = todayDateKey();
+
+      if (!sendGuard.tryConsume(dayKey)) {
         return {
           success: false,
           error: "Daily send limit for JARVIS's AgentMail inbox has been reached — try again tomorrow.",
@@ -84,7 +92,7 @@ export function createSendAgentEmailTool(
         // The consumed slot was for a send that never actually happened —
         // refund it so a transient AgentMail failure doesn't burn real
         // quota and falsely trip the daily cap for the rest of the day.
-        sendGuard.release(todayDateKey());
+        sendGuard.release(dayKey);
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
     },
