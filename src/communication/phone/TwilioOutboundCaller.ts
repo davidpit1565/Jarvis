@@ -1,3 +1,5 @@
+import { apiError } from "@/core/net/apiError";
+
 const TWILIO_API_BASE_URL = "https://api.twilio.com/2010-04-01";
 
 /**
@@ -44,11 +46,7 @@ export class TwilioOutboundCaller {
     });
 
     if (!response.ok) {
-      // Twilio's error body can be genuinely useful for debugging a bad
-      // number/config, but never includes the auth token itself — safe to
-      // surface as-is.
-      const detail = await response.text().catch(() => "");
-      throw new Error(`Twilio outbound call failed (${response.status}): ${detail}`);
+      throw await apiError("Twilio outbound call failed", response);
     }
 
     const data = (await response.json()) as { sid: string };

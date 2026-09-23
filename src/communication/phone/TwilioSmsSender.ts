@@ -1,3 +1,5 @@
+import { apiError } from "@/core/net/apiError";
+
 const TWILIO_API_BASE_URL = "https://api.twilio.com/2010-04-01";
 
 /**
@@ -29,10 +31,7 @@ export class TwilioSmsSender {
     });
 
     if (!response.ok) {
-      // Same reasoning as TwilioOutboundCaller: Twilio's error body is
-      // useful for debugging and never includes the auth token itself.
-      const detail = await response.text().catch(() => "");
-      throw new Error(`Twilio SMS send failed (${response.status}): ${detail}`);
+      throw await apiError("Twilio SMS send failed", response);
     }
 
     const data = (await response.json()) as { sid: string };
