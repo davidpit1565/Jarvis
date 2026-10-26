@@ -133,6 +133,14 @@ export interface AIRouterOptions {
   circuitBreakerThreshold?: number;
   /** How long (ms) a provider's circuit stays open before a single half-open trial call is allowed through. Defaults to 60_000. */
   circuitBreakerCooldownMs?: number;
+  /**
+   * Explicit priority order for free-tier providers, highest priority
+   * first — see `DEFAULT_FREE_PROVIDER_PRIORITY`'s doc comment for the
+   * rationale. Defaults to that constant; override only to change the
+   * ordering without a code change (see `FREE_PROVIDER_PRIORITY` in
+   * `JarvisConfig`).
+   */
+  freeProviderPriority?: ProviderName[];
   eventBus?: EventBus;
 }
 
@@ -142,6 +150,47 @@ const DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 /** Default fraction of a configured daily/monthly cap at which budget-constrained degradation starts biasing toward free providers. See `AIRouterOptions.softBudgetCapRatio`. */
 const DEFAULT_SOFT_BUDGET_CAP_RATIO = 0.8;
+
+/**
+ * Explicit priority order for free-tier providers — which one AIRouter
+ * picks when *more than one* free provider is configured and must choose
+ * among them (the free-first primary pick, a ZERO_COST_MODE/budget-cap
+ * swap target, a soft-budget-cap swap target). Without this, picking
+ * "the" free provider meant `AIProviderRegistry.findByCostTier("free")[0]`
+ * — whichever free provider happened to be registered first in
+ * src/index.ts — which is an accident of file layout (Groq was simply the
+ * first free provider JARVIS ever supported), not a quality judgment, and
+ * silently picked Groq over a configured Gemini/OpenRouter every time.
+ *
+ * Rationale for this specific order (project owner's explicit preference,
+ * 2026-10-26):
+ * - "gemini" first — generally the strongest free-tier model quality-wise
+ *   of the options here, and the owner's explicitly preferred free
+ *   provider.
+ * - "openrouter" and "cloudflare-workers-ai" next — solid, more neutral
+ *   free-tier options with no particular owner objection, in that order
+ *   mainly because OpenRouter already had the longer track record in this
+ *   codebase.
+ * - "groq" last — kept only as a last-resort fallback. The owner has
+ *   explicitly said he does not rate Groq's output quality highly, so it
+ *   should never be chosen over another configured free provider, only
+ *   used when nothing else free is available (including when it's the
+ *   only free provider configured at all, which still works exactly as
+ *   before).
+ *
+ * "ollama" is deliberately left out of this list: it's a user-run local
+ * model server whose actual quality depends entirely on what the user has
+ * pulled, so it has no fixed place in a quality-based ranking. It is
+ * never dropped from consideration, though — see
+ * `AIProviderRegistry.findByCostTierPrioritized`'s doc comment: any
+ * configured provider not named here is simply appended after the named
+ * ones, in registration order.
+ *
+ * Overridable via `FREE_PROVIDER_PRIORITY` (comma-separated provider
+ * names, highest priority first — see `JarvisConfig.aiFreeProviderPriority`)
+ * without a code change; this constant is only the default.
+ */
+const DEFAULT_FREE_PROVIDER_PRIORITY: ProviderName[] = ["gemini", "openrouter", "cloudflare-workers-ai", "groq"];
 
 /** Coarse, ordered ranking of `ModelCatalogEntry.capabilities.quality` — used only to pick a "stronger" model for escalation, never for routine routing. */
 const QUALITY_RANK: Record<ModelCapabilities["quality"], number> = { basic: 0, good: 1, excellent: 2 };
@@ -272,6 +321,7 @@ export class AIRouter implements Brain {
   private readonly freeFirst: boolean;
   private readonly circuitBreakerThreshold: number;
   private readonly circuitBreakerCooldownMs: number;
+  private readonly freeProviderPriority: ProviderName[];
   private readonly runtime = new Map<ProviderName, ProviderRuntime>();
 
   constructor(
@@ -287,6 +337,12 @@ export class AIRouter implements Brain {
     this.freeFirst = options.freeFirst ?? false;
     this.circuitBreakerThreshold = options.circuitBreakerThreshold ?? DEFAULT_CIRCUIT_BREAKER_THRESHOLD;
     this.circuitBreakerCooldownMs = options.circuitBreakerCooldownMs ?? DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS;
+    this.freeProviderPriority = options.freeProviderPriority ?? DEFAULT_FREE_PROVIDER_PRIORITY;
+  }
+
+  /** Configured free-tier providers, ordered by `freeProviderPriority` rather than plain registration order. See `DEFAULT_FREE_PROVIDER_PRIORITY`'s doc comment. */
+  private freeProviders(): ProviderName[] {
+    return this.registry.findByCostTierPrioritized("free", this.freeProviderPriority);
   }
 
   async chat(request: BrainRequest): Promise<BrainResponse> {
@@ -576,14 +632,17 @@ export class AIRouter implements Brain {
         );
       }
       if (this.freeFirst) {
-        const freeVisionCapable = visionCapable.find((name) => this.registry.getMeta(name)?.costTier === "free");
+        // Prefer vision-capable free providers in the same priority order
+        // as every other free-provider pick (see `freeProviders()`), not
+        // just whichever happens to come first in `visionCapable`.
+        const freeVisionCapable = this.freeProviders().find((name) => visionCapable.includes(name));
         if (freeVisionCapable) return { provider: freeVisionCapable, reason: "vision-required" };
       }
       return { provider: visionCapable[0]!, reason: "vision-required" };
     }
 
     if (this.freeFirst) {
-      const free = this.registry.findByCostTier("free")[0];
+      const free = this.freeProviders()[0];
       if (free) return { provider: free, reason: "primary-free-first" };
     }
 
@@ -659,14 +718,14 @@ export class AIRouter implements Brain {
     if (!meta || meta.costTier !== "paid") return candidate;
 
     if (this.options.zeroCostMode) {
-      const free = this.registry.findByCostTier("free").find((name) => !alreadyTried.has(name));
+      const free = this.freeProviders().find((name) => !alreadyTried.has(name));
       if (free) {
         this.options.eventBus?.emit("ai.providerFallback", { from: candidate, to: free, reason: "zero-cost-mode" });
         if (decisionRef) decisionRef.value = "zero-cost-mode";
         return free;
       }
 
-      const noneConfiguredAtAll = this.registry.findByCostTier("free").length === 0;
+      const noneConfiguredAtAll = this.freeProviders().length === 0;
       throw new ZeroCostModeError(
         noneConfiguredAtAll
           ? `ZERO_COST_MODE is enabled and no free-tier provider is configured at all — refusing to call the paid "${candidate}" provider. Chat capability is unavailable until a free-tier provider (e.g. GROQ_API_KEY) is configured or ZERO_COST_MODE is disabled.`
@@ -681,7 +740,7 @@ export class AIRouter implements Brain {
     if (this.options.maxCostPerRunUsd !== undefined && request.runId) {
       const runSpend = this.costTracker.getRunSpend(request.runId);
       if (runSpend >= this.options.maxCostPerRunUsd) {
-        const free = this.registry.findByCostTier("free").find((name) => !alreadyTried.has(name));
+        const free = this.freeProviders().find((name) => !alreadyTried.has(name));
         if (free) {
           this.options.eventBus?.emit("ai.providerFallback", { from: candidate, to: free, reason: "run-budget-exceeded" });
           if (decisionRef) decisionRef.value = "run-budget-exceeded";
@@ -716,7 +775,7 @@ export class AIRouter implements Brain {
       return candidate;
     }
 
-    const free = this.registry.findByCostTier("free").find((name) => !alreadyTried.has(name));
+    const free = this.freeProviders().find((name) => !alreadyTried.has(name));
     if (free) {
       this.options.eventBus?.emit("ai.providerFallback", { from: candidate, to: free, reason: "budget-exceeded" });
       if (decisionRef) decisionRef.value = "budget-exceeded";
@@ -747,7 +806,7 @@ export class AIRouter implements Brain {
       this.costTracker.getMonthSpend() >= this.options.maxMonthlyCostUsd * ratio;
     if (!dailyClose && !monthlyClose) return undefined;
 
-    return this.registry.findByCostTier("free").find((name) => !alreadyTried.has(name));
+    return this.freeProviders().find((name) => !alreadyTried.has(name));
   }
 
   private recordCost(

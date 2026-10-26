@@ -187,6 +187,42 @@ export class TelegramGateway {
     }
   }
 
+  /**
+   * Uploads a photo to the chat from raw bytes already in hand (e.g. a
+   * GENERATE_IMAGE call against CloudflareImageClient, which — unlike
+   * Pollinations.ai — returns inline base64 image bytes rather than a
+   * fetchable URL) — sent as an actual inline photo, the same visual
+   * result as `sendPhoto`, just uploaded directly instead of fetched by
+   * Telegram from a URL. Multipart/form-data, mirroring `sendDocument`,
+   * with the upload field named "photo" (Telegram's own distinction
+   * between the two endpoints: "photo" renders inline and gets
+   * recompressed by Telegram, "document" is stored as-is).
+   */
+  async sendPhotoBytes(chatId: string, base64Content: string, caption?: string): Promise<void> {
+    const bytes = Buffer.from(base64Content, "base64");
+    if (bytes.length === 0) {
+      throw new Error("base64Content decoded to zero bytes");
+    }
+
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    if (caption) form.append("caption", caption.slice(0, 1024)); // Telegram's own caption length limit
+    form.append("photo", new Blob([bytes]), "image.jpg");
+
+    const response = await fetchWithRetry(
+      `${TELEGRAM_API_BASE_URL}${this.botToken}/sendPhoto`,
+      {
+        method: "POST",
+        body: form,
+      },
+      SEND_RETRY_OPTIONS
+    );
+
+    if (!response.ok) {
+      throw await apiError("Telegram sendPhoto failed", response);
+    }
+  }
+
   // 50MB is Telegram's own bot-API document upload limit — this check is
   // defense in depth, not the real cap: ShareFileToPhoneTool's own
   // caller-provided base64Content is realistically already bounded by

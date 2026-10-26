@@ -148,6 +148,16 @@ export interface JarvisConfig {
    * which one.
    */
   aiFallbackProvider?: "anthropic" | "groq";
+  /**
+   * Optional override for `AIRouter`'s `DEFAULT_FREE_PROVIDER_PRIORITY`
+   * (the order free-tier providers are preferred in when more than one is
+   * configured — gemini, then openrouter/cloudflare-workers-ai, then groq
+   * last, by default). Set `FREE_PROVIDER_PRIORITY` to a comma-separated
+   * list of provider names, highest priority first, e.g.
+   * "gemini,groq,openrouter", to change the order without a code change.
+   * Unset means AIRouter uses its own built-in default.
+   */
+  aiFreeProviderPriority?: Array<"anthropic" | "groq" | "openrouter" | "ollama" | "cloudflare-workers-ai" | "gemini">;
   /** Optional daily USD cap on paid-provider spend (estimated); unset means unlimited. See CostTracker. */
   maxDailyCostUsd?: number;
   /** Optional monthly USD cap on paid-provider spend (estimated); unset means unlimited. See CostTracker. */
@@ -612,6 +622,20 @@ export function loadConfig(): JarvisConfig {
   }
   const aiFallbackProvider = aiFallbackProviderRaw as "anthropic" | "groq" | undefined;
 
+  const validProviderNames = new Set(["anthropic", "groq", "openrouter", "ollama", "cloudflare-workers-ai", "gemini"]);
+  const freeProviderPriorityRaw = process.env.FREE_PROVIDER_PRIORITY?.split(",")
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0);
+  if (freeProviderPriorityRaw) {
+    const invalid = freeProviderPriorityRaw.filter((n) => !validProviderNames.has(n));
+    if (invalid.length > 0) {
+      throw new ConfigError(
+        `Invalid FREE_PROVIDER_PRIORITY: unknown provider name(s) "${invalid.join(", ")}" — must be a comma-separated list using only: ${[...validProviderNames].join(", ")}`
+      );
+    }
+  }
+  const aiFreeProviderPriority = freeProviderPriorityRaw as JarvisConfig["aiFreeProviderPriority"];
+
   const maxDailyCostUsdRaw = process.env.MAX_DAILY_COST_USD?.trim();
   const maxDailyCostUsd = maxDailyCostUsdRaw ? Number(maxDailyCostUsdRaw) : undefined;
   if (maxDailyCostUsdRaw && (Number.isNaN(maxDailyCostUsd) || maxDailyCostUsd! <= 0)) {
@@ -974,6 +998,7 @@ export function loadConfig(): JarvisConfig {
     promptCachingEnabled,
     aiFreeFirst,
     aiFallbackProvider,
+    aiFreeProviderPriority,
     maxDailyCostUsd,
     maxMonthlyCostUsd,
     maxCostPerRunUsd,

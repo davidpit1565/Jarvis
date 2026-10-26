@@ -66,6 +66,7 @@ const ENV_KEYS = [
   "JARVIS_COST_ALERT_THRESHOLD_USD",
   "AI_FREE_FIRST",
   "AI_FALLBACK_PROVIDER",
+  "FREE_PROVIDER_PRIORITY",
   "MAX_DAILY_COST_USD",
   "MAX_MONTHLY_COST_USD",
   "ZERO_COST_MODE",
@@ -899,6 +900,22 @@ describe("loadConfig", () => {
 
   test("rejects an invalid AI_FALLBACK_PROVIDER", () => {
     process.env.AI_FALLBACK_PROVIDER = "gpt5";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("leaves aiFreeProviderPriority undefined by default", () => {
+    const config = loadConfig();
+    expect(config.aiFreeProviderPriority).toBeUndefined();
+  });
+
+  test("reads a valid comma-separated FREE_PROVIDER_PRIORITY", () => {
+    process.env.FREE_PROVIDER_PRIORITY = "gemini, groq ,openrouter";
+    const config = loadConfig();
+    expect(config.aiFreeProviderPriority).toEqual(["gemini", "groq", "openrouter"]);
+  });
+
+  test("rejects an unknown provider name in FREE_PROVIDER_PRIORITY", () => {
+    process.env.FREE_PROVIDER_PRIORITY = "gemini,chatgpt";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 

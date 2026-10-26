@@ -55,4 +55,32 @@ export class AIProviderRegistry {
       .filter((meta) => meta.costTier === tier)
       .map((meta) => meta.name);
   }
+
+  /**
+   * Same as `findByCostTier`, but ordered by `priority` (names earlier in
+   * `priority` sort first) instead of plain registration order. A
+   * configured provider that isn't named in `priority` is never dropped —
+   * it's appended after every named provider, in its original relative
+   * (registration) order, so an incomplete priority list can't make a
+   * provider unreachable.
+   *
+   * This exists as a separate method, not a change to `findByCostTier`
+   * itself, because `findByCostTier`'s "registration order" contract is
+   * relied on as-is elsewhere (e.g. its own existing tests, and any other
+   * plain-iteration caller) — ordering by an explicit priority is a real
+   * business decision (see `AIRouter`'s `FREE_PROVIDER_PRIORITY`), not the
+   * default a generic lookup should silently start applying.
+   */
+  findByCostTierPrioritized(tier: CostTier, priority: readonly ProviderName[]): ProviderName[] {
+    const rank = new Map(priority.map((name, index) => [name, index]));
+    // Array#sort is a stable sort in the JS engines Bun targets (ES2019+),
+    // so providers with equal rank (both unranked, or — impossible today,
+    // since `priority` has no duplicates — same named rank) keep their
+    // relative registration order rather than being shuffled.
+    return this.findByCostTier(tier).sort((a, b) => {
+      const rankA = rank.has(a) ? rank.get(a)! : Number.MAX_SAFE_INTEGER;
+      const rankB = rank.has(b) ? rank.get(b)! : Number.MAX_SAFE_INTEGER;
+      return rankA - rankB;
+    });
+  }
 }

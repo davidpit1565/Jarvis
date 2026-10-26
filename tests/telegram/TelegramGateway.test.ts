@@ -298,6 +298,68 @@ describe("TelegramGateway.sendDocument", () => {
   });
 });
 
+describe("TelegramGateway.sendPhotoBytes", () => {
+  test("uploads the decoded bytes as multipart form data under the 'photo' field", async () => {
+    let capturedUrl: string | undefined;
+    let capturedForm: FormData | undefined;
+    global.fetch = (async (url: unknown, init?: RequestInit) => {
+      capturedUrl = String(url);
+      capturedForm = init?.body as FormData;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await gateway.sendPhotoBytes("123", Buffer.from("fake jpeg bytes").toString("base64"), "a cute robot");
+
+    expect(capturedUrl).toBe("https://api.telegram.org/botbot-token/sendPhoto");
+    expect(capturedForm?.get("chat_id")).toBe("123");
+    expect(capturedForm?.get("caption")).toBe("a cute robot");
+    const uploaded = capturedForm?.get("photo") as unknown as Blob;
+    expect(await uploaded.text()).toBe("fake jpeg bytes");
+  });
+
+  test("omits the caption field when none is given", async () => {
+    let capturedForm: FormData | undefined;
+    global.fetch = (async (_url: unknown, init?: RequestInit) => {
+      capturedForm = init?.body as FormData;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await gateway.sendPhotoBytes("123", Buffer.from("bytes").toString("base64"));
+
+    expect(capturedForm?.has("caption")).toBe(false);
+  });
+
+  test("throws on empty base64Content", async () => {
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await expect(gateway.sendPhotoBytes("123", "")).rejects.toThrow("zero bytes");
+  });
+
+  test("propagates a non-ok response as a thrown error", async () => {
+    global.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await expect(gateway.sendPhotoBytes("123", "aGVsbG8=")).rejects.toThrow("500");
+  });
+});
+
 describe("TelegramGateway.sendPhoto", () => {
   test("POSTs the photo URL as JSON, not multipart", async () => {
     let capturedUrl: string | undefined;
