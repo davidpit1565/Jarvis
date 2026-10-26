@@ -85,13 +85,37 @@ sessions/compaction. None of this is built yet unless a specific PR/commit is no
     assistant projects on GitHub — not just abstract patterns (already done, see
     `JARVIS_COMPETITIVE_RESEARCH.md`) but literally reviewing specific repos' code and
     potentially reusing substantial pieces outright where it saves real rebuilding effort.
-    A first-pass web search (2026-10-26, no specific repos confirmed with him yet) turned
-    up candidates worth a closer look if he confirms interest: `RehanIlyas-dev/JARVIS`
-    (Python, wake-word, pluggable Gemini/OpenAI/local-Ollama backend), `llm-guy/jarvis`
-    (local Ollama + LangChain wake-word assistant), `Priler/jarvis` (Rust/Tauri, fully
-    offline STT/TTS/wake-word/NLU, MIT-licensed), `AFIN7/jarvis` (desktop assistant, no
-    paid APIs, MIT-licensed). None of these have been cloned/reviewed in depth yet — he
-    also mentioned seeing specific projects via Instagram videos pointing to GitHub, which
+    A star-ranked search (2026-10-26) surfaced real candidates by actual GitHub star count:
+    `GauravSingh9356/J.A.R.V.I.S` (1.1k★), `alexylem/jarvis` (841★), `danilofalcao/jarvis`
+    (625★), `Gladiator07/JARVIS` (600★), `isair/jarvis` (599★, offline voice),
+    `ethanplusai/jarvis` (520★, macOS voice-first). Two of these were reviewed in depth on
+    2026-10-26 (cloned and actually read, not just README-skimmed):
+    - **`danilofalcao/jarvis`** — a Flask+SocketIO local web IDE with a manual model
+      dropdown over 11 SDK clients (`app.py`). **Verdict: not worth adopting** — our own
+      `AIRouter.ts`/`AIProviderRegistry.ts` is already categorically more sophisticated
+      (cost-tier routing, vision-capability gating, circuit breaker, budget caps, fallback
+      with events, escalation) vs. this repo's zero retry/fallback/cost-tracking. MIT
+      licensed (reusable) but nothing here is actually better than what we have. Last
+      commit 2025-01-26, stale. One minor side-note: its `workspace_manager.py` does
+      simple query-relevant local file selection for prompt context — maybe worth a quick
+      look only if JARVIS ever builds its own code-assistant/RAG feature, unrelated to
+      voice/routing.
+    - **`ethanplusai/jarvis`** — FastAPI + Chrome Web-Speech-API voice-first macOS
+      assistant, brain = a persistent `claude -p` subprocess on the user's own Claude
+      subscription. **Verdict: don't adopt wholesale** (custom non-commercial license —
+      ideas/patterns only, not verbatim code reuse; Chrome-dependent always-listening is
+      less private/free than our own on-device `agents/imac/.../WakeWordListener.swift`;
+      depends on paid Fish Audio TTS with no fallback) **but its voice-scheduling design is
+      genuinely worth reimplementing as our own code**: (1) a real barge-in/interruption +
+      echo-rejection system (`speech.py`'s `SpeechScheduler` — token-overlap + stem-match
+      heuristics so JARVIS doesn't hear/react to its own voice, and so the user can
+      interrupt JARVIS mid-sentence) — this directly solves two real gaps in wishlist items
+      #3-5 (voice-first, always-on wake phrase) that nothing else built so far addresses;
+      (2) sentence-boundary streaming TTS (`SentenceSplitter`, ~120 lines) for lower
+      perceived latency, worth porting once JARVIS has any TTS pipeline. Very actively
+      maintained (last commit 2026-09-07, ~1,640 tests) and unusually well-documented/
+      defensive code — no real quality red flags found reading it.
+    He also mentioned seeing specific projects via Instagram videos pointing to GitHub, which
     isn't content Claude can browse directly; get the actual repo links from him directly
     when he has them, then use `add_repo` to attach the specific one(s) he wants reviewed.
 
