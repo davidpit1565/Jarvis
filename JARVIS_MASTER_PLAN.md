@@ -85,11 +85,72 @@ background "Hey JARVIS."
 
 ### Phase 5 — iPhone app, Siri/App Intents, Live Activities, Mac bridge, TestFlight pipeline (prompt 2 whole)
 Status: **ממתין**, lowest priority per prompt 4 §10 (explicitly after memory/execution/
-context). Includes the Apple Developer Program cost decision above. Needs its own research
-pass on current App Intents/Live Activities APIs before any Xcode work starts.
+context). **App Store Connect/TestFlight cost confirmed live against developer.apple.com
+(2026-10-26): Apple Developer Program is $99 USD/year, individual tier, and this is a
+hard, unavoidable requirement** for TestFlight distribution (free accounts get none),
+App Store Connect API access (key creation requires active paid membership), and any
+code-signing that isn't limited to David's own device via a free, weekly-expiring
+"Personal Team" profile (max 3 devices/3 apps, can't distribute, can't support unattended
+automation since profiles expire every 7 days). **No workaround exists for real TestFlight/
+App Store automation — this $99/year needs David's explicit go-ahead before Phase 5's
+TestFlight-upload work starts** (per his own rule: never incur a cost without asking).
+Confirmed the API itself, once membership exists, covers the full pipeline he wants: build
+upload, TestFlight tester/group management, and App Store review submission — not partial.
+Confirmed the real security point behind his own CONFIRM/DANGEROUS-tier instinct: the
+actual distribution signing certificate's private key must be present on whatever Mac runs
+the automation (`fastlane match` exists to encrypt/centralize this, but it's still a real,
+high-value secret on that machine, not a free pass around the concern).
+
+**iOS Siri/App Intents/Live Activities/wake-word research done and verified (2026-10-26,
+against developer.apple.com + confirmed-live Apple DTS/forum threads):**
+- **Background/locked-screen "Hey JARVIS" — confirmed NOT possible the way "Hey Siri"
+  works.** No OS hook exists for a third-party custom wake word. The only approximation
+  (background-audio mode + local wake-word inference) keeps the system's red/orange mic
+  indicator visibly on the whole time, risks App Store rejection under Guideline 2.5.4 if
+  the background mode isn't used for real audio playback, and even Apple's own developer
+  forums have an *unanswered* open question about whether this is compliant while locked.
+  **Realistic promise: tap-to-talk, or listen only while the app is open/foregrounded.**
+  Do not promise true invisible always-on background listening.
+- **Siri App Intents — confirmed structured-parameters only, not free-form dictation.**
+  A third-party app can expose up to 10 `AppShortcut` trigger phrases with typed
+  parameters; there is no documented mechanism for Siri to hand raw free-form speech to a
+  third-party app the way one might assume from "ask JARVIS anything." **Realistic
+  promise: fixed phrases triggering defined actions** ("Hey Siri, ask JARVIS to start my
+  morning routine"), not open-ended spoken questions relayed verbatim.
+- **Live Activities — confirmed real backend-driven progress tracking is possible.** A
+  server can push live updates (APNs `liveactivity` push type) to show real task progress
+  (e.g. "JARVIS is building your app, 60%") without the app open, auto-ending after ~8
+  hours. Apple does not publish a guaranteed update-frequency budget and has documented
+  real throttling incidents — plan minutes-granularity updates, not real-time ticking,
+  with no SLA on exact cadence.
+- **Action Button (iPhone 15 Pro+ only) — confirmed real, simple win.** Can be user-bound
+  to any JARVIS App Shortcut for one-press launch into listening mode — but only on
+  Action-Button-equipped phones; confirm which iPhone model David actually has before
+  promising this.
+- Two things flagged by the research as genuinely unresolved even to Apple's own forum
+  posters (not just "we didn't check"): locked-screen wake-word App Review compliance, and
+  whether any 2026-era mechanism allows true free-form Siri→app speech passthrough. Worth
+  an actual Apple DTS inquiry before spending engineering time chasing either.
 
 ### Phase 6 — Spotify integration (prompt 3 §7-§8)
-Status: **ממתין**, lowest priority alongside Phase 5 per prompt 4 §10.
+Status: **ממתין**, lowest priority alongside Phase 5 per prompt 4 §10. **Research done
+and verified live against developer.spotify.com (2026-10-26):**
+- Playback control (play/pause/skip/seek/transfer) confirmed Premium-only in Spotify's
+  own current docs (`PREMIUM_REQUIRED` 403 on Free). Search/metadata reads need no
+  Premium and no user auth scope at all.
+- **Can be built for $0 beyond whatever Spotify Premium David already personally pays
+  for** — app registration is free and instant, no approval needed. New apps start in
+  "Development Mode" (max 5 allowlisted users) — since only David will use this, that's
+  sufficient forever; no need to ever apply for Extended Quota Mode, which Spotify
+  restricted to registered businesses with 250k+ MAU as of May 2025 anyway (structurally
+  unreachable for personal use, good thing dev mode already covers this).
+- Scopes needed: `user-read-playback-state`, `user-read-currently-playing`,
+  `user-modify-playback-state` (plus none for search).
+- **Open unknown, needs live testing, not just docs**: whether "play it on my computer"
+  can wake a fully closed Spotify desktop app, or whether the target device must already
+  be open/signed-in to appear in `/me/player/devices` at all. Docs don't say either way;
+  community reports (unverified) suggest the app must already be running. Plan a graceful
+  fallback message ("open Spotify on your Mac first") rather than assuming it always works.
 
 ### Phase 7 — Controlled self-improvement loop (prompt 1 §6)
 Status: **ממתין**, explicitly gated: never let the system change its own code,
