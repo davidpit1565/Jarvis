@@ -9,6 +9,7 @@ import { GroqBrain } from "@/core/brain/GroqBrain";
 import { OpenRouterBrain, OpenRouterPaidModelError } from "@/core/brain/OpenRouterBrain";
 import { OllamaBrain } from "@/core/brain/OllamaBrain";
 import { CloudflareWorkersAIBrain } from "@/core/brain/CloudflareWorkersAIBrain";
+import { GeminiBrain } from "@/core/brain/GeminiBrain";
 import { AIProviderRegistry } from "@/core/brain/AIProviderRegistry";
 import { AIRouter } from "@/core/brain/AIRouter";
 import { CostTracker } from "@/core/cost/CostTracker";
@@ -571,6 +572,17 @@ function main() {
       }),
       "free"
     );
+  }
+  // Gemini is a sixth, independent free-tier provider: a real Google AI
+  // Studio account, gated by the API key's own free-tier rate limits (not
+  // a per-model price tag the way OpenRouter's catalog is), so only the
+  // key is required — GEMINI_API_KEY unset means it's simply unavailable,
+  // exactly like every other optional provider here. Always registered as
+  // "free": see GeminiBrain's own doc comment for why there's no
+  // analogous ":free"-suffix-style check needed the way OpenRouterBrain
+  // has one.
+  if (config.geminiApiKey) {
+    aiRegistry.register("gemini", new GeminiBrain(config.geminiApiKey, { model: config.geminiModel }), "free");
   }
   if (config.anthropicApiKey) {
     aiRegistry.register(

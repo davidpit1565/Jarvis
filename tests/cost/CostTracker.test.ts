@@ -33,6 +33,13 @@ describe("estimateCostUsd", () => {
     ).toBe(0);
   });
 
+  test("is always exactly $0 for gemini, regardless of usage — Google AI Studio's free tier is key-scoped, not model-scoped", () => {
+    expect(estimateCostUsd("gemini")).toBe(0);
+    expect(
+      estimateCostUsd("gemini", { inputTokens: 100_000, outputTokens: 50_000, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 })
+    ).toBe(0);
+  });
+
   test("estimates anthropic cost from usage using the documented approximate per-token rates", () => {
     const cost = estimateCostUsd("anthropic", {
       inputTokens: 1_000_000,

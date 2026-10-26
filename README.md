@@ -1995,9 +1995,19 @@ Routing policy, honestly stated:
   "zero behavior change for an existing deployment" guarantee: if you
   already have this set to one provider with no fallback configured,
   nothing about how JARVIS picks a provider changes.
-- **`AI_FREE_FIRST`** (default `true`) — when `JARVIS_BRAIN_PROVIDER` is
-  left unset and both providers are configured, AIRouter tries Groq
-  first.
+- **`AI_FREE_FIRST`** (default **`false`**) — when `JARVIS_BRAIN_PROVIDER`
+  is left unset and more than one provider is configured, AIRouter uses
+  Claude (or whichever paid provider is configured) as the primary, and
+  free providers (Groq/OpenRouter/Ollama/Cloudflare/Gemini) are a
+  cost-saving fallback, not the default. This was flipped from an earlier
+  `true` default after a real incident: a deployment with
+  `ANTHROPIC_API_KEY` *and* a free-provider key set, with
+  `JARVIS_BRAIN_PROVIDER`/`AI_FREE_FIRST` never touched, was silently
+  routed to a free, noticeably weaker provider by default — nothing was
+  misconfigured in a way that would show up as an error, the default
+  itself was just backwards from what people actually expect ("Claude is
+  the real brain, free providers are a fallback"). Set `AI_FREE_FIRST=true`
+  to explicitly opt into free-first behavior instead.
 - **Only one provider configured** — AIRouter just uses it, exactly like
   the old direct construction did. No crash, no routing overhead.
 - **A call fails** (network error, 5xx, rate limit) — AIRouter retries
@@ -2212,6 +2222,49 @@ limit or (more likely, in practice) today's free allocation being exhausted,
 and the error message says so explicitly, naming the 00:00 UTC daily reset;
 a 401/403 names exactly what to check (the token's validity and its
 "Workers AI" permission, and that the account id matches).
+
+## Gemini: a sixth free-tier provider
+
+[Google AI Studio](https://aistudio.google.com) gives out a genuinely free
+Gemini API key — **no credit card required for the free tier** — gated by
+the key's own rate limits (requests/minute, requests/day), not a per-model
+price tag the way OpenRouter's catalog is. Set `GEMINI_API_KEY` (from
+https://aistudio.google.com/apikey) to register `GeminiBrain`
+(`src/core/brain/GeminiBrain.ts`) as another `free`-tier provider:
+
+```
+GEMINI_API_KEY=your-api-key           # required — get one at https://aistudio.google.com/apikey, no card needed
+JARVIS_GEMINI_MODEL=gemini-2.0-flash  # optional — overrides GeminiBrain's own default
+```
+
+Message/tool-call translation is genuinely different from the OpenAI-
+compatible shape Groq/OpenRouter/Cloudflare/Ollama share: Gemini's API uses
+its own `contents`/`parts` structure, `functionDeclarations` for tool
+definitions (not `tools[].function`), and `functionCall`/`functionResponse`
+parts (not a `tool_calls` array / a `tool`-role message) — see
+`GeminiBrain.ts`'s own doc comment for exactly how that translation works,
+including why a function result is sent back as a `"user"`-role turn, not
+a dedicated `"function"` role.
+
+**Honest caveat on the default model id**: `gemini-2.0-flash` is this
+project's best-effort pick for a fast, free-tier-eligible model, not
+independently verified against Google's current free-tier model list from
+inside this project's sandbox (no outbound access to confirm it live, the
+same caveat `GroqBrain`/`OpenRouterBrain`'s own doc comments are honest
+about for their own defaults). Check
+[Google's current pricing/free-tier page](https://ai.google.dev/gemini-api/docs/pricing)
+before relying on this default, and override it with `JARVIS_GEMINI_MODEL`
+if it's since changed.
+
+Unlike OpenRouter's `":free"`-suffix enforcement (needed because
+OpenRouter is a mixed paid/free marketplace under one API), there is no
+analogous "refuse to construct against a paid model" check here — Gemini's
+free tier is scoped to the API key/project itself, not to specific model
+ids, so this class has no model-name signal to check the way
+`OpenRouterBrain` does; `CostTracker` still treats it as genuinely free
+(see its own `KNOWN_FREE_PROVIDERS` comment) for the same reason Cloudflare
+is: exceeding the free allocation fails the call with an error rather than
+silently billing a card on file.
 
 ## Prompt caching and tool-result caching
 

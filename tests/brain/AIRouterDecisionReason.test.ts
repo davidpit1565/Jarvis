@@ -45,7 +45,10 @@ describe("AIRouter decision metadata (decisionReason)", () => {
     registry.register("anthropic", okBrain("hi"), "paid");
     const costTracker = new CostTracker();
 
-    const router = new AIRouter(registry, costTracker);
+    // freeFirst now defaults to false (see AIRouterOptions.freeFirst's own
+    // doc comment) — pass it explicitly here since this test specifically
+    // exercises free-first routing's decisionReason, not the default.
+    const router = new AIRouter(registry, costTracker, { freeFirst: true });
     await router.chat(REQUEST);
 
     expect(lastDecisionReason(costTracker)).toBe("primary-free-first");
@@ -82,8 +85,10 @@ describe("AIRouter decision metadata (decisionReason)", () => {
     // vision branch to actually pick it via freeFirst — this only needs
     // *a* configured provider to reach requestNeedsVision's branch, not a
     // real vision-capable one, since we're only asserting the reason label
-    // once a provider is actually chosen through that code path.
-    const router = new AIRouter(registry, costTracker);
+    // once a provider is actually chosen through that code path. freeFirst
+    // is explicit here (defaults to false now) since this test targets the
+    // vision branch's own free-first preference, not the default.
+    const router = new AIRouter(registry, costTracker, { freeFirst: true });
     try {
       await router.chat(IMAGE_REQUEST);
       expect(lastDecisionReason(costTracker)).toBe("vision-required");
@@ -155,7 +160,9 @@ describe("AIRouter decision metadata (decisionReason)", () => {
     registry.register("anthropic", okBrain("paid reply"), "paid");
     const costTracker = new CostTracker();
 
-    const router = new AIRouter(registry, costTracker, { circuitBreakerThreshold: 1 });
+    // freeFirst explicit (defaults to false now) — this test needs groq to
+    // actually be tried as primary so it can fail and open its circuit.
+    const router = new AIRouter(registry, costTracker, { freeFirst: true, circuitBreakerThreshold: 1 });
     // First call: groq fails once (threshold 1 opens its circuit
     // immediately), falls back to anthropic and succeeds — recorded as
     // "call-failed", not the reason under test here.
@@ -175,7 +182,9 @@ describe("AIRouter decision metadata (decisionReason)", () => {
     registry.register("anthropic", okBrain("paid reply"), "paid");
     const costTracker = new CostTracker();
 
-    const router = new AIRouter(registry, costTracker);
+    // freeFirst explicit (defaults to false now) — groq must be the
+    // primary for this test's "primary fails, falls back" scenario.
+    const router = new AIRouter(registry, costTracker, { freeFirst: true });
     await router.chat(REQUEST);
 
     expect(lastDecisionReason(costTracker)).toBe("call-failed");
@@ -187,7 +196,10 @@ describe("AIRouter decision metadata (decisionReason)", () => {
     registry.register("anthropic", okBrain("strong reply"), "paid");
     const costTracker = new CostTracker();
 
-    const router = new AIRouter(registry, costTracker);
+    // freeFirst explicit (defaults to false now) — this test needs groq
+    // (the weaker provider) as the initial pick so escalating to anthropic
+    // is a genuine quality step up, not a no-op.
+    const router = new AIRouter(registry, costTracker, { freeFirst: true });
     const response = await router.chatWithEscalation(REQUEST, () => false);
 
     expect(response.text).toBe("strong reply");
@@ -199,7 +211,9 @@ describe("AIRouter decision metadata (decisionReason)", () => {
     registry.register("groq", okBrain("hi"), "free");
     const costTracker = new CostTracker();
 
-    const router = new AIRouter(registry, costTracker);
+    // freeFirst explicit (defaults to false now) — this test specifically
+    // asserts the "primary-free-first" reason ends up on the run ledger.
+    const router = new AIRouter(registry, costTracker, { freeFirst: true });
     await router.chat({ ...REQUEST, runId: "run-ledger-1" });
 
     const ledger = costTracker.getRunLedger("run-ledger-1");

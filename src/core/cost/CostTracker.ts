@@ -28,20 +28,21 @@ const PAID_PROVIDER_FLAT_FALLBACK_COST_USD = 0.01;
 /**
  * Groq's free tier, OpenRouter (OpenRouterBrain refuses to construct
  * against any model id that isn't ":free"), Ollama (a user-run local
- * model — there is no paid tier at all), and Cloudflare Workers AI
- * (10,000 free "Neurons"/day, resetting daily at 00:00 UTC): genuinely
- * $0, not an estimate. Cloudflare belongs in this set for the same reason
- * as the others — its own docs confirm exceeding the daily allocation
- * makes further calls simply fail with an error, rather than silently
- * falling through to billing a card on file the way, say, a "free trial
- * credit that becomes pay-as-you-go on exhaustion" provider would. A
- * provider with that latter shape would NOT belong here, since treating
- * it as free would risk understating real spend once it quietly starts
- * costing money.
+ * model — there is no paid tier at all), Cloudflare Workers AI
+ * (10,000 free "Neurons"/day, resetting daily at 00:00 UTC), and Gemini
+ * (Google AI Studio's free tier, gated by the API key's own rate limits,
+ * not a per-model price tag — see GeminiBrain's own doc comment): genuinely
+ * $0, not an estimate. Cloudflare/Gemini belong in this set for the same
+ * reason as the others — exceeding a free allocation makes further calls
+ * simply fail with an error, rather than silently falling through to
+ * billing a card on file the way, say, a "free trial credit that becomes
+ * pay-as-you-go on exhaustion" provider would. A provider with that latter
+ * shape would NOT belong here, since treating it as free would risk
+ * understating real spend once it quietly starts costing money.
  */
 const FREE_PROVIDER_COST_USD = 0;
 
-const KNOWN_FREE_PROVIDERS = new Set(["groq", "openrouter", "ollama", "cloudflare-workers-ai"]);
+const KNOWN_FREE_PROVIDERS = new Set(["groq", "openrouter", "ollama", "cloudflare-workers-ai", "gemini"]);
 
 /**
  * Approximates a single brain call's cost in USD. Free providers (Groq)
