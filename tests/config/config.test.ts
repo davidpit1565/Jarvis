@@ -14,6 +14,8 @@ const ENV_KEYS = [
   "CLOUDFLARE_ACCOUNT_ID",
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_MODEL",
+  "GEMINI_API_KEY",
+  "JARVIS_GEMINI_MODEL",
   "JARVIS_PROMPT_CACHING",
   "JARVIS_TOOL_RESULT_CACHE_TTL_MS",
   "JARVIS_PORT",
@@ -198,6 +200,20 @@ describe("loadConfig", () => {
     expect(config.cloudflareAccountId).toBe("acct-1234");
     expect(config.cloudflareApiToken).toBe("cf-token-abc");
     expect(config.cloudflareModel).toBe("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+  });
+
+  test("leaves geminiApiKey/geminiModel undefined by default", () => {
+    const config = loadConfig();
+    expect(config.geminiApiKey).toBeUndefined();
+    expect(config.geminiModel).toBeUndefined();
+  });
+
+  test("reads GEMINI_API_KEY and JARVIS_GEMINI_MODEL when set", () => {
+    process.env.GEMINI_API_KEY = "gem-test-key";
+    process.env.JARVIS_GEMINI_MODEL = "gemini-2.0-flash";
+    const config = loadConfig();
+    expect(config.geminiApiKey).toBe("gem-test-key");
+    expect(config.geminiModel).toBe("gemini-2.0-flash");
   });
 
   test("promptCachingEnabled defaults to true", () => {
@@ -853,15 +869,20 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 
-  test("defaults aiFreeFirst to true", () => {
-    const config = loadConfig();
-    expect(config.aiFreeFirst).toBe(true);
-  });
-
-  test("reads AI_FREE_FIRST=false", () => {
-    process.env.AI_FREE_FIRST = "false";
+  // Changed from an earlier "defaults aiFreeFirst to true" assertion: that
+  // was the old, buggy default itself (see aiFreeFirst's own doc comment
+  // on JarvisConfig for the real production incident it caused) — this
+  // test now asserts the fixed, intended default instead of re-codifying
+  // the bug it was testing for.
+  test("defaults aiFreeFirst to false (Claude-first unless explicitly opted into free-first)", () => {
     const config = loadConfig();
     expect(config.aiFreeFirst).toBe(false);
+  });
+
+  test("reads AI_FREE_FIRST=true", () => {
+    process.env.AI_FREE_FIRST = "true";
+    const config = loadConfig();
+    expect(config.aiFreeFirst).toBe(true);
   });
 
   test("leaves aiFallbackProvider undefined by default", () => {
@@ -1041,6 +1062,7 @@ describe("redactConfigForDisplay", () => {
     process.env.CLOUDFLARE_ACCOUNT_ID = "cf-account-id";
     process.env.CLOUDFLARE_API_TOKEN = "cloudflare-REAL-SECRET-VALUE";
     process.env.CLOUDFLARE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+    process.env.GEMINI_API_KEY = "gemini-REAL-SECRET-VALUE";
     process.env.TWILIO_AUTH_TOKEN = "twilio-REAL-SECRET-VALUE";
     process.env.TWILIO_PUBLIC_BASE_URL = "https://example.com";
     process.env.JARVIS_PUBLIC_BASE_URL = "https://example.com";
@@ -1067,6 +1089,7 @@ describe("redactConfigForDisplay", () => {
     expect(redacted.ollamaApiKey).toEqual({ configured: true });
     expect(redacted.cloudflareApiToken).toEqual({ configured: true });
     expect(redacted.cloudflareAccountId).toBe("cf-account-id");
+    expect(redacted.geminiApiKey).toEqual({ configured: true });
     expect(redacted.twilioAuthToken).toEqual({ configured: true });
     expect(redacted.adminToken).toEqual({ configured: true });
     expect(redacted.telegramBotToken).toEqual({ configured: true });

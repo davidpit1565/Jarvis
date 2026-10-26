@@ -69,7 +69,14 @@ export interface ProviderStatus {
 export interface AIRouterOptions {
   /**
    * Prefer a free-tier provider when no explicit provider is pinned and
-   * more than one is configured. Defaults to true.
+   * more than one is configured. Defaults to **false** — Claude (or
+   * whichever paid provider is configured) is the real default primary,
+   * and free providers are a cost-saving fallback, not the default. See
+   * `JarvisConfig.aiFreeFirst`'s own doc comment for why this was flipped
+   * from an earlier `true` default: that default silently routed a normal
+   * "ANTHROPIC_API_KEY + a free key, nothing else touched" deployment to a
+   * free, much weaker provider by default, with no misconfiguration to
+   * notice.
    */
   freeFirst?: boolean;
   /**
@@ -277,7 +284,7 @@ export class AIRouter implements Brain {
         "AIRouter: no AI provider is configured — register at least one Brain in AIProviderRegistry (ANTHROPIC_API_KEY and/or GROQ_API_KEY)."
       );
     }
-    this.freeFirst = options.freeFirst ?? true;
+    this.freeFirst = options.freeFirst ?? false;
     this.circuitBreakerThreshold = options.circuitBreakerThreshold ?? DEFAULT_CIRCUIT_BREAKER_THRESHOLD;
     this.circuitBreakerCooldownMs = options.circuitBreakerCooldownMs ?? DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS;
   }

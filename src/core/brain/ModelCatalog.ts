@@ -111,6 +111,19 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = [
       "free up to Cloudflare's 10,000-Neuron daily allocation (resets 00:00 UTC), which fails closed rather than " +
       "silently billing on overage — see CloudflareWorkersAIBrain's own doc comment.",
   },
+  {
+    id: "gemini-2.0-flash",
+    provider: "gemini",
+    label: "Gemini 2.0 Flash (Google AI Studio, free tier)",
+    costTier: "free",
+    capabilities: { toolCalling: true, vision: true, quality: "good" },
+    notes:
+      "Google AI Studio's free tier (no credit card) — see GeminiBrain's own doc comment: this default model id is " +
+      "a best-effort pick, not independently verified against Google's current free-tier model list from this " +
+      "sandbox. Real function-calling via Gemini's own functionDeclarations/functionCall shape (not OpenAI-" +
+      "compatible, unlike Groq/OpenRouter/Cloudflare). vision: true since Gemini's generateContent API accepts " +
+      "inline image parts in the same call as text, same as Claude/Groq/OpenRouter.",
+  },
 ] as const;
 
 /** Looks up a catalog entry by its exact model id, or undefined if this id isn't in the catalog. */

@@ -100,6 +100,17 @@ export interface JarvisConfig {
    */
   cloudflareModel?: string;
   /**
+   * Optional Gemini (Google AI Studio) API key — when set, AIProviderRegistry
+   * registers a `GeminiBrain` as another free-tier provider alongside Groq/
+   * OpenRouter/Cloudflare. Get one at https://aistudio.google.com/apikey —
+   * no credit card for the free tier. Wholly optional: unset means Gemini is
+   * simply unavailable, same as any other unconfigured provider, never a
+   * crash and never a silent fallback to a paid one.
+   */
+  geminiApiKey?: string;
+  /** Gemini model id; unset uses GeminiBrain's own default (see its own doc comment for the honest caveat on how that default was picked). */
+  geminiModel?: string;
+  /**
    * Enables Anthropic prompt caching (`cache_control: ephemeral`) on the
    * system prompt and tool definitions ClaudeBrain sends. A pure cost
    * optimization with no behavior change, so it defaults to on; set
@@ -108,11 +119,25 @@ export interface JarvisConfig {
    */
   promptCachingEnabled: boolean;
   /**
-   * Whether AIRouter should prefer a free-tier provider (currently: Groq)
-   * over a paid one when no explicit JARVIS_BRAIN_PROVIDER is set and
-   * more than one provider is configured. Defaults to true — "free
-   * first" is the whole point of the router existing. Ignored entirely
-   * when brainProviderExplicit is true.
+   * Whether AIRouter should prefer a free-tier provider (Groq/OpenRouter/
+   * Ollama/Cloudflare/Gemini) over a paid one (Anthropic) when no explicit
+   * JARVIS_BRAIN_PROVIDER is set and more than one provider is configured.
+   *
+   * Defaults to **false**. This was flipped from an earlier `true` default
+   * after a real production incident: on a deployment that had
+   * ANTHROPIC_API_KEY configured alongside one or more free-provider keys,
+   * but had never touched JARVIS_BRAIN_PROVIDER or AI_FREE_FIRST at all,
+   * AIRouter silently routed every turn to a free, much weaker provider
+   * instead of Claude — the user had no idea why replies felt "robotic"
+   * and slow, because nothing was misconfigured in the way a missing/typo'd
+   * env var would be; the default itself was just wrong for what people
+   * actually expect. Claude being JARVIS's "real brain" and free providers
+   * being a cost-saving fallback — not the other way around — is the
+   * intended relationship, so that is now what happens with zero
+   * configuration: set AI_FREE_FIRST=true to explicitly opt into
+   * free-first behavior instead. Ignored entirely when
+   * brainProviderExplicit is true (an explicit JARVIS_BRAIN_PROVIDER always
+   * wins regardless of this flag).
    */
   aiFreeFirst: boolean;
   /**
@@ -562,11 +587,24 @@ export function loadConfig(): JarvisConfig {
   const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN?.trim() || undefined;
   const cloudflareModel = process.env.CLOUDFLARE_MODEL?.trim() || undefined;
 
+  // Gemini (Google AI Studio): a real hosted account, but gated by the API
+  // key's own free-tier rate limits rather than a per-model price tag the
+  // way OpenRouter's catalog is — so, unlike Cloudflare, only the key is
+  // required; a model id is optional (GeminiBrain has its own default). See
+  // GeminiBrain's own doc comment for the honest caveat on that default.
+  const geminiApiKey = process.env.GEMINI_API_KEY?.trim() || undefined;
+  const geminiModel = process.env.JARVIS_GEMINI_MODEL?.trim() || undefined;
+
   const promptCachingRaw = process.env.JARVIS_PROMPT_CACHING?.trim().toLowerCase();
   const promptCachingEnabled = promptCachingRaw === undefined || promptCachingRaw === "" ? true : promptCachingRaw === "true";
 
+  // Defaults to false (Claude-first) as of this fix — see aiFreeFirst's own
+  // doc comment on JarvisConfig for why: the previous `true` default meant
+  // a deployment with ANTHROPIC_API_KEY *and* a free-provider key set, but
+  // AI_FREE_FIRST never explicitly touched, silently got routed to the
+  // free/weaker provider by default. Set AI_FREE_FIRST=true to opt in.
   const aiFreeFirstRaw = process.env.AI_FREE_FIRST?.trim().toLowerCase();
-  const aiFreeFirst = aiFreeFirstRaw === undefined || aiFreeFirstRaw === "" ? true : aiFreeFirstRaw === "true";
+  const aiFreeFirst = aiFreeFirstRaw === undefined || aiFreeFirstRaw === "" ? false : aiFreeFirstRaw === "true";
 
   const aiFallbackProviderRaw = process.env.AI_FALLBACK_PROVIDER?.trim().toLowerCase() || undefined;
   if (aiFallbackProviderRaw && aiFallbackProviderRaw !== "anthropic" && aiFallbackProviderRaw !== "groq") {
@@ -931,6 +969,8 @@ export function loadConfig(): JarvisConfig {
     cloudflareAccountId,
     cloudflareApiToken,
     cloudflareModel,
+    geminiApiKey,
+    geminiModel,
     promptCachingEnabled,
     aiFreeFirst,
     aiFallbackProvider,
@@ -1032,6 +1072,7 @@ const KNOWN_SECRET_CONFIG_FIELDS: ReadonlySet<keyof JarvisConfig> = new Set([
   "openrouterApiKey",
   "ollamaApiKey",
   "cloudflareApiToken",
+  "geminiApiKey",
   "twilioAuthToken",
   "telegramBotToken",
   "telegramWebhookSecret",
