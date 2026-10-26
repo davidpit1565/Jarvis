@@ -99,7 +99,23 @@ sessions/compaction. None of this is built yet unless a specific PR/commit is no
 
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
-- A repo he called "Decide" (an AI-driven analysis app) was mentioned on 2026-10-26 but
-  does **not** appear in his connected GitHub account's repo list as of that date (checked
-  via `list_repos`, no match for "decide") — either unpushed, under a different name, or
-  not yet connected. Ask him for the exact owner/repo before assuming it doesn't exist.
+- `davidpit1565/Rudder` — the app he initially called "Decide" (that was its working
+  name/idea, not the repo name). A real, well-built iOS decision-intelligence app: "you
+  say what you're deciding; RUDDER works out what it can, looks up what it can, asks only
+  what it genuinely cannot know, and gives a recommendation with the trade-off and the
+  strongest case against it." SwiftUI/SwiftData/StoreKit app + a `RudderKit` Swift package
+  (dependency-free domain/decision/stability engines, 135 tests, buildable without Xcode)
+  + a TypeScript `Backend/` analysis endpoint (29 tests) using `@google/genai` (Gemini) and
+  `openai`. **Confirmed: `Backend/vercel.json` shows it's currently deployed on Vercel** —
+  this is the concrete source of his stated "I don't want to use Vercel, 60-second function
+  timeout" complaint (his AI analysis calls can run long). Worth remembering if JARVIS ever
+  needs similar long-running-AI-call hosting, or if he asks for help moving this off Vercel.
+- `davidpit1565/videos-ai` — his "Actually Works" channel's production system: a
+  script → narration → music → render pipeline for Instagram Reels / YouTube tutorials
+  about AI tools, plus `publish/instagram_publish.py`, a working script that posts a
+  finished Reel via the **Instagram Graph API** (setup docs in `publish/SETUP.md`, in
+  Hebrew). He said this repo and Instagram access generally matter a lot to him. **Likely
+  connects to JARVIS's own existing `src/tools/studio/PublishReelTool.ts` /
+  `src/studio/StudioClient.ts` integration** (seen in earlier work on this project,
+  browser bookmarks named "Actually Works Studio") — worth checking whether that's the
+  same underlying system before building anything new for Instagram publishing.
