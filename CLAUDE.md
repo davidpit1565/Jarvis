@@ -31,11 +31,16 @@ that feature, not necessarily something to hardcode verbatim into the product:
 He asked to be reminded of these if he forgets, and for them to not get lost across
 sessions/compaction. None of this is built yet unless a specific PR/commit is noted.
 
-1. AI routing: Claude should be the real default brain (fixed in-progress — see PR from
-   `claude/fix-ai-routing-default-and-gemini-provider`, which also adds Gemini as a new
-   free-tier provider alongside Groq/OpenRouter/Cloudflare Workers AI). He does not want
-   to pay for Claude usage long-term if a free option can do the job — the explicit goal is
-   "always find the free option," so provider cost-tier/fallback logic matters a lot to him.
+1. AI routing: Claude should be the real default brain — **merged, not in-progress**
+   (corrected 2026-10-27 during the roadmap-audit re-verification pass: PR #143 "Fix
+   AIRouter's free-first default and add Gemini as a free-tier provider" and PR #144
+   "Prioritize Gemini over Groq for free-tier routing" are both on `main`; `GeminiBrain`
+   is registered in `src/index.ts` alongside Groq/OpenRouter/Cloudflare Workers AI/Ollama).
+   He does not want to pay for Claude usage long-term if a free option can do the job — the
+   explicit goal is "always find the free option," so provider cost-tier/fallback logic
+   matters a lot to him. Note: this entry is about free-provider *routing priority*, not
+   about `ZERO_COST_MODE` itself (see #17 below) — `ZERO_COST_MODE` is a separate, stricter
+   switch that must still be set explicitly on the live Fly deployment.
 2. Continuous memory/personal profile that grows automatically after every message, not
    just on explicit SAVE_MEMORY decisions (see `JARVIS_ROADMAP_AUDIT.md` #14 and
    `JARVIS_COMPETITIVE_RESEARCH.md` area 1 — mem0-style background extraction is the

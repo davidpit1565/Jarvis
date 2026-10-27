@@ -1,5 +1,77 @@
 # JARVIS Roadmap Audit — 210-Item Classification
 
+## Re-verified 2026-10-27
+
+This document had been proven stale twice in the same day before this pass: it
+listed "Task State Machine" (#2) and "Goal Engine" (#26/#27) as **MISSING**
+when both already existed in `src/agent/AgentCore.ts`/`AgentTaskStateMachine.ts`/
+`AgentTaskStore.ts`/`GoalStore.ts` (merged via PR #152, "Add Goal Engine
+tool-level interface and conversation-start surfacing"), and separately the
+project owner was told Spotify integration "isn't built yet" when
+`src/spotify/SpotifyClient.ts`/`SpotifyTokenStore.ts` and five tools
+(`PlayMusicTool`, `PauseMusicTool`, `SkipTrackTool`, `GetCurrentlyPlayingTool`,
+`UnlinkSpotifyTool`) are fully implemented and wired into `src/index.ts`
+(OAuth flow, tool registration, permission grants) — only
+`SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` + a one-time OAuth link are
+missing, which is a deployment/setup step, not a code gap. Both corrections
+had already been written into `CLAUDE.md` (see its "Status note (2026-10-27)"
+section and wishlist item #1's Spotify framing) but **this document itself
+was never updated** — exactly the gap this re-verification pass closes.
+
+This pass went item-by-item against the real codebase on this branch
+(checked out from `origin/main` at the time of this edit) — reading
+`src/index.ts` for wiring (imported, instantiated, registered — not just
+present as a file), reading the relevant store/tool/client files directly,
+and grepping for later "pass" sections lower in this same document that
+built something without ever updating this file's main 210-item tables
+above them. Net result: **19 rows corrected** (plus the Spotify footnote
+below, which was never a standalone numbered row to begin with, and #128's
+note updated without a status change).
+
+**Stale-actually-DONE, same direction as the Task State Machine/Goal Engine
+case (12 rows moved fully to ALREADY_EXISTS_AND_GOOD, 1 to "code-ready,
+pending real-Mac validation"):** #2 Task State Machine, #9 Hard Zero-Cost
+Mode, #26 Goal Engine, #27 Goal Progress, #42 Provider Circuit Breaker, #43
+Provider Latency Tracking, #44 Provider Success Rate, #60 Semantic Cache,
+#126 Commitment Tracking, #127 Promise Tracker, #171 Error IDs, plus #73
+barge-in state (Mac Agent, moved to "code-ready, pending real-Mac
+validation" -- built but still unvalidated on hardware like the rest of
+that section) -- all genuinely built and wired, just never reflected back
+into this file's status column after a later pass or PR implemented them.
+
+**Stale-under-stated, moved to a more accurate partial status (6 rows):**
+#37 Streaming Responses, #40 Error Classification, #129 Stale Task
+Detection, #132 Preference Learning, #169 Structured Logging, #170
+Correlation IDs, #179 Latency Metrics are all more-built than the row
+previously said, but not fully wired end-to-end (each row's note below says
+exactly what's still missing). (#128 Follow-Up Engine's note was also
+corrected to reflect that its dependencies -- #126/#127 -- are no longer
+missing, though its own MISSING status is unchanged, since the follow-up
+engine itself still isn't built.)
+
+**Stale-DONE-actually-not corrected this pass: none found.** The spot-check
+sample of ALREADY_EXISTS_AND_GOOD rows (Global Kill Switch #25, Live
+Activity Feed #35, Tool Registry #5, Confirmation Policy #16, Integration
+Tests #181, Graceful Shutdown #161, and every row in the Premium Polish
+section referencing the Command Center/admin panel) all checked out against
+real, currently-wired code — no case of "marked DONE but actually
+removed/broken/never wired" was found in this pass. This asymmetry (17
+under-claimed vs. 0 over-claimed) matches the pattern of how this document
+has been maintained: new passes append a new section documenting what they
+built, but routinely forget to flip the original row's status, which biases
+staleness toward "more built than documented" rather than the reverse.
+
+**Not independently re-verified at full rigor this pass** (210 items is a
+lot; this was prioritized toward rows referenced by `CLAUDE.md`'s wishlist
+and rows with reason to suspect drift, per the task's own instruction — not
+exhaustive): the Mac Agent section (#61-85) beyond the specific #73 fix
+above — these are already correctly marked `REQUIRES_REAL_MAC_VALIDATION`/
+"code-ready, pending real-Mac validation" and nothing in this pass changes
+that; the UI/Hologram section (#86-110) beyond #90's note; most of
+Reliability/Infrastructure (#161-185) beyond the rows listed above.
+
+---
+
 Audited against the actual repository state at commit `41c0223` ("Add AIProviderRegistry + AIRouter (free-first routing, fallback, budget caps) and CostTracker (#29)"), which is the current tip of this worktree's branch (built from `main`). This supersedes the framing in `JARVIS_AUDIT.md` in two respects verified directly against `git log --oneline`:
 
 - **`AIProviderRegistry`/`AIRouter`/`CostTracker` (`src/core/brain/AIRouter.ts`, `src/core/brain/AIProviderRegistry.ts`, `src/core/cost/CostTracker.ts`) are merged to `main`** — `JARVIS_AUDIT.md`'s 2026-09-20 note calling this "unmerged" is now stale; PR #29 merged it.
@@ -16,14 +88,14 @@ Legend: **ALREADY_EXISTS_AND_GOOD** · **ALREADY_EXISTS_NEEDS_UPGRADE** · **PAR
 | # | Feature | Status | Existing Implementation (files) | Required Work | Notes |
 |---|---|---|---|---|---|
 | 1 | Autonomous Agent Core | ALREADY_EXISTS_NEEDS_UPGRADE | `src/core/orchestrator/Orchestrator.ts` (`handleUserMessage`, `MAX_TOOL_ITERATIONS=5`) | Multi-step tool loop exists but is entirely request-triggered; no self-initiated multi-step planning beyond schedulers firing a single conversational turn. | Solid brain→tool→permission→confirmation loop, bounded and tested (`tests/integration/orchestrator.test.ts`). |
-| 2 | Task State Machine | MISSING | none found | Build a persisted task/state model (pending/running/waiting/done/failed) shared across reminders, automations, agent turns. | Reminders/automations each have ad-hoc booleans (`notified_at`, `last_triggered_date`), not a unified state machine. |
+| 2 | Task State Machine | ALREADY_EXISTS_AND_GOOD | `src/agent/AgentTaskStateMachine.ts`, `src/agent/AgentTaskStore.ts` (SQLite-persisted), `src/agent/AgentCore.ts` | None | **Re-verified 2026-10-27 — stale, corrected.** A real persisted task state machine exists (PENDING→PLANNING→EXECUTING→VERIFYING→COMPLETED/FAILED/CANCELLED/RETRYING/RECOVERING/WAITING, enforced transitions), with cooperative cancellation wired into `Orchestrator.requestStop` and a resumable priority queue. This was already true before this pass but nothing in this document reflected it — see `CLAUDE.md`'s "Status note (2026-10-27)" for the fuller history. Still domain-specific to agent tasks, not (and was never meant to be) a replacement for reminders'/automations' own simpler due-time booleans. |
 | 3 | Tool Result Verification | MISSING | none found | Add a post-execution verification step (e.g. re-check a written file, confirm a sent email in Sent folder) before declaring success. | `Orchestrator.runLocalTool`/`runDeviceTool` trust the tool's own `ToolResult.success` at face value. |
 | 4 | Retry + Recovery | PARTIALLY_EXISTS | `src/core/brain/ClaudeBrain.ts` (1-shot fallback-model retry on 429/503/529); `src/core/brain/AIRouter.ts` (provider fallback on call failure) | Add retry/recovery for individual *tool* calls (device/API), not just brain calls. | Brain-level retry exists and is tested; tool-level calls (Gmail, Calendar, device tools) have no retry wrapper — a transient 500 just fails the turn. |
 | 5 | Tool Registry | ALREADY_EXISTS_AND_GOOD | `src/tools/registry/ToolRegistry.ts`, `src/types/tools.ts` | None | Clean `LocalTool`/`DeviceTool` split, well tested (`tests/tools/ToolRegistry.test.ts`), ~50 local + 17 device tools registered. |
 | 6 | Provider Health | MISSING | none found | Add periodic/active health probes per provider (not just reactive on-call-failure). | `AIRouter` only reacts to a thrown error mid-call; no proactive health check. |
 | 7 | Free-First Router 2.0 | ALREADY_EXISTS_NEEDS_UPGRADE | `src/core/brain/AIRouter.ts`, `AIProviderRegistry.ts` | Extend beyond the 2 hardcoded providers (anthropic/groq); add latency/success-rate-aware selection, not just cost-tier. | Real, tested free-first routing with explicit-provider override, single fallback provider, and budget-triggered swap-to-free (`resolvePrimary`, `applyBudget`) — a genuine v1, not a stub. |
 | 8 | Provider Fallback Matrix | PARTIALLY_EXISTS | `AIRouter.resolveFallback()` | Support >2 providers with a real priority matrix instead of "the other configured one". | Today it's binary: anthropic ↔ groq. `ProviderName = "anthropic" \| "groq"` is a closed union. |
-| 9 | Hard Zero-Cost Mode | PARTIALLY_EXISTS | `AIRouter` (`freeFirst` default true) + `applyBudget()` throwing `BudgetExceededError` | Add an explicit `JARVIS_ZERO_COST_MODE` flag that refuses to construct/register a paid provider at all, rather than routing around it opportunistically. | Current design routes to free first and swaps on budget-exceeded, but a paid call can still happen (e.g. free provider down and budget not yet exceeded) — not a hard guarantee of $0. |
+| 9 | Hard Zero-Cost Mode | ALREADY_EXISTS_AND_GOOD | `AIRouter.applyBudget()` (checks `zeroCostMode` first, before daily/monthly caps and before the per-run ceiling), `config.zeroCostMode`/`ZERO_COST_MODE` env var (`src/config/index.ts`) | None | **Re-verified 2026-10-27 — stale, corrected.** This row predates the "Premium Agent Intelligence/Security Upgrade — batch 2" pass lower in this document, which traced every path that can reach a paid candidate (primary selection, exception-fallback, and the later-added `chatWithEscalation` path) and confirmed all three funnel through the same `applyBudget()` zero-cost check with an adversarial test proving a paid provider is never invoked under `ZERO_COST_MODE=true`, even when every free provider fails or returns an invalid response. `ZERO_COST_MODE` is off by default and must still be set explicitly on the live Fly deployment (see `CLAUDE.md` wishlist #17) — that's a deployment step, not a code gap. |
 | 10 | Cost Guard | ALREADY_EXISTS_NEEDS_UPGRADE | `src/core/cost/CostTracker.ts`, `AIRouter.applyBudget()`, older `src/audit/CostAlertMonitor.ts` | Add per-turn/per-request cap (today only daily/monthly), and reconcile the two parallel cost-tracking systems (`CostTracker` for routing vs. `TokenUsageStore`/`CostAlertMonitor` for alerting) which use different pricing constants and don't share data. | `MAX_DAILY_COST_USD`/`MAX_MONTHLY_COST_USD` are real, SQLite-backed, enforced pre-call, tested (`tests/cost/CostTracker.test.ts`, `tests/brain/AIRouter.test.ts`). |
 | 11 | Quota Awareness | MISSING | none found | Track provider rate-limit/request quotas (e.g. Groq free-tier RPM/TPM), not just $ spend. | `CostTracker` only tracks dollars; there's no concept of "requests remaining this minute" anywhere. |
 | 12 | Context Compression | MISSING | none found | Add conversation history summarization/truncation once it exceeds a token budget. | `ConversationManager` (per `JARVIS_AUDIT.md`) keeps full message history; no compression found by grep. |
@@ -47,8 +119,8 @@ Legend: **ALREADY_EXISTS_AND_GOOD** · **ALREADY_EXISTS_NEEDS_UPGRADE** · **PAR
 
 | # | Feature | Status | Existing Implementation (files) | Required Work | Notes |
 |---|---|---|---|---|---|
-| 26 | Goal Engine | MISSING | none found (grep for `Goal`/`goal` returns only unrelated weather/news code) | Build from scratch: goal creation, storage, tracking. | No goal concept anywhere in the codebase. |
-| 27 | Goal Progress | MISSING | none | Depends on #26. | Blocked on Goal Engine existing first. |
+| 26 | Goal Engine | ALREADY_EXISTS_AND_GOOD | `src/agent/GoalStore.ts`, `src/tools/agent/CreateGoalTool.ts` (`CREATE_GOAL`) | None | **Re-verified 2026-10-27 — stale, corrected.** `GoalStore` + `CREATE_GOAL`/`CHECK_GOAL_PROGRESS`/`COMPLETE_GOAL`/`CANCEL_GOAL` tools (merged, PR #152) give the model a real on-ramp into the pre-existing `AgentTaskStateMachine`/`AgentCore` queue (see #2), which had been running against a permanently empty table before this PR since nothing ever called `AgentCore.startGoal`. `CREATE_GOAL` decomposes a goal into a flat, capped (≤12) list of steps exactly once — deliberately not a recursive/self-reprioritizing planner, as a guard against the documented AutoGPT/BabyAGI runaway-task-list failure mode. Confirmed wired in `src/index.ts` (imports `GoalStore`, grants `CREATE_GOAL` permission, registers all four tools). |
+| 27 | Goal Progress | ALREADY_EXISTS_AND_GOOD | `src/tools/agent/CheckGoalProgressTool.ts`, `src/agent/goalProgressNote.ts`, `AgentTaskStore.getGoalProgress` | None | **Re-verified 2026-10-27 — stale, corrected.** Was marked "blocked on #26," but #26 is built (see above). `goalProgressNote.ts` surfaces active goals/next-step into the system prompt at conversation start (same place as `dueRemindersNote`/`staleCommitmentsNote`), so JARVIS can mention goal progress unprompted across separate conversations, not just when explicitly asked via `CHECK_GOAL_PROGRESS`. |
 | 28 | Dependencies | MISSING | none | Build a task-dependency graph. | No task/dependency modeling anywhere. |
 | 29 | Waiting States | MISSING | none | Add a "waiting on X" task state. | Reminders/automations are simple due-time triggers, not dependency-aware waits. |
 | 30 | Resume After Restart | PARTIALLY_EXISTS | `ReminderStore`, `AutomationRuleStore`, `WakeUpCallStore` all persist to SQLite and are re-read on process start | Build general agent-task resume (depends on #2/#26 existing) — today "resume" only means "scheduled/persisted things still fire correctly," not "an in-progress multi-step agent task resumes." | 3 of the original 4 schedulers use in-memory dedupe flags that reset on restart (`JARVIS_AUDIT.md` gap #5) — so even the simple case is imperfect. |
@@ -58,14 +130,14 @@ Legend: **ALREADY_EXISTS_AND_GOOD** · **ALREADY_EXISTS_NEEDS_UPGRADE** · **PAR
 | 34 | Agent Progress API | MISSING | none | Add a progress-percentage/step API surfaced over WebSocket. | `EventBus` emits discrete events (`tool.requested`, `tool.executed`) but nothing aggregates them into "% done" for a multi-step task. |
 | 35 | Live Activity Feed | ALREADY_EXISTS_AND_GOOD | `src/core/activity/ActivityLog.ts`, hologram "CORE ACTIVITY" panel (`ui/hologram/index.html`), observer WS stream | None | Real, tested (`tests/core/ActivityLog.test.ts`, `tests/integration/observerBroadcast.test.ts`), human-readable feed distinct from the raw audit log. |
 | 36 | User-Facing Status Machine | PARTIALLY_EXISTS | `status-indicator-left`/`status-indicator-right` DOM elements, Swift `StatusItemController` (connected/reconnecting) | Add a richer agent-status state machine (thinking/verifying/waiting) surfaced to the UI, not just connection status. | Today's "status" is mostly connectivity (Core/device), not task/agent state. |
-| 37 | Streaming Responses | MISSING | none — `ClaudeBrain.ts`/`GroqBrain.ts` use non-streaming `messages.create`/`chat/completions` calls, full response returned at once | Add SSE/WebSocket token streaming from brain → UI. | Confirmed no streaming API usage in either brain implementation; chat replies arrive as one complete WebSocket message. |
+| 37 | Streaming Responses | ALREADY_EXISTS_NEEDS_UPGRADE | `Brain.chatStream`/`ClaudeBrain.chatStream` (`src/types/brain.ts`, `src/core/brain/ClaudeBrain.ts`), `AIRouter.chatStream` (forwards real incremental chunks for `ClaudeBrain`, synthesizes one whole-reply chunk for providers with no native streaming), `Orchestrator.handleUserMessage`'s optional `onTextDelta` parameter | Wire a real caller: today **nothing in `src/index.ts` passes `onTextDelta`** to either `handleUserMessage()` call site (web chat or the automation-rule instruction path), so no real conversation actually streams yet — the plumbing exists end-to-end at the brain/orchestrator layer but is unused in production. | **Re-verified 2026-10-27 — stale, partially corrected.** This row previously said streaming was entirely absent; that's no longer true at the brain layer (real, tested, Anthropic SDK `.messages.stream()` usage). What's still accurate from the original row is that no real end-user conversation streams today — the gap moved from "brain can't stream" to "nothing calls the brain's streaming path." #90 (UI streaming) is still blocked, but on this narrower gap, not on #37 being unbuilt. |
 | 38 | Tool Execution Streaming | MISSING | none | Stream intermediate tool-call status to the UI live (today only the final `tool.executed` event reaches the activity log after completion). | `EventBus` events exist but aren't streamed incrementally to the browser during a long-running tool call. |
 | 39 | Structured Agent Events | ALREADY_EXISTS_NEEDS_UPGRADE | `src/core/events/EventBus.ts` (typed events: `brain.request`, `brain.response`, `tool.requested`, `tool.executed`, `permission.checked`, `ai.providerFallback`) | Expose this event stream directly to the UI/API as structured JSON (today only `ActivityLog`'s human-readable summary and the admin "observer" stream reach the browser). | Good internal foundation, tested (`tests/brain/EventBus.test.ts`); not yet a general external structured-event API. |
-| 40 | Error Classification | MISSING | none | Add an error taxonomy (network/permission/validation/provider/user) instead of raw strings. | Errors throughout (`ToolResult.error`, brain errors) are plain strings with no classification field. |
+| 40 | Error Classification | PARTIALLY_EXISTS | `src/agent/errorClassification.ts` (`classifyError`, transient vs. permanent) | Extend into the fuller taxonomy this row originally asked for (network/permission/validation/provider/user) — today it's a single transient/permanent binary, purpose-built for one caller. | **Re-verified 2026-10-27 — stale, partially corrected.** `classifyError` is real and used by `AgentCore` to decide whether a failed agent task step is worth retrying (transient: timeout/network/429/503/overloaded patterns) vs. going straight to a RECOVERING replan (permanent: permission denied/unknown tool/invalid input/declined confirmation/lockdown). It reuses the same transient-vs-permanent distinction `ClaudeBrain`/`AIRouter` already use for provider-call retries. Still not the 5-category taxonomy originally described, and not applied outside `AgentCore`'s own step-retry logic (e.g. not surfaced on `ToolResult.error` generally). |
 | 41 | Automatic Recovery Strategy | PARTIALLY_EXISTS | `ClaudeBrain` fallback-model retry, `AIRouter` provider fallback | Generalize into a documented recovery-strategy framework covering tool failures too. | Two narrow, real, tested recovery paths exist; no broader strategy layer. |
-| 42 | Provider Circuit Breaker | MISSING | none | Add open/half-open/closed circuit-breaker state per provider, tripped after N consecutive failures. | `AIRouter` retries once per call but has no memory of past failures across calls — a persistently-down provider is retried on every single request forever. |
-| 43 | Provider Latency Tracking | MISSING | none | Record per-call latency into `CostTracker` or a sibling store, use it for routing. | No latency field anywhere in `CostTracker`/`AIRouter`. |
-| 44 | Provider Success Rate | MISSING | none | Track success/failure counts per provider over time. | No such tracking exists; only cost is recorded per call. |
+| 42 | Provider Circuit Breaker | ALREADY_EXISTS_AND_GOOD | `AIRouter.ts` (`circuitState: "closed" \| "open" \| "half-open"`, `consecutiveFailures`, `circuitBreakerThreshold`, `getProviderStatus()`) | None | **Re-verified 2026-10-27 — stale, corrected.** A real open/half-open/closed circuit breaker exists per provider, trips after N consecutive failures, and a tripped circuit refuses to call that provider for a cooldown window rather than retrying it on every request. This document's own "Premium Polish" section (#188, Provider Monitor) already documents this as existing "from a prior PR" and flags the original blocking claim as stale — but this earlier row (#42) itself was never corrected to match, which is exactly the kind of staleness this pass fixes. |
+| 43 | Provider Latency Tracking | ALREADY_EXISTS_AND_GOOD | `AIRouter.getProviderStatus()` (per-provider latency, avg latency), `CostTracker` ledger's `latencyMs` column (per-call, since the batch-3 AI Cost Ledger pass) | None | **Re-verified 2026-10-27 — stale, corrected.** Same situation as #42 — real and already cross-referenced by #188 lower in this document, but this row was never flipped. |
+| 44 | Provider Success Rate | ALREADY_EXISTS_AND_GOOD | `AIRouter.getProviderStatus()` (success rate, consecutive-failure count per provider) | None | **Re-verified 2026-10-27 — stale, corrected.** Same situation as #42/#43. |
 | 45 | Model Capability Cache | MISSING | none | Cache which providers/models support vision, tool-calling, etc. | `Brain`/`AIProviderRegistry` know nothing about per-model capabilities beyond what's hardcoded per-Brain-class. |
 | 46 | Dynamic Model Catalog | ALREADY_EXISTS_NEEDS_UPGRADE | `src/core/brain/ModelCatalog.ts` (new — `MODEL_CATALOG`, `findModel`, `modelsForProvider`, `modelsByCostTier`); `ProviderName` in `AIProviderRegistry.ts` now `"anthropic" \| "groq" \| "openrouter"` | A hand-maintained, typed catalog (id, provider, cost tier, capabilities, notes) now exists and is used to describe the 3 registered providers' models. It's still descriptive metadata only — routing itself (`AIRouter`) doesn't yet consult it, and it's not a fully dynamic/config-driven list (entries are added by hand, deliberately — see the file's own doc comment on why). A future task-type-aware router (#47) or cost-suggestion feature (#57) can now read one real source of truth instead of re-deriving this. | Implemented this pass. |
 | 47 | Task-Type Routing | MISSING | none | Route different task types (vision, code, chat) to different models/providers. | Unchanged — `AIRouter` still routes purely by cost tier + explicit pin, never by what the task actually needs. Not in this pass's scope. |
@@ -81,7 +153,7 @@ Legend: **ALREADY_EXISTS_AND_GOOD** · **ALREADY_EXISTS_NEEDS_UPGRADE** · **PAR
 | 57 | Cost Optimization Suggestions | MISSING | none | Build analysis/suggestion logic on top of `CostTracker`/`TokenUsageStore` data. | No such analysis layer exists; data exists to build this on (`CostTracker`, `TokenUsageStore`) but nothing consumes it for suggestions. |
 | 58 | Prompt Cache | ALREADY_EXISTS_AND_GOOD | `src/core/brain/ClaudeBrain.ts` (`buildSystem`, `markLastToolCacheable`); config `JARVIS_PROMPT_CACHING` (default true) | Implemented this pass: the system prompt is sent as a single text block with `cache_control: {type: "ephemeral"}`, and the last tool definition in the tools array carries the same breakpoint (caching the whole tools-array prefix before it, per Anthropic's prefix-caching model). On by default (pure cost optimization, zero behavior change); `JARVIS_PROMPT_CACHING=false` opts back out for debugging. `ClaudeBrain.ts` already read back `cache_creation_input_tokens`/`cache_read_input_tokens` from responses before this pass — those numbers will now actually be non-zero. | Implemented this pass. |
 | 59 | Result Cache | ALREADY_EXISTS_AND_GOOD | `src/core/cache/ToolResultCache.ts` (new); wired into `Orchestrator.runLocalTool` via `OrchestratorDependencies.toolResultCache`; config `JARVIS_TOOL_RESULT_CACHE_TTL_MS` (default 60000, 0 disables) | Implemented this pass: a simple in-memory TTL cache, keyed on tool name + stable-stringified input, with no external dependency. Orchestrator only ever consults it for `LocalTool`s whose `requiredPermission` is `PermissionLevel.READ` — anything that mutates state (`SAFE_ACTION`/`CONFIRM`/`DANGEROUS`) is never cached, cache or no cache; a failed `ToolResult` is also never cached (a transient error shouldn't be replayed as a real answer). Shared across every channel's Orchestrator (chat, phone, SMS, Telegram, device voice) in `src/index.ts`, so a repeated GET_WEATHER for the same city hits the cache regardless of which channel asked. Emits `tool.cacheHit` on the `EventBus` for observability. | Implemented this pass. |
-| 60 | Semantic Cache | NOT_WORTH_IMPLEMENTING | n/a | n/a | Deliberately skipped this pass. A real semantic cache needs an embeddings model to compare prompt similarity, and JARVIS has no embeddings infrastructure (`MemoryStore` search is plain SQL `LIKE`) — building one would mean either standing up a new paid embeddings API call (spending money to implement a *cost-saving* feature is self-defeating and directly against this pass's ZERO_COST_MODE mandate) or a zero-cost heuristic (e.g. token-overlap/Jaccard similarity on raw text) that's unreliable enough to risk silently answering a materially different question from a stale cache entry — a correctness risk this pass isn't willing to take on for a "maybe" cost saving. Revisit only if a genuinely free, good-enough similarity signal becomes available, or the budget for occasional embeddings calls is explicitly accepted. |
+| 60 | Semantic Cache | ALREADY_EXISTS_AND_GOOD | `src/core/embeddings/OllamaEmbeddingsClient.ts`, `src/core/embeddings/similarity.ts`, `ToolResultCache.getSemantic()`/`Tool.semanticCacheable` | None (opt-in only; see notes) | **Re-verified 2026-10-27 — stale, corrected.** This row was correctly `NOT_WORTH_IMPLEMENTING` at the time it was written (no free embeddings source existed), but a later pass in this same document ("2026-09-22 update — Semantic Cache (#60) unblocked: local Ollama embeddings") removed that exact blocker once `OllamaBrain` added a local, genuinely free embeddings endpoint, and built the feature — this earlier row was just never updated to match. Opt-in via `OLLAMA_EMBEDDING_MODEL` (unset by default, so behavior is byte-for-byte unchanged with no embeddings client configured); only `SEARCH_NEWS` is currently marked `semanticCacheable`. |
 
 ---
 
@@ -103,7 +175,7 @@ All Swift source under `agents/imac/JarvisAgent/Sources/JarvisAgent/` (except `m
 | 70 | wake word reliability | REQUIRES_REAL_MAC_VALIDATION | `WakeWordListener.swift` (`wakePhrasePatterns`, substring match) | Real-Mac tuning; add fuzzy matching/confidence threshold. | Substring-only matching, no confidence score — real accuracy is entirely unverified without a real Mac. |
 | 71 | wake diagnostics | REQUIRES_REAL_MAC_VALIDATION | `Logging/Logger.swift` (wraps `os_log`) — code exists and is reasonably structured | Add `print()`-visible diagnostics or a status-bar indicator for wake-word-listener state, since `os_log` output is invisible in a plain terminal, then verify on a real Mac. | `JARVIS_AUDIT.md` Phase 11 identifies this as the single most likely cause of "silent" wake-word failures — all diagnostic logging goes through `os_log`, not stdout. |
 | 72 | voice state machine | PARTIALLY_EXISTS | `WakeWordListener.swift` (implicit idle/listening/command-capture states via `pendingCommandText`/silence timer) | Formalize into an explicit state machine, surface state to UI. | States exist implicitly in code flow, not as a named enum/exposed status. |
-| 73 | barge-in state | PARTIALLY_EXISTS | Browser hologram voice path has a merged barge-in feature (commit `6f27460`/`bb1a9f6`, "Voice mode: barge-in + real Hebrew replies") | Add equivalent barge-in/interrupt handling inside `WakeWordListener.swift`'s own flow — none found there. | Two separate voice paths (browser vs. Mac Agent) with barge-in only confirmed in the browser one. |
+| 73 | barge-in state | code-ready, pending real-Mac validation | Browser hologram voice path has a merged barge-in feature (commit `6f27460`/`bb1a9f6`); Mac Agent now also has `agents/imac/JarvisAgent/Sources/JarvisAgent/Voice/SpeechEchoClassifier.swift`, wired into `WakeWordListener.swift` | Real-Mac test of the Mac Agent's own barge-in/echo-rejection path (the browser path is independently testable in a real browser today). | **Re-verified 2026-10-27 — stale, corrected.** This row previously said barge-in was "none found" inside `WakeWordListener.swift`'s own flow — a later PR ("Add self-echo rejection and barge-in to the Mac agent's voice loop") added exactly that: `SpeechEchoClassifier.swift`, matching the token-overlap/stem-match heuristic design `CLAUDE.md`'s wishlist notes called out from reviewing `ethanplusai/jarvis`. Like the rest of the Mac Agent section, this is unvalidated on real hardware — code-ready, not hardware-proven. |
 | 74 | real barge-in test | REQUIRES_REAL_MAC_VALIDATION | (browser path is testable in a real browser, not Mac-specific) | Manually validate barge-in in both the browser hologram and, once built, the Mac Agent voice path. | See #73. |
 | 75 | audio device detection | MISSING | none found | Add output-device detection/selection (currently relies on system default). | `JARVIS_AUDIT.md` Phase 11 explicitly flags "no verification the Mac's actual output device... is one a human can hear" as an unaddressed risk. |
 | 76 | audio recovery | PARTIALLY_EXISTS | `WakeWordListener.swift` speech-recognition task restarts itself on error/`.isFinal` | Add recovery for a *persistently* failing recognizer (today it silently restart-loops with no user-visible signal) and for audio-engine-level failures. | Self-healing exists for one specific failure mode; not for permission-revoked-mid-session or device-disconnect cases. |
@@ -170,13 +242,13 @@ All Swift source under `agents/imac/JarvisAgent/Sources/JarvisAgent/` (except `m
 | 123 | Weather-Aware Planning | PARTIALLY_EXISTS | `src/weather/OpenMeteoClient.ts`, `GetWeatherTool`/`GetWeatherForecastTool` | Add proactive weather-based suggestions tied into morning briefing/calendar. | Weather data is available on-demand via tools; not proactively cross-referenced with calendar/plans. |
 | 124 | Meeting Preparation | MISSING | none | Build a pre-meeting briefing generator (pulls calendar event + related email/notes). | No such feature found; Calendar/Gmail tools exist independently with no cross-referencing logic. |
 | 125 | Post-Meeting Follow-Up | MISSING | none | Build a post-meeting follow-up prompt/automation. | No such feature exists. |
-| 126 | Commitment Tracking | MISSING | none | Build extraction/tracking of promises made in conversation. | No such feature exists; would need NLP extraction over conversation history. |
-| 127 | Promise Tracker | MISSING | none | Same as #126, likely the same underlying feature. | Duplicate/overlapping with #126 — build once. |
-| 128 | Follow-Up Engine | MISSING | none | Build on top of #126/#127. | No follow-up scheduling logic exists beyond the generic automation-rule mechanism a user could manually configure. |
-| 129 | Stale Task Detection | MISSING | none — blocked on #2 (no task state machine) | Build once tasks have a persisted state/age to check. | Nothing to detect staleness of without a task model. |
+| 126 | Commitment Tracking | ALREADY_EXISTS_AND_GOOD | `src/commitments/CommitmentStore.ts`, `src/tools/commitments/CreateCommitmentTool.ts`, `ListCommitmentsTool.ts`, `FulfillCommitmentTool.ts` | None | **Re-verified 2026-10-27 — stale, corrected.** A real, wired (`src/index.ts` constructs `CommitmentStore`) commitment-tracking system exists — this row's "would need NLP extraction over conversation history" framing is no longer accurate; it's a tool-call-driven store (Claude calls `CREATE_COMMITMENT` when a promise is made), not passive extraction, but the feature itself is built. |
+| 127 | Promise Tracker | ALREADY_EXISTS_AND_GOOD | Same as #126 | None | **Re-verified 2026-10-27 — stale, corrected.** Confirmed the same underlying feature as #126, as this row's own original note predicted. |
+| 128 | Follow-Up Engine | MISSING | `src/commitments/getStaleCommitments.ts`/`staleCommitmentsNote.ts` surface stale commitments into context, but nothing proactively re-engages/follows up beyond that passive surfacing | Build real follow-up scheduling/re-prompting on top of #126/#127, which now exist. | Unchanged in substance — the dependency (#126/#127) is no longer missing, but an active follow-up engine on top of it still isn't built; only passive context-surfacing is. |
+| 129 | Stale Task Detection | PARTIALLY_EXISTS | `src/commitments/getStaleCommitments.ts`, `staleCommitmentsNote.ts` | Extend staleness detection to the Task State Machine (#2, now built) and Goal Engine (#26, now built) — today it only covers commitments specifically. | **Re-verified 2026-10-27 — stale, partially corrected.** This row's "blocked on #2" reasoning predates both #2 (Task State Machine) and the commitment-tracking feature (#126/#127) existing — a narrower, commitment-specific version of this is built and surfaced into context the same way `dueRemindersNote`/`goalProgressNote` are; a general staleness check across every task type (agent tasks, goals) isn't. |
 | 130 | Smart Reminder Timing | MISSING | none | Add ML/heuristic-based optimal reminder timing (vs. user-specified `dueAt`). | `CreateReminderTool` uses exactly the `dueAt` the user/Claude specifies; no smart-timing suggestion layer. |
 | 131 | Routine Detection | MISSING | none | Build pattern detection over `ToolAuditLog`/`ConversationHistoryStore` to infer routines. | No behavioral pattern-mining exists; data (audit log, history) exists to build this on. |
-| 132 | Preference Learning | PARTIALLY_EXISTS | `MemoryStore` + `SAVE_MEMORY` tool, explicitly instructed in `systemPrompt.ts` to save durable facts/preferences | Add automatic preference inference (today it's Claude explicitly choosing to call `SAVE_MEMORY`, not passive learning from behavior). | Real, working, but entirely tool-call-driven, not passive/automatic. |
+| 132 | Preference Learning | ALREADY_EXISTS_NEEDS_UPGRADE | `src/memory/MemoryExtractor.ts`, wired in `src/index.ts` behind `config.memoryExtractionEnabled` | Enable by default / on the live deployment if desired (currently opt-in via config); extend into the "communication style" preference category `CLAUDE.md` wishlist #25 describes, which isn't a distinct category yet. | **Re-verified 2026-10-27 — stale, partially corrected.** This row's core gap — "today it's Claude explicitly choosing to call `SAVE_MEMORY`, not passive learning" — is resolved: `MemoryExtractor` (PR "Add continuous background memory extraction (Phase 1)") does real background extraction from ordinary conversation, independent of explicit `SAVE_MEMORY` calls, writing records with `source: "MODEL_INFERRED"` through the Memory Trust System (see #4 in the "Premium Agent Intelligence/Security Upgrade" section below). It's gated behind a config flag (`memoryExtractionEnabled`), not yet proven in production use. |
 | 133 | Preference Confirmation | MISSING | none | Add an explicit "I noticed X — should I remember this?" confirmation flow before saving inferred preferences. | `SAVE_MEMORY` is `SAFE_ACTION` (no confirmation) and saves are silent/unconfirmed by design today. |
 | 134 | Memory Importance Scoring | MISSING | none | Add an importance/confidence field to `MemoryStore` rows. | Confirmed absent in `JARVIS_AUDIT.md` Phase 7 and by reading `MemoryStore.ts`'s schema (`id, key, value, created_at` only). |
 | 135 | Memory Expiration | MISSING | none | Add TTL/expiration logic to `MemoryStore`. | Confirmed absent — facts persist forever until explicitly deleted (`JARVIS_AUDIT.md` Phase 7). |
@@ -184,6 +256,21 @@ All Swift source under `agents/imac/JarvisAgent/Sources/JarvisAgent/` (except `m
 ---
 
 ## Gmail/Calendar/Web (136–160)
+
+**Spotify integration — footnote added 2026-10-27, not a numbered item in
+the original 210 (it postdates this list; only referenced in passing at
+#159 below):** `src/spotify/SpotifyClient.ts`, `src/spotify/SpotifyTokenStore.ts`,
+and five tools (`PlayMusicTool`, `PauseMusicTool`, `SkipTrackTool`,
+`GetCurrentlyPlayingTool`, `UnlinkSpotifyTool`) are fully implemented and
+confirmed wired into `src/index.ts` — OAuth flow, conditional tool
+registration, and permission grants all present. The project owner was
+separately told this "isn't built yet," which is wrong: the only missing
+piece is his own `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` env vars on the
+live Fly deployment and a one-time OAuth link — a deployment/setup action,
+not a code gap. This is the second of the two known motivating cases for
+this file's 2026-10-27 re-verification pass (see the top of this document);
+it's recorded here rather than invented as a new numbered row, since it was
+never one of the original 210.
 
 | # | Feature | Status | Existing Implementation (files) | Required Work | Notes |
 |---|---|---|---|---|---|
@@ -227,9 +314,9 @@ All Swift source under `agents/imac/JarvisAgent/Sources/JarvisAgent/` (except `m
 | 166 | Disk Pressure Policy | MISSING | none | Add disk-space monitoring/alerting, especially relevant given the 1GB Fly volume holding all SQLite data. | No disk-usage checks found anywhere in the codebase. |
 | 167 | DB Lock Monitoring | MISSING | none | Add monitoring/alerting for SQLite lock contention across the many stores sharing the same process. | Not present; `JARVIS_AUDIT.md` Phase 9 notes concurrent cross-channel writes rely entirely on SQLite's own transaction semantics, untested under stress. |
 | 168 | Migration Safety | MISSING | none found — no migration framework/versioned schema files found | Add a schema-migration system (even a simple versioned-SQL-file runner) instead of `CREATE TABLE IF NOT EXISTS` scattered per store constructor. | Every store (`ReminderStore`, `CostTracker`, etc.) runs its own `CREATE TABLE IF NOT EXISTS` inline — works for additive changes, has no story for a genuine breaking schema migration. |
-| 169 | Structured Logging | MISSING | Plain `console.log`/`console.error` (Core), `os_log` via `Logger.swift` (Mac Agent) | Add a structured (JSON) logging library. | No `winston`/`pino`/structured-logging dependency found in `package.json`; confirmed plain console logging throughout. |
-| 170 | Correlation IDs | PARTIALLY_EXISTS | `requestId = randomUUID()` per tool call in `Orchestrator.runLocalTool` | Extend into a full per-turn/per-request correlation ID threaded through logs, audit rows, and WebSocket messages consistently. | A UUID exists per tool execution and is emitted in the `tool.executed` event; not confirmed as a single ID threaded across an entire multi-tool turn or across log lines. |
-| 171 | Error IDs | MISSING | none | Add unique error IDs surfaced to users for support/debugging correlation. | Errors are plain messages; no ID system found. |
+| 169 | Structured Logging | PARTIALLY_EXISTS | `src/core/logging/Logger.ts` (JSON-line `StructuredLogEntry`, `scope`/`event`/`correlationId` fields) | Migrate more existing `console.log("[jarvis] ...")` call sites to it — deliberately not a wholesale rewrite (see the class's own doc comment: "a large, risky rewrite with little payoff for a single-process personal assistant"), so most of the codebase's original plain logging is still exactly as this row described. | **Re-verified 2026-10-27 — stale, partially corrected.** A real structured JSON logger now exists and is used by new reliability-relevant call sites (schedulers, automation failures) — no external dependency (`winston`/`pino`) was added, it's a small in-house class. Still accurate that most pre-existing call sites remain plain `console.log`, by explicit design choice, not oversight. |
+| 170 | Correlation IDs | ALREADY_EXISTS_NEEDS_UPGRADE | `Logger.withCorrelationId`/`newCorrelationId` (`src/core/logging/Logger.ts`), `Orchestrator.executeToolCall(userId, toolCall, runId?)`'s `runId` parameter, `ToolAuditLog.record()`'s `toolCallId`/`runId` columns + `listByRunId()` | A known, documented double-recording quirk for agent-task tool calls (see the "observability correlation IDs" pass lower in this document) is left unfixed — out of scope for a minimal fix. | **Re-verified 2026-10-27 — stale, corrected.** The per-turn `runId` (already used for `AIRouter`/`CostTracker`'s ledger) and `AgentCore`'s `taskId` are now threaded all the way through `executeToolCall` into `ToolAuditLog`, so "which tool calls happened in this run" is now a real, tested query (`listByRunId`) — this closes the exact gap the original row named ("not confirmed as a single ID threaded across an entire multi-tool turn"). |
+| 171 | Error IDs | ALREADY_EXISTS_AND_GOOD | `newErrorId()` (`src/core/logging/Logger.ts`) | None | **Re-verified 2026-10-27 — stale, corrected.** `Logger.error()` stamps a stable `err_<uuid>` onto every error-level structured log entry and returns it, specifically designed to be safe to surface to a user ("something went wrong, reference errN for support") without leaking the error's real message/stack — exactly what this row asked for. Used today at least by the automation-rule failure path in `src/index.ts`; not yet threaded through every error surface in the codebase. |
 | 172 | Health Endpoint | ALREADY_EXISTS_AND_GOOD | `GET /health` (`JarvisWebSocketServer.ts` line ~495) | None | Used by both Fly's health checks and the Dockerfile's `HEALTHCHECK`, confirmed working per `JARVIS_AUDIT.md` Phase 13. |
 | 173 | Readiness Endpoint | MISSING | none — only `/health` exists, no separate `/ready` | Add a distinct readiness probe if startup has meaningful "not ready yet" phases (SQLite migrations, initial config load). | Confirmed via grep: no `/ready`/readiness route found. |
 | 174 | Provider Health Endpoint | MISSING | none | Add a `/status`-adjacent endpoint reporting per-AI-provider health/latency. | `GET /status` exists but doesn't report AI-provider-specific health (matches #6's finding that no provider health tracking exists at all). |
@@ -237,7 +324,7 @@ All Swift source under `agents/imac/JarvisAgent/Sources/JarvisAgent/` (except `m
 | 176 | Scheduler Health | MISSING | none | Add a health view showing each of the 6 `setInterval` schedulers' last-run time/status. | No scheduler-health surface exists; schedulers run silently unless they explicitly log/notify on failure. |
 | 177 | Automation Failure Alerts | PARTIALLY_EXISTS | Automation-rule scheduler catches failures and logs to console + `ActivityLog` | Add a user-facing push (Telegram/native notification) on automation failure, matching the wake-up-call scheduler's pattern. | This is the same gap as item #18/`JARVIS_AUDIT.md` gap #3 — confirmed still unaddressed in current `src/index.ts`. |
 | 178 | Error Metrics | MISSING | none | Add aggregated error-rate metrics/dashboarding. | `ToolAuditLog` records individual failures but nothing aggregates them into a rate/metric. |
-| 179 | Latency Metrics | MISSING | none | Add latency tracking for brain calls and tool calls. | Confirmed absent, consistent with #43. |
+| 179 | Latency Metrics | PARTIALLY_EXISTS | `CostTracker`'s AI Cost Ledger `latencyMs` column (per AI-provider call, since the batch-3 pass), surfaced in the Command Center's Cost Analytics/Performance panels | Add per-*tool*-execution latency specifically — today only AI-provider-call latency is tracked, not how long an individual tool call (Gmail, Calendar, a device tool) took. | **Re-verified 2026-10-27 — stale, partially corrected.** This row previously said latency tracking was fully absent, "consistent with #43" — but #43 (Provider Latency Tracking) is itself now corrected to ALREADY_EXISTS_AND_GOOD above, and the same underlying data answers part of this row too. This document's own #193 (Performance Analytics) already makes exactly this AI-call-vs-tool-call distinction; this row was just never updated to match. |
 | 180 | Coverage Report | MISSING | none — `package.json`'s `test` script is plain `bun test`, no coverage flag/config found | Add `bun test --coverage` to CI and a coverage-reporting step. | Confirmed by reading `package.json`; no coverage tooling configured. |
 | 181 | Integration Tests | ALREADY_EXISTS_AND_GOOD | `tests/integration/*.test.ts` — 20 files covering orchestrator, backup, dashboard, pairing, lockdown, device heartbeat, WebSocket protocol, OAuth flows, etc. | None (ongoing maintenance as new features land) | Real, substantial in-process integration coverage, confirmed by file listing and `JARVIS_AUDIT.md` Phase 4. |
 | 182 | Provider Contract Tests | PARTIALLY_EXISTS | `tests/brain/ClaudeBrain.test.ts`, `GroqBrain.test.ts`, `AIRouter.test.ts`, `AIProviderRegistry.test.ts` (all mocked) | Add real-API contract tests (run manually/rarely, not in every CI run) to catch provider API shape drift. | Solid mocked-request/response-shape tests exist; none call the real Anthropic/Groq APIs (consistent with `JARVIS_AUDIT.md` Phase 4's finding for every external-API test in the suite). |
@@ -297,13 +384,13 @@ never constructed outside tests, so no real conversation ever drove it).
 
 | Status | Count |
 |---|---|
-| ALREADY_EXISTS_AND_GOOD | 40 |
-| ALREADY_EXISTS_NEEDS_UPGRADE | 12 |
+| ALREADY_EXISTS_AND_GOOD | 51 |
+| ALREADY_EXISTS_NEEDS_UPGRADE | 15 |
 | PARTIALLY_EXISTS | 41 |
-| MISSING | 94 |
-| REQUIRES_REAL_MAC_VALIDATION (including 5 "code-ready, pending real-Mac validation" rows) | 22 |
+| MISSING | 80 |
+| REQUIRES_REAL_MAC_VALIDATION (including 6 "code-ready, pending real-Mac validation" rows) | 23 |
 | REQUIRES_USER_SETUP | 0 (see note) |
-| NOT_WORTH_IMPLEMENTING | 1 |
+| NOT_WORTH_IMPLEMENTING | 0 |
 | BLOCKED | 0 (see note) |
 | **Total** | **210** |
 
@@ -311,7 +398,11 @@ never constructed outside tests, so no real conversation ever drove it).
 hand-tallied. Updated 2026-09-21 after the Command Center/Premium Polish pass (#186-199, and status
 corrections to #200-210) — the original counts above this note (26/13/47/107/16/1) predate that pass;
 see the "2026-09-21 re-audit note" under Premium Polish for what changed and why several rows moved
-categories.)
+categories. **Updated again 2026-10-27** after this file's own re-verification pass found 19 rows whose
+status had silently gone stale against later passes/PRs lower in this same document — see the dated
+section at the top of this file for the full list and reasoning; net effect: +11 ALREADY_EXISTS_AND_GOOD,
++3 ALREADY_EXISTS_NEEDS_UPGRADE, +1 REQUIRES_REAL_MAC_VALIDATION, -14 MISSING, -1 NOT_WORTH_IMPLEMENTING,
+PARTIALLY_EXISTS net unchanged at 41 despite 8 individual rows moving in or out of it.)
 
 **Note on REQUIRES_USER_SETUP:** no item was given this as its *primary* status — where user setup is a real factor (Twilio activation for #158, Telegram config for #116's actual delivery, Google OAuth for Gmail/Calendar items), the underlying feature is already built in code and gated by config per `JARVIS_AUDIT.md` Phase 3/13, so the more useful classification was the code-level status (e.g. ALREADY_EXISTS_AND_GOOD or MISSING) with the setup dependency called out in the note, rather than forcing every config-gated feature into REQUIRES_USER_SETUP and losing the code-level distinction the roadmap actually needs.
 
