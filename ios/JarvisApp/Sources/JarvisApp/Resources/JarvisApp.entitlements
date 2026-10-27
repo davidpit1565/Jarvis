@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	Deliberately empty beyond this comment, for now — kept as a real file
+	(not omitted) because App Store Connect / Xcode signing wants an
+	entitlements file to attach capabilities to as they're added later.
+
+	App Intents / App Shortcuts (Intents/JarvisIntents.swift) need NO
+	entitlement here — unlike the legacy SiriKit Intents framework (which
+	needed a "Siri" capability + an Intents Extension target), the modern
+	App Intents framework (iOS 16+) exposes shortcuts directly from the
+	main app target with no extra entitlement or extension. This is a real
+	API-shape difference from older "SiriKit Intents" patterns, confirmed
+	against Apple's own current App Intents documentation before writing
+	this file — not a corner cut.
+
+	Keychain access (Identity/KeychainStore.swift) also needs no entry
+	here: `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` with no
+	`kSecAttrAccessGroup` uses this app's own default, implicit keychain
+	access group (derived from its bundle identifier / app ID prefix by
+	the OS), which every app gets for free — an explicit
+	"keychain-access-groups" entitlement is only needed to SHARE a keychain
+	item across multiple apps/extensions, which this app doesn't do.
+	-->
+</dict>
+</plist>

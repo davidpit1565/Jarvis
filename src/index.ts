@@ -32,6 +32,8 @@ import { readFileBytesTool } from "@/tools/system/ReadFileBytesTool";
 import { listRecentPhotosTool } from "@/tools/system/ListRecentPhotosTool";
 import { writeFileTool } from "@/tools/system/WriteFileTool";
 import { captureScreenshotTool } from "@/tools/system/CaptureScreenshotTool";
+import { openCameraTool } from "@/tools/system/OpenCameraTool";
+import { closeCameraTool } from "@/tools/system/CloseCameraTool";
 import { lookAtScreenTool } from "@/tools/system/LookAtScreenTool";
 import { scheduleMacNotificationTool } from "@/tools/system/ScheduleMacNotificationTool";
 import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
@@ -635,6 +637,8 @@ function main() {
   toolRegistry.registerTool(listRecentPhotosTool);
   toolRegistry.registerTool(writeFileTool);
   toolRegistry.registerTool(captureScreenshotTool);
+  toolRegistry.registerTool(openCameraTool);
+  toolRegistry.registerTool(closeCameraTool);
   toolRegistry.registerTool(lookAtScreenTool);
   toolRegistry.registerTool(scheduleMacNotificationTool);
   toolRegistry.registerTool(composeEmailDraftTool);

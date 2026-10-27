@@ -1,0 +1,47 @@
+# XcodeGen project spec — see ../README.md for why this exists instead of
+# a hand-written .xcodeproj/project.pbxproj. Run `xcodegen generate` in
+# this directory (ios/JarvisApp/) to produce JarvisApp.xcodeproj.
+#
+# NEVER RUN in this sandbox (no xcodegen, no Xcode) — this file's own YAML
+# syntax is the only thing checked here; whether it actually produces a
+# valid, buildable .xcodeproj is unverified until a real machine runs it.
+
+name: JarvisApp
+options:
+  bundleIdPrefix: com.jarvis
+  deploymentTarget:
+    iOS: "26.0" # Liquid Glass (.glassEffect(), GlassEffectContainer) requires iOS 26+ — see UI/RootView.swift's header comment.
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    TARGETED_DEVICE_FAMILY: "1" # iPhone only — no iPad-specific layout work done in this first pass.
+    DEVELOPMENT_TEAM: "" # Fill in with David's real Apple Developer Team ID before building/signing.
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  JarvisApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/JarvisApp
+    info:
+      path: Sources/JarvisApp/Resources/Info.plist
+    entitlements:
+      path: Sources/JarvisApp/Resources/JarvisApp.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jarvis.app
+        PRODUCT_NAME: JarvisApp
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_PREVIEWS: true
+    capabilities:
+      # App Intents/App Shortcuts need no explicit capability here — see
+      # JarvisApp.entitlements' own comment. Nothing else in this first
+      # pass (camera, microphone, speech, Keychain) needs a project
+      # capability either; they're all plain Info.plist usage-description
+      # entries + runtime permission requests.
+      {}
