@@ -71,6 +71,21 @@ const DEFAULT_QUERY_LIMIT = 200;
 const SEMANTIC_MEMORY_SIMILARITY_THRESHOLD = 0.5;
 
 /**
+ * Scoped Fact-Consolidation (2026-10-27): `flagAmbiguousUpdate()` below
+ * extends `memory_history` the same way the Memory Poisoning Defense does
+ * — a `flagged_conflict = 1` row surfaced via `getConflicts()` — but for a
+ * different situation: `MemoryExtractor`'s extraction call now sees a
+ * bounded digest of existing memories and can recognize a new fact as a
+ * confident update of one (it then just reuses that key directly, handled
+ * entirely by the upsert/trust-rank logic below) or an AMBIGUOUS possible
+ * update it isn't sure about, which gets flagged here instead of silently
+ * merged or silently dropped. This is a bounded, best-effort improvement
+ * over pure exact-key matching, not a general solution to memory
+ * contradiction/consolidation (see MemoryExtractor's own doc comment and
+ * CLAUDE.md's dated note for the research this responds to).
+ */
+
+/**
  * Memory Poisoning Defense: how much a source is trusted, highest first.
  * A write only ever overwrites an existing value for the same key when its
  * trust rank is >= the existing record's — a lower-rank write conflicting
@@ -601,6 +616,45 @@ export class MemoryStore {
       )
       .all(...(key ? [key] : [])) as Array<Omit<MemoryHistoryEntry, "flaggedConflict"> & { flaggedConflict: number }>;
     return rows.map((row) => ({ ...row, flaggedConflict: Boolean(row.flaggedConflict) }));
+  }
+
+  /**
+   * Scoped Fact-Consolidation (2026-10-27 — see CLAUDE.md's dated note for
+   * the research context this responds to). Records that a fact JUST SAVED
+   * under `newKey` (already written to its own row by the caller — this
+   * method never touches it) might be an update to `existingKey`'s value,
+   * without `MemoryExtractor` being confident enough to just reuse
+   * `existingKey` outright (a confident update instead directly reuses the
+   * existing key as the save's own `key`, which goes through the ordinary
+   * upsert/trust-rank path above — this method is ONLY for the genuinely
+   * ambiguous case).
+   *
+   * This is NOT a Memory Poisoning Defense rejection: nothing was blocked,
+   * the new fact is already live under its own key. It's a visible
+   * breadcrumb — written into the SAME `memory_history` table, with
+   * `flagged_conflict = 1` so it surfaces through the existing
+   * `getConflicts()` audit trail rather than needing a new one — flagging
+   * "these two memories might be about the same underlying thing, a human
+   * or a future pass should look." `existingKey`'s own record is left
+   * completely untouched either way. A no-op if `existingKey` no longer
+   * exists (e.g. deleted between extraction and this write).
+   */
+  flagAmbiguousUpdate(existingKey: string, newKey: string, newValue: string, newTrust: MemoryTrust): void {
+    const existing = this.getByKey(existingKey);
+    if (!existing) return;
+    this.db
+      .query(
+        `INSERT INTO memory_history (id, memory_key, old_value, new_value, changed_at, old_trust, new_trust, flagged_conflict) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+      )
+      .run(
+        randomUUID(),
+        existingKey,
+        existing.value,
+        `${newValue} (saved separately as new memory key "${newKey}" — not auto-merged; review whether it supersedes this value)`,
+        new Date().toISOString(),
+        existing.source,
+        newTrust
+      );
   }
 
   delete(id: string): boolean {

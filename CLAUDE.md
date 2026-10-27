@@ -749,6 +749,35 @@ noting: rigorous research on "what makes an assistant feel personal" barely exis
   without saying "I used to work at X"). Reasonable to leave as-is for now; flagging because it's
   a real, named, current research gap rather than something anyone has actually solved.
 
+**Update (2026-10-27, same day): built a scoped fix for the one gap above that was concretely
+actionable — the exact-key-only limit of the Memory Poisoning Defense, not the STALE/no-negation
+problem itself.** David asked directly whether the "implicit update, different key or wording"
+gap named above could be improved, and said to build it. What shipped (`src/memory/MemoryStore.ts`'s
+new `flagAmbiguousUpdate()`, `src/memory/MemoryExtractor.ts`'s `buildExistingMemoriesSection`):
+the extraction call — previously completely blind to existing memory, per this same research
+pass's own finding above — now gets a small, bounded digest (≤30, most-recent-first, excluding
+`temporary`/`task`/`action` categories) of the user's current active memories folded into its
+*existing* single prompt, no second LLM call. It can then: (a) recognize a new fact as a confident
+update of an existing one stated differently (e.g. "I live in Haifa" → "I just moved to Tel Aviv"
+— no shared words, so the pre-existing lexical `findNearDuplicateKey` would never catch this) and
+reuse that memory's exact key directly, which needs no new machinery at all — it flows straight
+through `MemoryStore.save()`'s pre-existing upsert/trust-rank/`memory_history` logic, including
+the Memory Poisoning Defense still correctly blocking a BACKGROUND_INFERRED "update" from
+silently overwriting a higher-trust USER_STATED fact; or (b) flag a genuinely ambiguous case via
+a new `ambiguousUpdateOf` field — the new fact is saved under its own key (nothing lost) and a
+`flagged_conflict = 1` row is written against the candidate existing key through the exact same
+`memory_history`/`getConflicts()` audit trail the trust-rank defense already uses, rather than
+silently guessing either way. **Honest scope**: this does NOT solve FactConsolidation/STALE in
+general — Mem0's 18%/Zep's 7% vs. the 48% lexical baseline (arXiv 2606.01435) measures a much
+harder, open problem than what this addresses. This is bounded to (1) whatever's in the ≤30-item
+recent-memory digest shown to that one call, not the whole store, and (2) whichever semantic
+connections that one extraction model happens to notice on a given pass — there's no guarantee,
+scoring, or timestamp-based reasoning behind it, just a model now actually being shown the
+context it needs to make the call it was previously never even asked to make. Tests:
+`tests/memory/MemoryExtractor.test.ts`'s "Scoped Fact-Consolidation" describe block (clear-update,
+ambiguous-flag, trust-rank-still-applies, and unrelated-fact-unaffected baseline cases) and
+`tests/memory/MemoryStore.test.ts`'s `flagAmbiguousUpdate` describe block.
+
 - **The episodic/semantic/procedural distinction is real but the boundary is genuinely blurry in
   practice, not just a JARVIS implementation gap.** Even Endel Tulving, who originated the
   split, argued the two systems (episodic: what happened; semantic: durable facts) are

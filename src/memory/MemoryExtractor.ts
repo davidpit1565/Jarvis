@@ -21,14 +21,39 @@ import type { BehaviorCorrectionStore } from "@/behavior/BehaviorCorrectionStore
  *
  * Explicitly NOT in scope for this first pass (see JARVIS_MASTER_PLAN.md
  * Phase 1 / the PR description for the full reasoning):
- *   - Real semantic/embedding-based conflict detection. `findNearDuplicate`
- *     below is a plain lexical (token-overlap) heuristic, nothing more.
+ *   - `findNearDuplicateKey` below is still a plain lexical (token-overlap)
+ *     heuristic for VALUES that read almost the same, nothing more.
  *   - A learned/scored confidence model. `confidence` is just whatever
  *     number the extraction prompt asks the brain to self-report.
  *   - Retrying/escalating a failed or malformed extraction call. A miss
  *     here just means this one turn didn't get backfilled — the next
  *     turn's extraction pass (or an explicit SAVE_MEMORY) can still catch
  *     the same fact.
+ *
+ * Scoped Fact-Consolidation (added 2026-10-27, see CLAUDE.md's dated note
+ * for the research finding that motivated it — MemoryAgentBench's
+ * FactConsolidation task shows even well-funded memory products scoring
+ * worse than a dumb lexical baseline, so this is deliberately a bounded,
+ * honest improvement, NOT a claim to solve that general problem): the
+ * extraction call above used to run completely blind to existing memory —
+ * it only ever saw the one raw exchange. `buildExistingMemoriesSection`
+ * now hands it a small, bounded digest of the user's current active
+ * memories, so the SAME call can recognize when a new fact is really an
+ * existing one restated differently (e.g. "I live in Haifa" -> "I just
+ * moved to Tel Aviv" — no shared words at all, so `findNearDuplicateKey`'s
+ * token overlap would never catch this) and either:
+ *   - reuse that memory's EXISTING key outright, when confident — this
+ *     needs no new machinery at all, it flows straight through
+ *     `MemoryStore.save()`'s existing upsert/trust-rank/history logic; or
+ *   - flag it as an AMBIGUOUS possible update via `ambiguousUpdateOf`
+ *     (`MemoryStore.flagAmbiguousUpdate`) when it isn't sure the new fact
+ *     truly supersedes the old one rather than merely being related to it
+ *     — never silently guessed either way.
+ * This only ever catches a match against the bounded, recent slice of
+ * memories actually shown to the model in that one call, and it's only as
+ * good as the extraction model's own judgment on each pass — it is a real,
+ * scoped improvement over pure exact-key matching, not semantic conflict
+ * detection over the whole store or a general fact-consolidation solution.
  *
  * Correction Learning (same PR that added `priorAction`/`correctionStore`
  * below): this same background pass is also where behavioral corrections
@@ -49,6 +74,15 @@ interface ExtractedFact {
   importance?: MemoryImportance;
   /** 0 (weak guess) .. 1 (near-certain), self-reported by the extraction call. */
   confidence?: number;
+  /**
+   * Scoped Fact-Consolidation: set by the extraction call when it suspects
+   * (but isn't confident enough to assert outright by just reusing the key)
+   * that this fact is an update to an EXISTING memory key shown to it in
+   * `buildExistingMemoriesSection` — see this module's doc comment. Never
+   * set alongside a `key` that already equals this value (that would just
+   * be a confident update, which doesn't need this field at all).
+   */
+  ambiguousUpdateOf?: string;
 }
 
 /**
@@ -139,7 +173,50 @@ Rules (follow strictly):
 - If nothing is worth remembering, respond with exactly: []
 
 Respond with ONLY a JSON array (no prose, no markdown fences), each fact entry shaped exactly like:
-{"key": "...", "value": "...", "category": "fact|preference|project|decision|action|task|temporary|uncertain", "importance": 1-5, "confidence": 0-1}`;
+{"key": "...", "value": "...", "category": "fact|preference|project|decision|action|task|temporary|uncertain", "importance": 1-5, "confidence": 0-1, "ambiguousUpdateOf": "<existing key, ONLY for the ambiguous-update case described below>"}`;
+
+/**
+ * How many existing memories are ever shown to the extraction call for the
+ * Fact-Consolidation update check — see `buildExistingMemoriesSection`. A
+ * small, bounded digest (same "bounded prompt content, not a data query"
+ * discipline as `MAX_PREFERENCES_FOR_CONFLICT_CHECK`/`goalProgressNote.ts`'s
+ * MAX_GOALS_IN_NOTE): large enough to usually include whatever's actually
+ * relevant to one fresh exchange, small enough that this never meaningfully
+ * grows the cost of the one extraction call it's folded into.
+ */
+const MAX_EXISTING_MEMORIES_FOR_UPDATE_CHECK = 30;
+
+/**
+ * Scoped Fact-Consolidation (see this module's doc comment): appended
+ * whenever the user already has at least one active memory, so the SAME
+ * extraction call that pulls new facts out of the exchange can also check
+ * them against a bounded, recent slice of what's already on record —
+ * without this, a fact like "I just moved to Tel Aviv" has no way to know
+ * an existing "user.location: lives in Haifa" memory even exists, let alone
+ * that it's the same thing changing.
+ */
+function buildExistingMemoriesSection(existing: Array<{ key: string; value: string }>): string {
+  const lines = existing.map((m) => `- ${m.key}: ${m.value}`).join("\n");
+  return `
+
+Existing memories already on record for this user (most recent first; for the update check below ONLY — do not
+re-extract any of these as new facts just because they're listed here):
+${lines}
+
+Bounded update check (this only ever looks at the list above, nothing else that might exist in the user's full
+memory store): for each fact you extract, consider whether it's the SAME underlying thing as one of the existing
+memories above, just stated differently or changed over time (e.g. where the user lives, a job, a status, a
+standing preference that changed) — not a new, separate fact that merely touches a similar topic.
+- If you are CONFIDENT it's the same thing now different (e.g. "I live in Haifa" -> "I just moved to Tel Aviv"),
+  reuse that EXISTING memory's exact key as this fact's own "key" instead of inventing a new one, so the update
+  properly replaces the old value instead of sitting beside it as an unrelated-looking duplicate.
+- If you suspect a connection to one of the existing memories above but are NOT confident it's the same fact
+  changing (it could instead be new, additional information that doesn't actually replace anything), do NOT reuse
+  that key — give the fact its own new key as normal, but also set "ambiguousUpdateOf" to that existing key, so it
+  gets flagged for review instead of being silently merged or silently kept as an unrelated-looking duplicate.
+- If a fact has no real relationship to anything listed above, extract it exactly as you normally would and leave
+  "ambiguousUpdateOf" out entirely.`;
+}
 
 /**
  * Appended only when a `PriorAction` is known — see this module's doc
@@ -348,19 +425,32 @@ export class MemoryExtractor implements MemoryExtractorLike {
   private async run(userId: string, userMessage: string, assistantReply: string, priorAction?: PriorAction): Promise<void> {
     const exchange = `User: ${userMessage}\n\nJARVIS: ${assistantReply}`;
 
+    // One local read, reused below for both the Fact-Consolidation digest
+    // (always) and the correction conflict-check's preference list (only
+    // when priorAction is known) — no extra store round-trip either way.
+    const activeMemories = this.memoryStore.getActive();
+
     // Only fetched/built when there's a prior action to possibly correct —
     // see `buildCorrectionSection`'s doc comment for why this whole section
     // is conditional rather than always appended.
     const preferenceList = priorAction
-      ? this.memoryStore
-          .getActive()
-          .filter((record) => record.category === "preference")
-          .slice(0, MAX_PREFERENCES_FOR_CONFLICT_CHECK)
-          .map((record) => record.value)
+      ? activeMemories.filter((record) => record.category === "preference").slice(0, MAX_PREFERENCES_FOR_CONFLICT_CHECK).map((record) => record.value)
       : [];
-    const systemPrompt = priorAction
-      ? `${BASE_EXTRACTION_PROMPT}${buildCorrectionSection(priorAction, preferenceList)}`
-      : BASE_EXTRACTION_PROMPT;
+
+    // Fact-Consolidation digest: excludes categories that are inherently
+    // short-lived/one-off ("temporary", "task", "action") and therefore not
+    // the kind of durable, evolving fact this update check is for — an open
+    // task or a one-off completed action isn't "the same thing, changed
+    // over time" the way a location/job/preference is.
+    const existingMemories: Array<{ key: string; value: string }> = activeMemories
+      .filter((record) => record.category !== "temporary" && record.category !== "task" && record.category !== "action")
+      .slice(0, MAX_EXISTING_MEMORIES_FOR_UPDATE_CHECK)
+      .map((record) => ({ key: record.key, value: record.value }));
+
+    const systemPrompt =
+      BASE_EXTRACTION_PROMPT +
+      (existingMemories.length > 0 ? buildExistingMemoriesSection(existingMemories) : "") +
+      (priorAction ? buildCorrectionSection(priorAction, preferenceList) : "");
 
     const request: BrainRequest = {
       messages: [{ role: "user", content: exchange }],
@@ -481,5 +571,18 @@ export class MemoryExtractor implements MemoryExtractorLike {
     });
 
     this.eventBus?.emit("memory.extraction.wrote", { key: result.key, category: fact.category, applied: !result.conflict });
+
+    // Scoped Fact-Consolidation (see module doc comment and
+    // `buildExistingMemoriesSection`): the extraction call flagged this fact
+    // as POSSIBLY related to an existing memory it wasn't confident enough
+    // to treat as a straight update. A confident update already reused the
+    // existing key directly (handled above by `save()`'s own upsert logic,
+    // no special-casing needed) — this only ever fires for the genuinely
+    // ambiguous case, and never touches the candidate key's own record.
+    const ambiguousKey = typeof fact.ambiguousUpdateOf === "string" ? fact.ambiguousUpdateOf.trim() : "";
+    if (ambiguousKey && ambiguousKey.toLowerCase() !== result.key.toLowerCase()) {
+      this.memoryStore.flagAmbiguousUpdate(ambiguousKey, result.key, fact.value, "BACKGROUND_INFERRED");
+      this.eventBus?.emit("memory.extraction.ambiguousUpdateFlagged", { candidateKey: ambiguousKey, newKey: result.key });
+    }
   }
 }

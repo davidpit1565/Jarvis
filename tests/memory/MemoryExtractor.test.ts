@@ -368,6 +368,149 @@ describe("MemoryExtractor", () => {
     });
   });
 
+  describe("Scoped Fact-Consolidation (semantic update check, 2026-10-27)", () => {
+    test("baseline: a totally unrelated new fact is unaffected when existing memories are present", async () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.location", value: "lives in Haifa", category: "fact", source: "USER_STATED" });
+      const brain = new ScriptedBrain([
+        jsonResponse('[{"key":"user.hobby.piano","value":"plays classical piano","category":"fact","confidence":0.9}]'),
+      ]);
+      const extractor = new MemoryExtractor(brain, store);
+
+      extractor.extractAndStore("user-1", "I also play piano", "Noted, sir.");
+      await flush();
+
+      // The existing, unrelated memory is untouched...
+      expect(store.getByKey("user.location")?.value).toBe("lives in Haifa");
+      // ...and the new, unrelated fact was saved as its own ordinary record.
+      expect(store.getByKey("user.hobby.piano")?.value).toBe("plays classical piano");
+      // No flagged conflict of any kind was raised for an unrelated fact.
+      expect(store.getConflicts()).toHaveLength(0);
+
+      // The extraction call was shown the existing-memories digest (the
+      // mechanism this feature relies on), proving it had the visibility to
+      // make this call, not that it was never given the chance.
+      expect(brain.requests[0]?.context).toContain("user.location: lives in Haifa");
+      store.close();
+    });
+
+    test("clear update: a confident semantic update reuses the existing key and the old value is visible in memory_history", async () => {
+      const store = new MemoryStore(":memory:");
+      // Saved as BACKGROUND_INFERRED (e.g. from an earlier extraction pass,
+      // not an explicit SAVE_MEMORY) so the Memory Poisoning Defense's
+      // trust-rank check (equal-trust always overwrites) doesn't get in the
+      // way of observing THIS feature in isolation — see the test below for
+      // how a higher-trust (USER_STATED) existing value is correctly left
+      // to that separate, pre-existing defense instead.
+      store.save({ key: "user.location", value: "lives in Haifa", category: "fact", source: "BACKGROUND_INFERRED" });
+      // The extraction model recognizes "moved to Tel Aviv" as the same
+      // underlying fact (where David lives) and reuses the EXISTING key
+      // directly, exactly as buildExistingMemoriesSection instructs it to.
+      const brain = new ScriptedBrain([
+        jsonResponse('[{"key":"user.location","value":"just moved to Tel Aviv","category":"fact","confidence":0.9}]'),
+      ]);
+      const extractor = new MemoryExtractor(brain, store);
+
+      extractor.extractAndStore("user-1", "I just moved to Tel Aviv", "Congratulations on the move, sir.");
+      await flush();
+
+      // The update won...
+      expect(store.getByKey("user.location")?.value).toBe("just moved to Tel Aviv");
+      // ...no second, duplicate "location" record was created...
+      expect(store.getActive().filter((r) => r.value.includes("Haifa") || r.value.includes("Tel Aviv"))).toHaveLength(1);
+      // ...and the old value is still visible, not silently lost, via the
+      // same memory_history audit trail every other update already uses.
+      const history = store.getHistory("user.location");
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({
+        oldValue: "lives in Haifa",
+        newValue: "just moved to Tel Aviv",
+        flaggedConflict: false,
+      });
+      store.close();
+    });
+
+    test("a confident semantic update of a higher-trust (USER_STATED) existing value still goes through the Memory Poisoning Defense, not a silent overwrite", async () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.location", value: "lives in Haifa", category: "fact", source: "USER_STATED" });
+      const brain = new ScriptedBrain([
+        jsonResponse('[{"key":"user.location","value":"just moved to Tel Aviv","category":"fact","confidence":0.9}]'),
+      ]);
+      const extractor = new MemoryExtractor(brain, store);
+
+      extractor.extractAndStore("user-1", "I just moved to Tel Aviv", "Congratulations on the move, sir.");
+      await flush();
+
+      // Reusing the key doesn't bypass the Memory Poisoning Defense: a
+      // BACKGROUND_INFERRED write is still never allowed to overwrite a
+      // higher-trust USER_STATED value for the same key — the existing
+      // trust-rank rejection fires exactly as it already does for any other
+      // same-key write, and the attempt is still flagged in memory_history.
+      expect(store.getByKey("user.location")?.value).toBe("lives in Haifa");
+      expect(store.getConflicts("user.location")).toHaveLength(1);
+      store.close();
+    });
+
+    test("ambiguous case: a suspected-but-unconfident update is flagged, not silently guessed either way", async () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.job", value: "Software Engineer at Acme", category: "fact", source: "USER_STATED" });
+      // The model isn't confident "consulting for Acme on the side" replaces
+      // the existing job fact (it might just be additional, unrelated
+      // information) — so it gives the new fact its own key and flags it.
+      const brain = new ScriptedBrain([
+        jsonResponse(
+          '[{"key":"user.side_work","value":"doing some consulting for Acme on the side","category":"fact","confidence":0.6,"ambiguousUpdateOf":"user.job"}]'
+        ),
+      ]);
+      const extractor = new MemoryExtractor(brain, store);
+
+      extractor.extractAndStore("user-1", "I'm also doing some consulting for Acme on the side", "Noted, sir.");
+      await flush();
+
+      // The original fact is left completely untouched — no silent overwrite.
+      expect(store.getByKey("user.job")?.value).toBe("Software Engineer at Acme");
+      // The new fact was still saved, under its own key — nothing was dropped.
+      expect(store.getByKey("user.side_work")?.value).toBe("doing some consulting for Acme on the side");
+      // A visible, flagged audit trail exists against the candidate key,
+      // through the exact same getConflicts() surface as a rejected
+      // trust-rank write — not a silent guess in either direction.
+      const conflicts = store.getConflicts("user.job");
+      expect(conflicts).toHaveLength(1);
+      expect(conflicts[0]?.flaggedConflict).toBe(true);
+      expect(conflicts[0]?.oldValue).toBe("Software Engineer at Acme");
+      expect(conflicts[0]?.newValue).toContain("doing some consulting for Acme on the side");
+      expect(conflicts[0]?.newValue).toContain("user.side_work");
+      store.close();
+    });
+
+    test("ambiguousUpdateOf pointing at a nonexistent key is simply ignored, not thrown", async () => {
+      const store = new MemoryStore(":memory:");
+      const brain = new ScriptedBrain([
+        jsonResponse('[{"key":"user.new_fact","value":"something new","category":"fact","ambiguousUpdateOf":"no.such.key"}]'),
+      ]);
+      const extractor = new MemoryExtractor(brain, store);
+
+      expect(() => extractor.extractAndStore("user-1", "something new", "Noted, sir.")).not.toThrow();
+      await flush();
+
+      expect(store.getByKey("user.new_fact")?.value).toBe("something new");
+      expect(store.getConflicts()).toHaveLength(0);
+      store.close();
+    });
+
+    test("the existing-memories digest is omitted entirely when the store has nothing active yet", async () => {
+      const store = new MemoryStore(":memory:");
+      const brain = new ScriptedBrain([jsonResponse("[]")]);
+      const extractor = new MemoryExtractor(brain, store);
+
+      extractor.extractAndStore("user-1", "hello", "hi there");
+      await flush();
+
+      expect(brain.requests[0]?.context).not.toContain("Existing memories already on record");
+      store.close();
+    });
+  });
+
   test("respects ZERO_COST_MODE / budget enforcement by going through the same Brain the caller supplies", async () => {
     const store = new MemoryStore(":memory:");
     class RefusingBrain implements Brain {

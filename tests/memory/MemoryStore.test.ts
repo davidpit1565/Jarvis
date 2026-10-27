@@ -547,6 +547,36 @@ describe("MemoryStore", () => {
     });
   });
 
+  describe("Scoped Fact-Consolidation — flagAmbiguousUpdate (2026-10-27)", () => {
+    test("flags an ambiguous update against the existing key without touching its value, via the same memory_history/getConflicts audit trail", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.job", value: "Software Engineer at Acme", category: "fact", source: "USER_STATED" });
+
+      store.flagAmbiguousUpdate("user.job", "user.side_work", "consulting for Acme on the side", "BACKGROUND_INFERRED");
+
+      // The existing record is completely untouched.
+      expect(store.getByKey("user.job")?.value).toBe("Software Engineer at Acme");
+      expect(store.getByKey("user.job")?.source).toBe("USER_STATED");
+
+      const conflicts = store.getConflicts("user.job");
+      expect(conflicts).toHaveLength(1);
+      expect(conflicts[0]?.flaggedConflict).toBe(true);
+      expect(conflicts[0]?.oldValue).toBe("Software Engineer at Acme");
+      expect(conflicts[0]?.newValue).toContain("consulting for Acme on the side");
+      expect(conflicts[0]?.newValue).toContain("user.side_work");
+      expect(conflicts[0]?.oldTrust).toBe("USER_STATED");
+      expect(conflicts[0]?.newTrust).toBe("BACKGROUND_INFERRED");
+      store.close();
+    });
+
+    test("flagAmbiguousUpdate against a nonexistent key is a no-op, not a throw", () => {
+      const store = new MemoryStore(":memory:");
+      expect(() => store.flagAmbiguousUpdate("no.such.key", "user.new", "something", "BACKGROUND_INFERRED")).not.toThrow();
+      expect(store.getConflicts()).toHaveLength(0);
+      store.close();
+    });
+  });
+
   describe("Performance — bounded queries (Phase 48)", () => {
     test("search() with an empty fragment ('list everything') is bounded by a default limit, not the whole table", () => {
       const store = new MemoryStore(":memory:");
