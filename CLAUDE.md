@@ -498,6 +498,46 @@ project — still explicitly **not built now**, per his own standing priority or
   dependency as the skills point above (it only exists once JARVIS can actually drive a real
   Claude Code session under his subscription), not a separately buildable capability today.
 
+## Approved for build: generalized "Proactive Watcher" (2026-10-27)
+
+David confirmed he wants this built — this is the generalization of the proactive-intelligence
+north star from his personal-background section ("I saw something that might interest you...
+without being asked"), applied beyond GitHub specifically.
+
+**What exists already (checked against real code, not assumed) that this should build on, not
+duplicate**: `src/gmail/GmailClient.ts` (his real Gmail, on-demand read only today, no proactive
+polling), `src/news/RssNewsClient.ts` (RSS news, same — on-demand only), the device-announce
+proactive-speech mechanism (PR #146, `ProactiveAnnouncer`), Twilio phone-call capability, and
+Telegram messaging. The GitHub proactive-surfacing work (in progress as of this note) is the
+first concrete instance of the exact pattern this should generalize: poll a source on an
+interval, cache what's new, decide if it's worth surfacing, surface it via the right channel.
+
+**Design intent, not yet built**:
+- A shared "watcher" abstraction — a pollable-source interface plus an urgency-to-channel
+  router — that email, news-by-topic, and GitHub (once its own PR lands) can all plug into,
+  rather than each source reimplementing its own polling/caching/surfacing loop from scratch.
+  Build this as the generalization once GitHub's own concrete instance has landed and been
+  reviewed, not in parallel with it — two independent builds of the same pattern at once would
+  likely produce contradictory designs.
+- **User-configurable watch targets**: e.g. "watch for news about X" as something David sets up
+  himself (a topic/keyword, not JARVIS deciding on its own what's worth continuously watching),
+  matching the existing GitHub pattern's explicit opt-in repo list (`GITHUB_WATCHED_REPOS`-style
+  config) rather than an open-ended "watch everything" default.
+- **Channel/urgency is an explicit, conservative design question — not JARVIS's unilateral
+  call**: default to the quietest channel (a Telegram message with a link) unless David has
+  explicitly set up a rule that a specific kind of event (e.g. "an email from a specific
+  person," "this exact keyword in the news") warrants a louder channel (live device speech, or
+  eventually a phone call). Never let the model itself decide in the moment that something is
+  "call-worthy" with no prior rule saying so — that's a real risk of JARVIS escalating over
+  something trivial in a way that's intrusive/startling, exactly the kind of thing the device-
+  announce security discussion (wishlist #19) already took seriously for a different reason.
+- **Phone is not a usable channel yet for a real reason, not just unbuilt-ness**: David has not
+  actually connected/configured a phone number for Twilio — the code path exists but the
+  channel is inert in practice today. The Watcher must treat "phone" as one of several possible
+  channels that becomes available once a number is connected, not something to build around as
+  if already live. Text (Telegram) and device-announce speech are the two channels that
+  actually work today.
+
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
 - `davidpit1565/Rudder` — the app he initially called "Decide" (that was its working
