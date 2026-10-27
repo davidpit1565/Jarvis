@@ -45,4 +45,19 @@ describe("goalProgressNote", () => {
     goalStore.create({ userId: "other-user", description: "Not yours" });
     expect(goalProgressNote(goalStore, taskStore, "u1")).toBeUndefined();
   });
+
+  test("caps the number of goals listed so the note can't grow unboundedly", () => {
+    for (let i = 0; i < 25; i++) {
+      goalStore.create({ userId: "u1", description: `Goal number ${i}` });
+    }
+
+    const note = goalProgressNote(goalStore, taskStore, "u1")!;
+    expect(note).toBeDefined();
+    const goalLines = note.split("\n").filter((line) => line.startsWith("- "));
+    expect(goalLines.length).toBeLessThan(25);
+    // Still reports the true total and says more exist, rather than
+    // silently truncating.
+    expect(note).toContain("25 active goal(s)");
+    expect(note).toMatch(/more not shown/);
+  });
 });
