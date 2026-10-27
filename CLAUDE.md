@@ -118,6 +118,41 @@ sessions/compaction. None of this is built yet unless a specific PR/commit is no
     He also mentioned seeing specific projects via Instagram videos pointing to GitHub, which
     isn't content Claude can browse directly; get the actual repo links from him directly
     when he has them, then use `add_repo` to attach the specific one(s) he wants reviewed.
+17. **Absolute zero-cost guarantee on Claude — this is not a preference, it's a hard
+    requirement, he's repeated it firmly multiple times.** `ZERO_COST_MODE=true` (already
+    exists in `src/config/index.ts`/`AIRouter.ts`) is the real answer: when set, a paid
+    provider (Claude) is NEVER called, not even as a last-resort fallback if every free
+    provider fails — the request just fails instead. This should be set on the live Fly
+    deployment once PR #144 (free-provider priority) merges. Don't frame Claude as "the
+    default brain" to him again without immediately caveating that he's opted out of ever
+    using it for cost reasons.
+18. **Google Drive integration**: generate presentations, checklists, and to-do lists
+    directly in his Drive, on request.
+19. **Advanced proactive reminders/wake-up system** — a real upgrade over today's
+    reminders + wake-up-call scheduler:
+    - JARVIS should be able to *speak a reminder live* on a chosen device (or all of them)
+      without placing a phone call — e.g. "Hey David, sorry to interrupt, but you have X"
+      spoken directly through a device's speaker. Device must be powered on; closed/locked
+      app state handling still needs the same iOS background-limits honesty as wishlist #4.
+    - If he doesn't respond, JARVIS should follow up ("did you do it?") rather than firing
+      once and moving on.
+    - He can also set up his own "automations" where JARVIS proactively starts a
+      conversation at a specific time/date with a reminder, in a tone he can tune (more
+      casual vs. more professional/diplomatic).
+    - **Security concern he explicitly raised**: if a device "wakes up" and starts talking
+      on its own, there needs to be a way to make sure only HE can meaningfully respond to
+      it — not whoever happens to be standing nearby. His proposed mechanisms, in order of
+      sophistication he wants to grow toward: (a) start with some kind of shared
+      code/passphrase between him and JARVIS ("code confirmed" style exchange) before it
+      treats a reply as really being him; (b) longer-term, voice recognition (recognizing
+      his specific voice, not just any voice saying the right words); (c) longer-term
+      still, he wants to actually evolve a private "code language" between him and JARVIS
+      over time — this is explicitly a direction he wants to grow into, not a one-time
+      feature to build and forget.
+    Research needed before building the voice-recognition piece specifically: realistic
+    free/local speaker-identification options and their actual accuracy/privacy/cost
+    tradeoffs for a single-user case — don't assume a passphrase and real voice biometrics
+    are equally easy; they're different problems.
 
 ## Other David repos worth knowing about
 
