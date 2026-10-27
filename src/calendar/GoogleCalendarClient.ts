@@ -23,12 +23,28 @@ const GOOGLE_CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calen
 // sending only — it does not grant delete or arbitrary mailbox
 // modification — and was added on the user's own explicit request,
 // reversing this feature's original read-only-by-design boundary.
+//
+// Also requests drive.file + documents + presentations, for
+// GoogleDriveClient/GoogleSlidesClient/GoogleDocsClient (CREATE_PRESENTATION/
+// CREATE_CHECKLIST). drive.file is deliberately the narrow Drive scope, not
+// full `drive` — it only grants access to files JARVIS itself creates (or
+// that the user explicitly opens with it), which is exactly what listing
+// "the presentation I made yesterday" back out needs; it does not expose
+// the rest of the user's Drive. documents/presentations are each the full
+// (not read-only) variant since creating + batchUpdate-populating a new
+// Doc/Slide requires write access.
+//
 // Existing linked accounts need to re-run GET /calendar/oauth/start to
-// pick up the new scope; a stored refresh token minted under the old,
-// narrower scope will keep working for Calendar/read Gmail but Gmail send
-// calls will fail with an insufficient-scope error until they do.
+// pick up any new scope added here; a stored refresh token minted under an
+// older, narrower scope list keeps working for whatever it already covered,
+// but a call needing a scope granted after that account last consented
+// will fail with an insufficient-scope error until the user re-links (one
+// more GET /calendar/oauth/start, choosing the SAME account again at
+// Google's consent screen — this is Google's own incremental-auth model,
+// not something JARVIS can skip).
 const GOOGLE_SCOPES =
-  "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send";
+  "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send " +
+  "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/presentations";
 
 // Refresh a little before actual expiry, so a request never straddles the
 // exact expiry instant and gets rejected mid-flight by Google's clock
