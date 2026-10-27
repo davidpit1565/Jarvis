@@ -71,6 +71,43 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate, AVSpeechSynt
     /// time `beginRecognitionTask()` starts a fresh cycle.
     private var hasAnnouncedWakePhraseThisCycle = false
 
+    /// The specific voice to prefer for English speech, before falling back
+    /// to "any Premium-tier voice installed" and then "any Enhanced-tier
+    /// voice installed" (see `bestAvailableVoice`). Named here rather than
+    /// buried inline so David can swap it for a different voice with a
+    /// one-line change once he's actually heard this on real hardware —
+    /// per CLAUDE.md wishlist #21, he wants something that sounds genuinely
+    /// human (his reference point is ChatGPT's voice mode), not a cloned
+    /// voice and not whatever system voice happens to be installed.
+    ///
+    /// "Ava (Premium)" is Apple's own Premium-tier US English voice
+    /// (identifier confirmed via Apple's own AVSpeechSynthesisVoice API
+    /// surface and widely corroborated third-party voice listings as of
+    /// macOS Sequoia/macOS 15) and is consistently cited as one of the most
+    /// natural-sounding Premium voices Apple ships — a reasonable default
+    /// pending David's own listening test. It is NOT guaranteed to be
+    /// installed: Premium/Enhanced voices are an extra download (System
+    /// Settings → Accessibility → Spoken Content → Voices), so
+    /// `bestAvailableVoice` only uses this identifier when it's actually
+    /// present in `AVSpeechSynthesisVoice.speechVoices()`, and otherwise
+    /// falls through to the quality-tier search below.
+    ///
+    /// No equivalent constant for Hebrew: as of this writing, Apple ships
+    /// only a Default-quality Hebrew voice ("Carmit") with no Enhanced or
+    /// Premium tier, so Hebrew always falls through to the quality-tier
+    /// search (and from there to the plain default) regardless.
+    private static let preferredEnglishVoiceIdentifier = "com.apple.voice.premium.en-US.Ava"
+
+    /// How much to lower `AVSpeechUtterance.pitchMultiplier` below its
+    /// default of 1.0. Apple documents the valid range as 0.5–2.0; 0.9 is a
+    /// light, conservative drop chosen to read as a deeper, calmer,
+    /// less "chipmunk-y"/synthetic tone without pushing far enough to sound
+    /// distorted or obviously pitch-shifted — the failure mode of leaning
+    /// much below ~0.85 on a system voice. A named constant for the same
+    /// reason as the voice identifier above: easy for David to nudge once
+    /// he's heard it for real.
+    private static let pitchMultiplier: Float = 0.9
+
     /// Spoken when the wake phrase is heard with no command following it —
     /// "Hey JARVIS" alone should always get an answer, not silence.
     private static let wakeOnlyGreetingEnglish = "Hey David, how can I help you today?"
@@ -216,6 +253,13 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate, AVSpeechSynt
         print("[JarvisAgent] Speaking: \"\(text)\"")
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        // A light, deliberate drop from the default 1.0 for a deeper, more
+        // natural tone — see `pitchMultiplier`'s own doc comment for why
+        // 0.9 specifically. Rate is left at the system default: nothing in
+        // research suggested the default conversational rate reads as
+        // unnaturally fast or slow, so it isn't touched without a real
+        // reason to.
+        utterance.pitchMultiplier = Self.pitchMultiplier
         let isHebrew = text.unicodeScalars.contains { (0x0590...0x05FF).contains($0.value) }
         if let voice = Self.bestAvailableVoice(languagePrefix: isHebrew ? "he" : "en") {
             utterance.voice = voice
@@ -288,6 +332,14 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate, AVSpeechSynt
     private static func bestAvailableVoice(languagePrefix: String) -> AVSpeechSynthesisVoice? {
         let candidates = AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language.hasPrefix(languagePrefix) }
+        // The specific named voice first, but only if it's actually
+        // installed on this Mac (Premium/Enhanced voices are an extra
+        // download, never assumed present) — otherwise fall through to the
+        // generic quality-tier search exactly as before.
+        if languagePrefix == "en",
+           let preferred = candidates.first(where: { $0.identifier == preferredEnglishVoiceIdentifier }) {
+            return preferred
+        }
         if let premium = candidates.first(where: { $0.quality == .premium }) {
             return premium
         }
