@@ -1,3 +1,5 @@
+import { constantTimeEqual } from "@/security/constantTimeEqual";
+
 /** One reply heard during a proactive (JARVIS-initiated) announcement's reply window. */
 export interface SpeakerAuthRequest {
   deviceId: string;
@@ -77,7 +79,12 @@ export class PassphraseSpeakerAuthenticator implements SpeakerAuthenticator {
     if (!passphrase) {
       return { authenticated: false, reason: "No confirmation passphrase is configured" };
     }
-    if (normalizeSpokenText(text) === normalizeSpokenText(passphrase)) {
+    // Constant-time: a naive `===` here would short-circuit on the first
+    // differing character, letting an attacker who can measure response
+    // timing (e.g. repeatedly trying spoken/replayed guesses against a
+    // paired device) narrow down the passphrase character-by-character
+    // rather than needing the whole thing right in one guess.
+    if (constantTimeEqual(normalizeSpokenText(text), normalizeSpokenText(passphrase))) {
       return { authenticated: true, reason: "Passphrase matched" };
     }
     return { authenticated: false, reason: "Passphrase did not match" };
