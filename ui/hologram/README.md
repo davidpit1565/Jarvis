@@ -311,6 +311,151 @@ at motion speed, not material:
   from the task brief) — this round deliberately left it alone since the
   motion-speed gap alone was already a large, clearly measurable effect.
 
+**Round 4, inner volumetric glow (2026-10-27)** — David's reaction to round 3's
+speed-up: *"I don't want it to just spin faster. I want it to really be
+alive, really like Siri — like the Siri orb on the phone also moves from the
+inside. Understand what I mean, don't just literally do what I say."* He
+explicitly rejected treating speed as the fix.
+
+- **Research, not assumption** (`WebSearch`, several angles — see sources
+  below). The literal current Siri UI turned out to be narrower than the
+  brief's own "Siri-style living core" framing already assumed: iOS 18's
+  Apple Intelligence Siri is a rainbow **edge-glow around the screen
+  border**, not a standalone 3D orb; the pre-WWDC-2026 reporting on an
+  iOS 27 redesign describes a glowing cursor inside the Dynamic Island and,
+  separately, one hands-on account (MacStories' iPadOS 27 review) of an orb
+  that "comes out of the bezel like a drop of liquid" and, being glass,
+  "refracts whatever is underneath." No source gave a frame-by-frame
+  shader-level breakdown of an "internal bloom"/"breathing" technique —
+  that specific framing doesn't exist in any public write-up found. What
+  *did* converge across every related reference (Siri's glow, the
+  WWDC26 teaser's "halation"/overexposed-glow description, the rumored
+  glass-orb refraction, and ChatGPT Advanced Voice Mode's orb, independently
+  described elsewhere as pulsing/breathing while listening) was the same
+  underlying quality: **light welling up/blooming from within the form,
+  distinct from and independent of any outer spin, that visibly intensifies
+  while actively listening — not a texture moving faster across a static
+  shell.** That's the real, research-grounded target this round builds
+  toward, even though it isn't a literal recreation of one single Apple
+  screenshot.
+- **Confirmed by reading `core.js` directly, not assumed**: round 3's Core
+  was a solid, opaque chrome sphere whose entire visual language — the nine
+  vortex "eyes," the brushed-metal grain, the fresnel rim, the specular
+  sweep — is motion **across/around** the surface. There was no translucency,
+  no simulated internal light source, and no term in the fragment shader
+  that read as coming from inside the form's apparent volume. Notably, the
+  very first version of this rebuild (`dedf0b8`) *did* have a simple
+  center-facing "inner glow" term — it was removed when the material was
+  reworked to liquid chrome in round 2 (`3978474`), an incidental loss
+  during the material rework, not a deliberate cut. This confirmed the
+  task's own hypothesis exactly: no amount of speeding up a surface pattern
+  can produce a quality the shader never modeled in the first place.
+- **The fix — a real second, independent layer, not a faster version of the
+  existing one.** Reintroduced and substantially redesigned an inner-glow
+  term in the fragment shader (`innerGlowField()` in `core.js`):
+  - **Shape**: three large, soft noise blobs (not an evenly-smeared wash,
+    and not the existing nine small vortex "eyes") so it reads as a few
+    distinct patches of light welling up and receding, matching the
+    "blooming" quality in the research above.
+  - **Weighting**: concentrated toward the part of the sphere facing the
+    camera straight-on (`pow(ndotv, 1.8)`) — the *opposite* weighting from
+    the existing fresnel rim, which already owns the silhouette edge. This
+    is what makes it read as depth/interior rather than duplicating or
+    competing with the rim.
+  - **Motion, genuinely decoupled**: its own noise field, sampled along
+    three independent axes at a flat, slow time rate (`uTime * 0.03–0.045`)
+    with no relationship to `slowFlow` (the swirl-eye/metal-grain warp
+    coordinate) or `spiralSpeed` (the vortex eyes' spin) — it can never
+    visually sync up with the outer surface motion and read as "the same
+    texture, underneath."
+  - **Reactivity — the part that actually answers the brief's third
+    bullet**: a new `uInnerBreath` uniform, computed in JS (`animate()`),
+    whose own **rate** (not just brightness) quickens with real
+    `uEnergy`/`uAudio` — `0.55 + curEnergy * 0.9 + curAudio * 0.5` radians/
+    sec, raised through `pow(…, 1.6)` so it spends more time dim with a
+    brief bloom (a breath/heartbeat shape, not a symmetric metronome sine).
+    This means `STATE_PROFILES`' existing higher-energy states
+    (LISTENING/THINKING/EXECUTING/SPEAKING, already more energetic than
+    IDLE) now visibly breathe **faster**, not merely brighter — a second,
+    independent reactivity axis distinct from rotation/spiral speed, which
+    is the specific gap the task called out.
+  - **Color/tonemap**: a pale cool-white/cyan blend (not reusing the rim's
+    exact hue 1:1, so it reads as light rather than a copy of the existing
+    swirl color), mixed toward `uColorAlert` under `uErrorMix` like every
+    other colored term in this shader, and added to `color` *before* the
+    existing luminance-based Reinhard tonemap — so it participates in the
+    same highlight-rolloff behavior as the rest of the shader and can't
+    blow out the ERROR state's warm tint on its own.
+- **A real bug hit and fixed during this round, worth recording**: an early
+  draft put inline code-formatting backticks inside a GLSL comment that
+  itself lives inside a JS template-literal string — the stray backtick
+  silently terminated the JS string early, breaking `core.js`'s whole
+  syntax (`window.JarvisCore` came back `undefined`). Caught immediately by
+  running the verification script (`TypeError: Cannot read properties of
+  undefined (reading 'setLiveState')`) rather than by inspection — a
+  reminder that this project's GLSL-in-JS-template-literal pattern needs a
+  real page load to catch, not just a read-through.
+- **Verified**: headless Playwright/Chromium (software `swiftshader`, no
+  real GPU in this sandbox — Chromium itself had to be freshly installed
+  for this round), driving `window.JarvisCore` directly (`setLiveState`,
+  no fake-Core server needed since this is purely the Core canvas, not the
+  chat/observer wiring). Screenshots at
+  `.verification-screenshots/desktop-1600x1000-core-inner-glow-v4-*.png`:
+  - `idle-0`/`idle-seq-2`/`idle-seq-4` — IDLE (low `uEnergy`): the inner
+    glow is present but deliberately subtle and slow (~9s breathing period
+    at rest), by design — the task asked for state-based intensification,
+    so idle being the quietest state is the correct behavior, not an
+    under-tuned effect.
+  - `thinking-0`/`thinking-seq-3`/`thinking-seq-5` — simulated THINKING: a
+    visibly larger, softer white-cyan bloom washes across the
+    camera-facing hemisphere, clearly distinct from the sharp point-like
+    specular highlight and the ring-shaped vortex eyes — directly
+    comparable against round 3's own `thinking-seq-3` screenshot
+    (`.verification-screenshots/desktop-1600x1000-core-material-v3-
+    seq-3.png`), which has only the crisp specular dot and no diffuse
+    wash at all.
+  - `listening-0` — simulated LISTENING: the bloom is clearly stronger
+    still, covering a large part of the visible hemisphere.
+  - `error-0` — confirms the inner glow's `uColorAlert` mix keeps the
+    ERROR state reading warm/red, not washed to white (the same failure
+    mode the round-2 tonemap bug originally caused elsewhere in this
+    shader).
+  - `reduced-motion-a`/`reduced-motion-b` (~2s apart) — visually identical,
+    confirming the new breathing signal is held at a constant baseline
+    under `prefers-reduced-motion` (the same rule idle rotation/breathing
+    already follow), not left ticking.
+  - Zero console/page errors across every capture beyond the expected
+    404s/WebSocket-refused noise from pointing a plain static server at a
+    page that also tries to reach `/status`, `/observer`, `/chat`.
+  - `bun run typecheck` (0 errors) and `bun test` (2812 pass, 0 fail) both
+    clean after the change.
+- **Honest self-assessment**: this directly targets the gap David
+  described — a real second motion/light layer that is structurally
+  independent of the outer rotation and intensifies specifically during
+  active states, grounded in research rather than a guess — and the
+  screenshots show a real, visible difference, not a marginal tweak. What
+  it is *not*: a literal reproduction of any single real Siri/ChatGPT
+  screenshot (no such detailed public shader breakdown exists to copy, per
+  the research above), and it is **not verified on real GPU hardware** —
+  this sandbox has no GPU, so whether the blob shapes/breathing timing feel
+  right on a real iMac/iPhone screen, at real framerate, needs the same
+  hands-on device pass every other round of this file has flagged as
+  outstanding. If David's next reaction is still "not quite," the next
+  lever to pull first (per the task brief's own remaining options) is
+  likely a literal second, physically inner mesh with its own additive-
+  blended glow shader — this round deliberately chose the cheaper,
+  single-mesh fragment-shader approach first since it's a smaller, lower-
+  risk change that already produces a real, visible result.
+
+Sources consulted for the Siri-orb research: [iPhone 18 Pro's smaller
+Dynamic Island could make Siri AI look right](https://www.igeeksblog.com/iphone-18-pro-smaller-dynamic-island-siri-ai/),
+[MacRumors — Siri Uses Pill Shape to Hide the Dynamic Island in iOS 27](https://www.macrumors.com/2026/06/16/iphone-18-could-make-siri-a-circle),
+[9to5Mac — new Apple Intelligence Siri looks different, works the same](https://9to5mac.com/2024/11/03/new-apple-intelligence-siri-looks-different-works-the-same/),
+[Gizmodo — the harsh glare in the Apple WWDC 26 logo is teasing the look of new Siri](https://gizmodo.com/the-harsh-glare-in-the-apple-wwdc-26-logo-is-teasing-the-look-of-new-siri-report-says-2000747187),
+[MacStories — iOS and iPadOS 27 review, "The New Siri"](https://www.macstories.net/stories/ios-and-ipados-27-review/5/),
+[AppleInsider — this is what the Siri redesign might look like in iOS 26](https://appleinsider.com/articles/26/05/28/this-is-what-the-siri-redesign-might-look-like-in-ios-26),
+[MacRumors — Report: Siri to Get New Design on iPhone and iPad](https://www.macrumors.com/2025/08/14/siri-redesign-report).
+
 ## Reused from the previous build, deliberately
 
 - `icons/icon-192.png` / `icons/icon-512.png` — an abstract teal-to-amber

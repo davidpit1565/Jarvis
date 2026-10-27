@@ -191,6 +191,7 @@
     uniform float uAudio;
     uniform float uErrorMix;
     uniform float uTime;
+    uniform float uInnerBreath;
     varying vec3 vWorldNormal;
     varying vec3 vWorldPosition;
     varying vec3 vDir;
@@ -227,6 +228,35 @@
       float rings = pow(0.5 + 0.5 * spiral, 2.0);
       float core = smoothstep(0.2, 0.0, r);
       return clamp((rings * 0.85 + core * 0.6) * falloff, 0.0, 1.0);
+    }
+
+    // Inner glow — a real light-from-within quality, not a surface pattern.
+    // Everything else in this shader (the vortex eyes, the metal grain, the
+    // specular sweep) is motion ACROSS/AROUND the shell — exactly the kind
+    // of motion that reads as "a textured surface spinning faster," which is
+    // what round 3 sped up and David explicitly rejected as the fix ("I
+    // don't want it to just spin faster... really like Siri, the orb also
+    // moves from the inside"). Research into real voice-AI orb references
+    // (iOS Siri's post-2024 glow, the rumored iOS 27 "glass drop" orb that
+    // "refracts" and the WWDC26 teaser's overexposed "halation" glow, and
+    // ChatGPT Advanced Voice Mode's pulsing/breathing circle — see README)
+    // converged on the same description regardless of the exact visual: an
+    // internal light blooming/pulsing, independent of any outer spin, that
+    // intensifies distinctly while actively listening/thinking. This
+    // function is that second, independent layer: a few large, soft blobs
+    // of brightness drifting on their own slow clock (NOT slowFlow, the
+    // metal-grain/swirl-eye warp coordinate above) — a different noise
+    // field, different time axis, different frequency entirely, so it can
+    // never visually sync up with the surface pattern and read as "the
+    // same texture, underneath".
+    float innerGlowField(vec3 d) {
+      vec3 t1 = vec3(0.0, 0.0, uTime * 0.045);
+      vec3 t2 = vec3(uTime * -0.035, 0.0, 0.0);
+      vec3 t3 = vec3(0.0, uTime * 0.03, 0.0);
+      float b1 = max(0.0, fbm(d * 0.85 + t1));
+      float b2 = max(0.0, fbm(d * 1.25 + t2 + 23.1));
+      float b3 = max(0.0, fbm(d * 1.05 + t3 + 71.4));
+      return clamp(b1 * 0.6 + b2 * 0.5 + b3 * 0.45, 0.0, 1.0);
     }
 
     void main() {
@@ -346,6 +376,23 @@
       // a flat sticker pasted on top of the metal.
       color += swirlColor * energyMask * swirlBrightness * (0.75 + 0.35 * ridge);
       color += swirlColor * energyMask * fresnel * 0.4;
+
+      // The inner glow itself — concentrated toward the part of the sphere
+      // facing the camera straight-on (high ndotv), the OPPOSITE weighting
+      // from the fresnel rim above, which is deliberate: the rim already
+      // owns "the edge of the silhouette," so weighting the inner glow
+      // toward the center is what makes it read as depth/interior rather
+      // than competing with or duplicating the rim. uInnerBreath (computed
+      // in JS, see animate()) is a fully independent breathing signal whose
+      // own RATE -- not just brightness -- quickens with real uEnergy/uAudio,
+      // so the inner light visibly breathes faster during LISTENING/
+      // THINKING/EXECUTING/SPEAKING, not merely brighter at a fixed tempo.
+      float innerCenter = pow(ndotv, 1.8);
+      float innerField = innerGlowField(dWarp);
+      float innerIntensity = (0.28 + 0.85 * uEnergy + 0.45 * uAudio) * uInnerBreath;
+      vec3 innerColor = mix(vec3(0.72, 0.93, 1.0), vec3(1.0, 0.97, 0.9), 0.35);
+      innerColor = mix(innerColor, uColorAlert, uErrorMix * 0.6);
+      color += innerColor * innerField * innerCenter * innerIntensity * 1.5;
 
       // Luminance-based Reinhard tonemap: scale all channels by one
       // factor derived from luminance, rather than dividing each channel
@@ -481,6 +528,7 @@
         uAudio: { value: curAudio },
         uWarp: { value: curWarp },
         uAmpBase: { value: 0.013 },
+        uInnerBreath: { value: 1.0 },
         // Dark steel shadow -> bright chrome/silver (NOT navy/cyan — the
         // base material should read as polished metal; cyan is reserved
         // for the vortex "eyes" and rim highlight in the fragment shader).
@@ -619,6 +667,22 @@
       uniforms.uAudio.value = curAudio;
       uniforms.uWarp.value = curWarp;
       uniforms.uErrorMix.value = errorMix;
+
+      // Inner-glow breathing: a signal deliberately independent of every
+      // other clock on this page (idle breathe/rotation, the shader's own
+      // slowFlow/spiralSpeed) — the "moves from the inside" layer. Rate
+      // itself quickens with real energy/audio (0.5 ~2s period at rest,
+      // faster while actively thinking/speaking — real breathing/pulse
+      // speeding up under real exertion, not just getting brighter at a
+      // fixed tempo), and pow(...,1.6) biases it toward spending more time
+      // dim with a brief bloom, a heartbeat/breath shape rather than a
+      // symmetric metronome sine. Frozen under reduced motion (held at a
+      // constant, still-visible baseline) — this is ambient idle motion
+      // like the breathing/rotation it sits beside, not itself a discrete
+      // real-event reaction, so it follows the same reduced-motion rule.
+      const innerBreathT = reducedMotion ? 0 : simTime;
+      const innerBreathRate = 0.55 + curEnergy * 0.9 + curAudio * 0.5;
+      uniforms.uInnerBreath.value = Math.pow(0.5 + 0.5 * Math.sin(innerBreathT * innerBreathRate), 1.6);
 
       // Idle breathing: frequency-modulated double sine so it never
       // settles into an obviously looping single beat, frozen under
