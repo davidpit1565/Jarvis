@@ -93,21 +93,31 @@ describe("Security: a permanently-failing tool cannot cause unbounded AgentCore 
     const result = await agentCore.runTask("user-1", "a goal built on a tool that can never succeed");
 
     // The task terminates — it does NOT hang, and it does NOT loop forever.
-    expect(result.state).toBe("FAILED");
-    expect(["max recovery cycles", "max tool steps"].some((needle) => result.failureReason?.toLowerCase().includes(needle))).toBe(
-      true
-    );
+    // Since this PR, a planner this stubbornly broken (literally proposing
+    // the exact same tool call again on its very first RECOVERING replan)
+    // is now caught *earlier* than the old maxRecoveryCycles backstop: the
+    // recovery plan-diff check (src/agent/recoveryPlanDiff.ts) recognizes
+    // the repeat and escalates to WAITING instead of letting it burn
+    // through every remaining recovery cycle first. WAITING is just as
+    // much a non-looping, bounded stop as FAILED is for this test's actual
+    // security property — nothing auto-resumes it (see
+    // AgentTaskStore.getNextEligibleQueuedTask), so the task is parked, not
+    // retried further.
+    expect(result.state).toBe("WAITING");
+    expect(result.failureReason?.toLowerCase()).toMatch(/same (step|action)|essentially the same/);
 
     // Bounded by the real default ceilings: with maxStepRetries=2 and
     // maxRecoveryCycles=2, the tool can execute at most
     // (maxStepRetries + 1) attempts per plan, across at most
     // (maxRecoveryCycles + 1) plans — i.e. a small, fixed, well-bounded
-    // number of executions, never anything close to "forever".
+    // number of executions, never anything close to "forever". With the
+    // new earlier escalation, it actually stops well short of that: one
+    // execution, then one more (identical) plan call before escalating.
     expect(executions).toBeGreaterThan(0);
     expect(executions).toBeLessThanOrEqual(20); // DEFAULT_MAX_TOTAL_STEPS
     expect(planner.planCallCount).toBeLessThanOrEqual(4); // initial plan + at most maxRecoveryCycles re-plans, with slack
 
     const persisted = taskStore.get(result.id);
-    expect(persisted?.state).toBe("FAILED");
+    expect(persisted?.state).toBe("WAITING");
   }, 10_000);
 });

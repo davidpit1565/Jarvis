@@ -6,8 +6,9 @@ import type { ToolAuditLog } from "@/audit/ToolAuditLog";
 import type { ToolResult } from "@/types/tools";
 import { toolRequiresVerification } from "@/tools/verificationPolicy";
 import { AgentTaskStore, type AgentTaskProgress, type GoalProgress } from "./AgentTaskStore";
-import type { AgentPlanner, AgentTaskRecord, AgentVerificationResult } from "./types";
+import type { AgentPlanner, AgentPlanStep, AgentStepProposal, AgentTaskRecord, AgentVerificationResult } from "./types";
 import { classifyError } from "./errorClassification";
+import { isLikelySameRecoveryStep } from "./recoveryPlanDiff";
 import { AgentTimeoutError, withTimeout } from "./timeout";
 import { isTerminalState, phaseForAgentTaskState, type AgentTaskState } from "./AgentTaskStateMachine";
 import { liveStateForAgentTaskState, type JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
@@ -226,6 +227,25 @@ export class AgentCore {
     return affected;
   }
 
+  /**
+   * Resumes a task currently parked in WAITING with no unresolved
+   * dependency — in practice, today, one the recovery plan-diff escalation
+   * (`escalateRepeatedRecoveryFailure`) parked waiting on human guidance.
+   * `runTaskLoop`'s own entry check already treats any WAITING task with no
+   * `dependsOnTaskId` as immediately ready to resume at PLANNING (see
+   * `resolveDependencyGate` — it only actually gates on an unresolved
+   * dependency, and is a no-op otherwise), so this is just the public entry
+   * point a caller (e.g. a chat tool handling the human's reply) uses to
+   * re-enter the loop for an *existing* task id, instead of `runTask`
+   * which always creates a new one. Wiring an actual "the human replied"
+   * channel to call this is left for whatever surfaces the escalation to
+   * the user in the first place — this method is deliberately just the
+   * resume primitive, not that integration.
+   */
+  async resumeWaitingTask(taskId: string): Promise<AgentTaskRecord> {
+    return this.runTaskLoop(taskId, Date.now());
+  }
+
   /** Marks a task cancelled; the loop stops before its next step rather than mid-flight. */
   cancel(taskId: string): void {
     this.cancelled.add(taskId);
@@ -307,6 +327,48 @@ export class AgentCore {
   }
 
   /**
+   * PR #157 audit finding #1 fix: called from the PLANNING branch when a
+   * RECOVERING replan's first step looks like a repeat of the step that
+   * just failed (see `isLikelySameRecoveryStep`). Rather than silently
+   * retrying — which would almost certainly fail the same way again and
+   * burn a `maxRecoveryCycles` cycle for nothing — this escalates
+   * immediately, reusing the existing WAITING state (the same one a
+   * dependency gate already parks a task in) instead of inventing a new
+   * mechanism: no standing "ask the user a free-form question" primitive
+   * exists in this codebase today (`ConfirmationService` is a synchronous
+   * yes/no gate for one in-flight CONFIRM/DANGEROUS tool call within a
+   * live turn, not a fit for an async background task), so WAITING plus a
+   * clear, honest `failureReason` — broadcast over the same
+   * `agent.task.transition` event every other transition already uses — is
+   * the closest existing "paused, needs something external" signal.
+   * `maxRecoveryCycles` remains the backstop for the case this check
+   * doesn't catch (a plan that differs each time but keeps failing
+   * differently); this is an earlier, additional escalation path, not a
+   * replacement.
+   */
+  private escalateRepeatedRecoveryFailure(
+    task: AgentTaskRecord,
+    failedStep: AgentPlanStep,
+    repeatedProposal: AgentStepProposal
+  ): AgentTaskRecord {
+    const message =
+      `JARVIS tried "${failedStep.description}" (tool: ${failedStep.toolName}) and it failed: ${
+        task.failureReason ?? "no reason recorded"
+      }. The recovery plan it came up with next proposes essentially the same step again ` +
+      `("${repeatedProposal.description}"), so retrying would likely just fail the same way again. ` +
+      `JARVIS isn't confident of a different approach here — please advise.`;
+
+    let updated = this.deps.taskStore.setFailureReason(task.id, message);
+    updated = this.emitTransition(updated, "WAITING", "recovery plan repeated the step that just failed; escalating for guidance");
+    this.deps.auditLog.recordAgentEvent(task.id, task.userId, "recovery.repeated_step_escalated", {
+      failedStep: { toolName: failedStep.toolName, input: failedStep.input, description: failedStep.description },
+      repeatedProposal,
+      recoveryCount: task.recoveryCount,
+    });
+    return updated;
+  }
+
+  /**
    * Roadmap items 28-29 (Dependencies/Waiting States): gates a PENDING/
    * WAITING task on `dependsOnTaskId`. Returns `{ ready: true }` when the
    * loop should proceed into PLANNING, or `{ ready: false }` when the task
@@ -383,6 +445,11 @@ export class AgentCore {
       if (task.state === "PLANNING") {
         const priorFailure = task.failureReason ?? undefined;
         const completedSteps = task.plan.filter((step) => step.status === "verified");
+        // Captured before `setPlan` below overwrites `task.plan` — the
+        // exact step that just failed and triggered this RECOVERING
+        // replan. `undefined` on a task's very first plan (no prior
+        // failure yet to compare a new plan against).
+        const failedStep: AgentPlanStep | undefined = priorFailure ? task.plan[task.currentStepIndex] : undefined;
 
         const proposals = await this.deps.planner.plan({
           goal: task.goal,
@@ -398,6 +465,19 @@ export class AgentCore {
 
         if (proposals.length === 0) {
           task = await this.fail(task, "Planner returned an empty plan");
+          break;
+        }
+
+        // PR #157 audit finding #1: `priorFailure` only *tells* the model
+        // to avoid repeating its mistake — nothing previously verified the
+        // new plan actually differs. If the new plan's first step (the one
+        // that would re-attempt the point that just failed) looks like the
+        // same action as `failedStep`, retrying it is pointless and would
+        // just silently burn a `maxRecoveryCycles` cycle. Escalate instead
+        // of accepting the plan — see `isLikelySameRecoveryStep`.
+        const nextProposal: AgentStepProposal | undefined = proposals[0];
+        if (failedStep && nextProposal && isLikelySameRecoveryStep(failedStep, nextProposal)) {
+          task = this.escalateRepeatedRecoveryFailure(task, failedStep, nextProposal);
           break;
         }
 
