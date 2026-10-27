@@ -153,8 +153,44 @@ sessions/compaction. None of this is built yet unless a specific PR/commit is no
     free/local speaker-identification options and their actual accuracy/privacy/cost
     tradeoffs for a single-user case — don't assume a passphrase and real voice biometrics
     are equally easy; they're different problems.
-
-## Other David repos worth knowing about
+20. **Explicit priority ranking he confirmed (2026-10-27)**, against the "what's left"
+    list given to him: context/natural conversation (#3 in that list), voice barge-in
+    (#2), Drive integration (#3 in the earlier numbering — presentations/checklists), and
+    real device validation of everything already built (#6, the Mac/iMac hardware test)
+    are all **urgent, must-do now**. Spotify was "should do" but not urgent. **App Store
+    Connect/TestFlight automation is explicitly LAST — only after everything else is built
+    and actually working**, not in parallel. Design/visual polish (he's separately been
+    sketching with ChatGPT — e.g. a live animated "core" that moves in sync with JARVIS's
+    voice) is confirmed **explicitly deferred until after the functional core is solid**,
+    then phone/desktop visual design, then TestFlight — he stated this exact ordering
+    himself, unprompted, so this isn't just our own earlier guess, it's confirmed.
+21. **Voice quality — he explicitly rejected building a custom voice clone**, reasoning
+    (his own, and correct) that recording/training a custom voice would cost real time and
+    money ("credits") for a bad tradeoff. He wants something that sounds genuinely human —
+    his reference point is talking to ChatGPT's voice mode — not a "voice of an AI
+    assistant" robotic feel, through a real, working TTS rather than a cloned voice. He
+    mentioned using "a voice box for certain [other] voices" — **unclear exactly what tool
+    this refers to** (possibly something used for his `videos-ai` narration work, or a
+    specific TTS/voice-changer product) — ask him directly before assuming or building
+    around it. Our own existing `agents/imac/JarvisAgent` currently just uses
+    `AVSpeechSynthesisVoice`'s best-available system voice with zero pitch/style tuning
+    (see `WakeWordListener.swift` `speak()`/`bestAvailableVoice()`) — macOS's own premium/
+    "Enhanced"-quality system voices are free, on-device, and genuinely natural-sounding;
+    picking a better one + light pitch tuning for a deeper tone is a cheap, real
+    improvement worth doing before reaching for any paid cloud TTS. Separately, Twilio
+    phone calls already have `TWILIO_VOICE_PITCH`/`TWILIO_VOICE_RATE` tuning — a different
+    code path from the Mac agent's speech, don't conflate the two when touching "the
+    voice."
+22. **"Open your chat" / chat-surface access**: he wants to be able to say something like
+    "open your chat" and have JARVIS actually open a real chat surface he can type/talk in
+    — e.g. opening the existing Telegram bot conversation with JARVIS — on whichever
+    device he's using, phone included. This is distinct from a one-off spoken reply; it's
+    "give me a persistent place to keep talking to you."
+23. **Deep, system-wide iPhone integration** — not just JARVIS's own reminders/calendar
+    features, but genuinely hooking into iOS's own Reminders app, Calendar, and other
+    system-level surfaces, plus general capabilities (weather, etc.) — his own framing:
+    "like Siri, but David Intelligence instead of Apple Intelligence." This is the iPhone
+    app phase (wishlist #8-11) at full scope, not a smaller subset.
 
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
