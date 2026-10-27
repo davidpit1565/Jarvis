@@ -249,6 +249,71 @@ describe("Orchestrator integration", () => {
     });
   });
 
+  test("fires onInterimMessage once with pre-tool-call narration, before the tool executes, without affecting the final reply", async () => {
+    const executionOrder: string[] = [];
+    const tool: LocalTool = {
+      id: "SLOW_LOOKUP",
+      name: "slow_lookup",
+      description: "A test tool that records when it actually ran",
+      inputSchema: { type: "object", properties: {} },
+      requiredPermission: PermissionLevel.READ,
+      target: "local",
+      execute: async () => {
+        executionOrder.push("tool-executed");
+        return { success: true, data: {} };
+      },
+    };
+    const brain = new ScriptedBrain([
+      {
+        text: "checking now",
+        toolCalls: [{ id: "call-1", toolName: "slow_lookup", input: {} }],
+        stopReason: "tool_use",
+      },
+      { text: "final answer", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const { orchestrator } = setup(brain, [tool]);
+    const interimMessages: string[] = [];
+    const reply = await orchestrator.handleUserMessage("user-1", "look something up", undefined, undefined, (text) => {
+      executionOrder.push("interim-fired");
+      interimMessages.push(text);
+    });
+
+    expect(interimMessages).toEqual(["checking now"]);
+    expect(executionOrder).toEqual(["interim-fired", "tool-executed"]);
+    expect(reply).toBe("final answer");
+  });
+
+  test("never fires onInterimMessage for an iteration with no pre-tool-call text", async () => {
+    const tool = makeEchoTool("ECHO_TOOL");
+    const brain = new ScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "echo_tool", input: {} }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const { orchestrator } = setup(brain, [tool]);
+    const interimMessages: string[] = [];
+    const reply = await orchestrator.handleUserMessage("user-1", "echo something", undefined, undefined, (text) =>
+      interimMessages.push(text)
+    );
+
+    expect(interimMessages).toEqual([]);
+    expect(reply).toBe("done");
+  });
+
+  test("omitting onInterimMessage behaves exactly as before", async () => {
+    const tool = makeEchoTool("ECHO_TOOL");
+    const brain = new ScriptedBrain([
+      { text: "one moment", toolCalls: [{ id: "call-1", toolName: "echo_tool", input: {} }], stopReason: "tool_use" },
+      { text: "done", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const { orchestrator } = setup(brain, [tool]);
+    const reply = await orchestrator.handleUserMessage("user-1", "echo something");
+
+    expect(reply).toBe("done");
+  });
+
   test("tool.executed carries the userId and exact input, for a durable audit trail", async () => {
     const tool = makeEchoTool("ECHO_TOOL");
     const brain = new ScriptedBrain([
