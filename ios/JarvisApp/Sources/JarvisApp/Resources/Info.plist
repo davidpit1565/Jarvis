@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Standard one-time permission prompts, requested at first use —
+	     see VoiceController.swift / CameraController.swift for exactly
+	     when each is actually triggered (mic+speech at launch, camera
+	     only on "open the camera"). -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>JARVIS listens for "Hey Jarvis" while the app is open, and for your voice while it's listening to you.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>JARVIS transcribes your speech on-device to understand what you say after "Hey Jarvis."</string>
+	<key>NSCameraUsageDescription</key>
+	<string>JARVIS opens the camera only when you ask it to, so it can see what you want to show it.</string>
+
+	<!-- Empty UILaunchScreen dict is the modern (no storyboard needed) way
+	     to get a plain, system-default launch screen. -->
+	<key>UILaunchScreen</key>
+	<dict/>
+
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+</dict>
+</plist>

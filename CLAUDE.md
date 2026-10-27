@@ -1314,3 +1314,74 @@ research only; no app code was touched.
    cannot become "Siri with another name" in the sense of seeing everything on the phone or
    talking to Siri itself, and those two specific gaps are permanent platform boundaries, not
    today's-SDK limitations likely to lift later.
+## First native iPhone app: real start, pulled forward (2026-10-27)
+
+David explicitly pulled the iPhone app forward from "deferred until the functional core is
+solid" (wishlist #8-11/#23, `JARVIS_MASTER_PLAN.md` Phase 5) and asked for a first real skeleton
+now, accepting it's a large project that cannot be compiled/run/validated in this sandbox (no
+Xcode/macOS toolchain here, same standing limitation as `agents/imac/JarvisAgent`). Lives in
+`ios/JarvisApp/` — read its own `README.md` for the full architecture, layout, and honest
+build/test status; this entry records the decisions and the standing caveats.
+
+**Platform-constraint honesty, stated plainly (restated in Hebrew in the PR/report so it reaches
+David in his own words, not just here)**: a phone cannot do true background "Hey Jarvis" the way
+the iMac agent's always-on `WakeWordListener` does — iOS gives no third-party app a way to keep a
+live `SFSpeechRecognizer`/`AVAudioEngine` session running with the app closed or backgrounded.
+`VoiceController` only listens while the app is foregrounded. The real mitigation is a genuine
+App Intents / Siri Shortcut (`Intents/JarvisIntents.swift`'s `StartListeningIntent`/
+`OpenCameraIntent` + `JarvisAppShortcuts`) — "Hey Siri, start listening in Jarvis" launches the
+app directly into a listening state. Confirmed against Apple's own current App Intents
+documentation: this only supports a fixed, structured phrase with typed parameters, never
+open-ended free-form dictation passthrough — this is the realistic mitigation, not a full fix,
+and is recorded as such rather than oversold.
+
+**Design decisions actually built**:
+- **Liquid Glass** (`.glassEffect()`, `GlassEffectContainer`, `.buttonStyle(.glassProminent)`) —
+  confirmed real, current, non-deprecated SwiftUI APIs (iOS 26+) via Apple's own documentation
+  before writing any UI code, not reconstructed from memory. The app's minimum deployment target
+  is set to iOS 26.0 specifically so no legacy-Material fallback branch was needed — a deliberate
+  call given this is a brand-new app with no pre-26 user base and David explicitly wants real
+  Liquid Glass, not a backported approximation.
+- **Native 3D Core**: RealityKit + `CustomMaterial` (real Metal shader functions,
+  `Core3D/CoreShaders.metal`), chosen over SceneKit specifically because SceneKit's
+  `SCNShaderModifierEntryPoint` (every entry point — geometry, surface, fragment, lightingModel)
+  is marked **Deprecated as of iOS 26.0** on Apple's own current documentation, confirmed by
+  reading it directly before choosing an approach — building this app's single most visually
+  central code on an API Apple deprecates in the exact OS version this app targets would have
+  been a bad call. RealityKit still renders on Metal under the hood either way. The shader itself
+  approximates the reference image (liquid-chrome sphere + several distributed glowing cyan
+  "swirl eye" patches, not one confined band) plus the reference video's sense of continuous
+  organic motion (slow per-eye drift + gentle geometry displacement, both driven by real
+  connection/listening/speaking state via a custom uniform — never a canned loop). One specific,
+  explicitly flagged uncertainty: the exact Metal-side accessor method name for reading that
+  custom uniform back (`custom_parameter()`) is a reasoned guess, not confirmed against Apple's
+  "Custom Shader API" reference PDF (this sandbox's web access couldn't open it) — see
+  `CoreShaders.metal`'s header comment for the full, itemized confirmed-vs-reasoned breakdown of
+  every accessor name used. The separate parallel effort reworking the web Core's own GLSL shader
+  (`ui/hologram/core.js`, landed as of this writing in commit `dedf0b8`) uses a different visual
+  language (noise-displaced icosphere, fresnel rim + specular sweep, not yet the chrome+swirl-eyes
+  look) — this iOS shader was written directly from the reference image/video per the task's own
+  fallback instruction, not translated from that commit.
+- **Chat is demoted, exactly as asked**: ordinary spoken conversation is never written into any
+  visible transcript. `ChatSheetView` exists only for deliberate text/link/image/file input,
+  reached via a secondary glass button, never the primary view.
+- **Camera is JARVIS's first real camera capability anywhere in this codebase** (confirmed via
+  grep before building) — on-demand only, permission requested at the moment "open the camera"
+  actually runs, never pre-authorized at launch. New Core device tools `OPEN_CAMERA`/
+  `CLOSE_CAMERA` (`src/tools/system/OpenCameraTool.ts`/`CloseCameraTool.ts`, CONFIRM/SAFE_ACTION
+  respectively) dispatch to it over the existing device-tool protocol — no new backend auth or
+  transport code was needed; `src/types/devices.ts`'s `DeviceType` already included `"iphone"`
+  before this task started.
+
+**Project structure**: XcodeGen (`ios/JarvisApp/project.yml`), not a hand-written
+`.xcodeproj/project.pbxproj` — a hand-authored pbxproj risks not even *opening* in Xcode (worse
+than "doesn't compile"), while a YAML spec is something this sandbox can write correctly with
+real confidence. `xcodegen generate` (one real, well-tested command on an actual Mac) produces
+the real `.xcodeproj`. See the README for the exact one-time setup steps and the
+`DEVELOPMENT_TEAM` field that still needs David's real Apple Developer Team ID filled in.
+
+**Standing caveat, same as every other Swift artifact in this repo**: nothing in `ios/JarvisApp/`
+has been compiled, run, or seen a simulator/device. Real Xcode + a real device validation pass is
+the necessary next step, same posture as `agents/imac/JarvisAgent`'s own standing status — and,
+per David's own decision recorded above (under "David's decisions on 'what's missing' items"),
+that kind of hands-on hardware validation happens together with him, not unsupervised beforehand.
