@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { GitHubActivityStore } from "@/github/GitHubActivityStore";
-import { githubActivityNote } from "@/github/githubActivityNote";
+import { githubActivityNote, formatRepoActivitySummary } from "@/github/githubActivityNote";
 
 function commit(sha: string): { sha: string; message: string; authorName: string | null; date: string | null; url: string } {
   return { sha, message: `commit ${sha}`, authorName: "David", date: "2026-10-27T00:00:00Z", url: `https://x/${sha}` };
@@ -74,5 +74,24 @@ describe("githubActivityNote", () => {
     expect(repoLines.length).toBeLessThan(6);
     expect(note).toContain("6 of the user's GitHub repo(s)");
     expect(note).toMatch(/more repo\(s\) with new activity not shown/);
+  });
+});
+
+describe("formatRepoActivitySummary", () => {
+  test("formats one repo's activity as a standalone sentence, no leading bullet", () => {
+    const text = formatRepoActivitySummary({
+      owner: "davidpit1565",
+      repo: "Jarvis",
+      polledAt: "2026-10-27T00:00:00Z",
+      newCommits: [commit("c1")],
+      newIssues: [{ number: 7, title: "Bug report", url: "u", authorLogin: null, labels: [], createdAt: "x", updatedAt: "x", comments: 0 }],
+      newPullRequests: [],
+    });
+
+    expect(text).not.toStartWith("- ");
+    expect(text).toContain("davidpit1565/Jarvis");
+    expect(text).toContain("commit c1");
+    expect(text).toContain("#7");
+    expect(text).toContain("Bug report");
   });
 });

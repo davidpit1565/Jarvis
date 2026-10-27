@@ -156,7 +156,7 @@ import { createCommentOnGitHubIssueTool } from "@/tools/github/CommentOnGitHubIs
 import { createMergeGitHubPullRequestTool } from "@/tools/github/MergeGitHubPullRequestTool";
 import { GitHubActivityStore } from "@/github/GitHubActivityStore";
 import { pollGitHubActivity, resolveWatchedRepos } from "@/github/pollGitHubActivity";
-import { githubActivityNote } from "@/github/githubActivityNote";
+import { githubActivityNote, formatRepoActivitySummary } from "@/github/githubActivityNote";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
 import { createSendEmailTool } from "@/tools/gmail/SendEmailTool";
 import { createReplyEmailTool } from "@/tools/gmail/ReplyEmailTool";
@@ -171,6 +171,8 @@ import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
 import { createGetWeatherForecastTool } from "@/tools/weather/GetWeatherForecastTool";
 import { RssNewsClient } from "@/news/RssNewsClient";
 import { createNewsWatchSources } from "@/news/newsWatchSources";
+import { createGmailWatchSources } from "@/gmail/gmailWatchSource";
+import type { EmailSummary } from "@/types/gmail";
 import { WatcherStore } from "@/watcher/WatcherStore";
 import { pollWatchSources } from "@/watcher/pollWatchSources";
 import { createPollScheduler } from "@/watcher/scheduler";
@@ -517,6 +519,31 @@ function main() {
       // own doc comment.
       resolveWatchedRepos(githubClient!, config.githubWatchedRepos, config.githubWatchAllOwnRepos)
         .then((watchedRepos) => pollGitHubActivity(githubClient!, githubActivityStore, watchedRepos))
+        .then(() => {
+          // Immediate push for whatever this tick just found new — the
+          // same capability news watching already has (see
+          // newsWatcherScheduler below and WatcherNotifier's own doc
+          // comment). Previously GitHub activity only ever surfaced at
+          // the start of the NEXT conversation via githubActivityNote;
+          // that note keeps working exactly as before (it reads the same
+          // store, independently) — this is additive, not a replacement,
+          // with the same honest "could mention the same item twice"
+          // tradeoff news already accepts.
+          //
+          // watcherNotifier/watcherChannelConfig are declared further
+          // down in this same function (closed over here, not yet in
+          // scope lexically) — safe because this callback only ever runs
+          // once main() has finished its synchronous setup and both are
+          // initialized, exactly like newsWatcherScheduler's own tick.
+          if (!config.watcherPushNotificationsEnabled) return;
+          for (const record of githubActivityStore.listRecentActivity()) {
+            const sourceId = `github:${record.owner}/${record.repo}`;
+            const text = `JARVIS spotted new GitHub activity — ${formatRepoActivitySummary(record)}`;
+            watcherNotifier.notify(sourceId, text, watcherChannelConfig).catch((error) => {
+              console.error(`[jarvis] watcher notify failed for "${sourceId}":`, error instanceof Error ? error.message : String(error));
+            });
+          }
+        })
         .catch((error) => {
           // pollGitHubActivity already isolates per-repo failures and
           // resolveWatchedRepos already isolates auto-discovery failures —
@@ -570,6 +597,20 @@ function main() {
   const newsWatchSources = newsClient ? createNewsWatchSources(newsClient, config.newsWatchTopics) : [];
   const newsWatchEnabled = newsWatchSources.length > 0;
   const newsWatchContext = newsWatchEnabled ? { store: newsWatcherStore, sources: newsWatchSources } : undefined;
+
+  // Proactive Gmail watching — the generalized Proactive Watcher's Gmail
+  // source (CLAUDE.md: deferred when the Watcher was first generalized
+  // because "email has different OAuth/credential-polling semantics than
+  // RSS" — closed out here by reusing the existing `gmailClient` entirely,
+  // no new Gmail API code). Same opt-in-and-otherwise-inert posture as
+  // GitHub/news watching above: needs both a linked Google account
+  // (`gmailClient`) AND at least one configured `GMAIL_WATCH_QUERIES`
+  // entry, and the store is always constructed (cheap) so the context note
+  // always has something to read even before the poller below has run.
+  const gmailWatcherStore = new WatcherStore(config.gmailWatchDbPath);
+  const gmailWatchSources = gmailClient ? createGmailWatchSources(gmailClient, config.gmailWatchQueries) : [];
+  const gmailWatchEnabled = gmailWatchSources.length > 0;
+  const gmailWatchContext = gmailWatchEnabled ? { store: gmailWatcherStore, sources: gmailWatchSources } : undefined;
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
@@ -915,7 +956,8 @@ function main() {
         behaviorCorrectionStore,
         message,
         githubActivityStore,
-        newsWatchContext
+        newsWatchContext,
+        gmailWatchContext
       ),
     lockdownService,
     toolResultCache,
@@ -1003,7 +1045,8 @@ function main() {
           behaviorCorrectionStore,
           message,
           githubActivityStore,
-          newsWatchContext
+          newsWatchContext,
+          gmailWatchContext
         ),
       lockdownService,
       toolResultCache,
@@ -1061,7 +1104,8 @@ function main() {
           behaviorCorrectionStore,
           message,
           githubActivityStore,
-          newsWatchContext
+          newsWatchContext,
+          gmailWatchContext
         ),
       lockdownService,
       toolResultCache,
@@ -1152,7 +1196,8 @@ function main() {
           behaviorCorrectionStore,
           message,
           githubActivityStore,
-          newsWatchContext
+          newsWatchContext,
+          gmailWatchContext
         ),
       lockdownService,
       toolResultCache,
@@ -1216,7 +1261,8 @@ function main() {
           behaviorCorrectionStore,
           message,
           githubActivityStore,
-          newsWatchContext
+          newsWatchContext,
+          gmailWatchContext
         ),
       lockdownService,
       toolResultCache,
@@ -1322,6 +1368,41 @@ function main() {
     console.log(`[jarvis] News watching ${newsWatchSources.length} topic(s), polling every ${config.newsWatchPollMs}ms`);
   }
 
+  // Proactive Gmail watching's own poller/push — same shared scheduler and
+  // push mechanism as news above, just against `gmailWatchSources`/
+  // `gmailWatcherStore`. `source.describe(item)` already caps what's shown
+  // (sender/subject/short snippet preview, never the full body — see
+  // `gmailWatchSource.ts`'s own doc comment), so the push text here reuses
+  // it directly rather than re-truncating ad hoc the way news's inline
+  // template does for headline titles.
+  let gmailWatcherScheduler: ReturnType<typeof createPollScheduler> | undefined;
+  if (gmailWatchEnabled) {
+    gmailWatcherScheduler = createPollScheduler(
+      [
+        () =>
+          pollWatchSources(gmailWatchSources, gmailWatcherStore, (sourceId, error) => {
+            console.error(`[jarvis] Gmail watch poll failed for "${sourceId}":`, error instanceof Error ? error.message : String(error));
+          }).then(() => {
+            if (!config.watcherPushNotificationsEnabled) return;
+            for (const record of gmailWatcherStore.listWithActivity<EmailSummary>()) {
+              const source = gmailWatchSources.find((s) => s.id === record.sourceId);
+              if (!source) continue;
+              const text = `JARVIS spotted ${record.newItems.length} new email(s) matching "${source.label}": ${record.newItems
+                .slice(0, 3)
+                .map((item) => source.describe(item))
+                .join("; ")}`;
+              watcherNotifier.notify(source.id, text, watcherChannelConfig).catch((error) => {
+                console.error(`[jarvis] watcher notify failed for "${source.id}":`, error instanceof Error ? error.message : String(error));
+              });
+            }
+          }),
+      ],
+      config.gmailWatchPollMs,
+      { onTick: () => schedulerHealthTracker.tick("gmailWatch") }
+    );
+    console.log(`[jarvis] Gmail watching ${gmailWatchSources.length} quer(y/ies), polling every ${config.gmailWatchPollMs}ms`);
+  }
+
   // OPEN_CHAT only needs the bot's public username (to build the t.me
   // link), but it's only actually useful once the Telegram gateway itself
   // is live — otherwise the link it hands out leads to a bot that can't
@@ -1415,7 +1496,8 @@ function main() {
           behaviorCorrectionStore,
           message,
           githubActivityStore,
-          newsWatchContext
+          newsWatchContext,
+          gmailWatchContext
         ),
       lockdownService,
       toolResultCache,
@@ -2323,6 +2405,8 @@ function main() {
     if (githubActivityInterval) clearInterval(githubActivityInterval);
     if (newsWatcherScheduler) newsWatcherScheduler.stop();
     newsWatcherStore.close();
+    if (gmailWatcherScheduler) gmailWatcherScheduler.stop();
+    gmailWatcherStore.close();
     calendarTokenStore.close();
     spotifyTokenStore.close();
     canvaTokenStore.close();

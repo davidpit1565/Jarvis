@@ -1,4 +1,4 @@
-import type { GitHubActivityStore } from "@/github/GitHubActivityStore";
+import type { GitHubActivityStore, GitHubRepoActivityRecord } from "@/github/GitHubActivityStore";
 
 /**
  * Formats a note about new activity on David's watched GitHub repos for
@@ -31,9 +31,8 @@ import type { GitHubActivityStore } from "@/github/GitHubActivityStore";
 const MAX_REPOS_IN_NOTE = 3;
 const MAX_ITEMS_PER_REPO = 3;
 
-function formatRepoLines(
-  owner: string,
-  repo: string,
+/** The "N new commit(s): ..."/"N newly opened issue(s): ..."/"N newly opened pull request(s): ..." clauses for one repo's activity, joined with "; " — the part shared between the context-note's bulleted line and a push notification's standalone sentence (see `formatRepoActivitySummary` below), factored out so both stay in sync. */
+function formatRepoActivityParts(
   newCommits: Array<{ message: string }>,
   newIssues: Array<{ number: number; title: string }>,
   newPullRequests: Array<{ number: number; title: string }>
@@ -59,7 +58,30 @@ function formatRepoLines(
     parts.push(`${newPullRequests.length} newly opened pull request(s): ${prList}${omitted > 0 ? ` (plus ${omitted} more not shown)` : ""}`);
   }
 
-  return `- ${owner}/${repo} — ${parts.join("; ")}`;
+  return parts.join("; ");
+}
+
+function formatRepoLines(
+  owner: string,
+  repo: string,
+  newCommits: Array<{ message: string }>,
+  newIssues: Array<{ number: number; title: string }>,
+  newPullRequests: Array<{ number: number; title: string }>
+): string {
+  return `- ${owner}/${repo} — ${formatRepoActivityParts(newCommits, newIssues, newPullRequests)}`;
+}
+
+/**
+ * One repo activity record as a standalone sentence, for a push
+ * notification (`WatcherNotifier`) rather than a bullet in the multi-repo
+ * context note `githubActivityNote` composes — see that function's own doc
+ * comment for why GitHub keeps this bespoke formatter instead of the
+ * generic `composeWatcherNote` news uses: category-grouped wording
+ * ("3 new commit(s): ...") that predates the generic `WatchSource`
+ * interface and whose exact phrasing existing tests assert.
+ */
+export function formatRepoActivitySummary(record: GitHubRepoActivityRecord): string {
+  return `${record.owner}/${record.repo} — ${formatRepoActivityParts(record.newCommits, record.newIssues, record.newPullRequests)}`;
 }
 
 export function githubActivityNote(store: GitHubActivityStore): string | undefined {
