@@ -83,6 +83,10 @@ const ENV_KEYS = [
   "AGENTMAIL_MAX_SENDS_PER_DAY",
   "OLLAMA_BASE_URL",
   "OLLAMA_EMBEDDING_MODEL",
+  "GITHUB_TOKEN",
+  "GITHUB_WATCHED_REPOS",
+  "JARVIS_GITHUB_ACTIVITY_DB_PATH",
+  "JARVIS_GITHUB_ACTIVITY_POLL_MS",
 ];
 let saved: Record<string, string | undefined> = {};
 
@@ -1162,5 +1166,32 @@ describe("redactConfigForDisplay", () => {
     expect(redacted.calendarTokenDbPath).toBe(config.calendarTokenDbPath);
     expect(typeof redacted.spotifyTokenDbPath).toBe("string");
     expect(redacted.spotifyTokenDbPath).toBe(config.spotifyTokenDbPath);
+  });
+
+  test("githubWatchedRepos defaults to empty (proactive GitHub surfacing inert by default)", () => {
+    const config = loadConfig();
+    expect(config.githubWatchedRepos).toEqual([]);
+  });
+
+  test("reads a valid comma-separated GITHUB_WATCHED_REPOS", () => {
+    process.env.GITHUB_WATCHED_REPOS = "davidpit1565/Jarvis, davidpit1565/Rudder ,davidpit1565/BFA";
+    const config = loadConfig();
+    expect(config.githubWatchedRepos).toEqual(["davidpit1565/Jarvis", "davidpit1565/Rudder", "davidpit1565/BFA"]);
+  });
+
+  test("rejects a malformed GITHUB_WATCHED_REPOS entry", () => {
+    process.env.GITHUB_WATCHED_REPOS = "davidpit1565/Jarvis,not-a-valid-entry";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("defaults githubActivityDbPath and githubActivityPollMs", () => {
+    const config = loadConfig();
+    expect(config.githubActivityDbPath).toBe("./data/jarvis-github-activity.sqlite");
+    expect(config.githubActivityPollMs).toBe(20 * 60 * 1000);
+  });
+
+  test("rejects a non-positive JARVIS_GITHUB_ACTIVITY_POLL_MS", () => {
+    process.env.JARVIS_GITHUB_ACTIVITY_POLL_MS = "0";
+    expect(() => loadConfig()).toThrow(ConfigError);
   });
 });

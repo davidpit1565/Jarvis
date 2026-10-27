@@ -143,6 +143,9 @@ import { createListGitHubCommitsTool } from "@/tools/github/ListGitHubCommitsToo
 import { createListGitHubIssuesTool } from "@/tools/github/ListGitHubIssuesTool";
 import { createListGitHubPullRequestsTool } from "@/tools/github/ListGitHubPullRequestsTool";
 import { createCheckGitHubRepoActivityTool } from "@/tools/github/CheckGitHubRepoActivityTool";
+import { GitHubActivityStore } from "@/github/GitHubActivityStore";
+import { pollGitHubActivity } from "@/github/pollGitHubActivity";
+import { githubActivityNote } from "@/github/githubActivityNote";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
 import { createSendEmailTool } from "@/tools/gmail/SendEmailTool";
 import { createReplyEmailTool } from "@/tools/gmail/ReplyEmailTool";
@@ -431,6 +434,48 @@ function main() {
     toolRegistry.registerTool(createListGitHubPullRequestsTool(githubClient));
     toolRegistry.registerTool(createCheckGitHubRepoActivityTool(githubClient));
     console.log("[jarvis] GitHub integration enabled");
+  }
+
+  // Proactive GitHub activity surfacing (CLAUDE.md "continuous personal
+  // profile" background: "continuously watch my repos... surface relevant
+  // things without being asked"). Gated on both githubClient AND at least
+  // one watched repo — someone could set GITHUB_TOKEN without ever
+  // configuring GITHUB_WATCHED_REPOS, in which case this whole feature
+  // stays inert (no polling, no note), which is the correct safe default
+  // rather than silently polling every repo the token can read.
+  //
+  // The store is always constructed (cheap — just opens/creates a small
+  // SQLite file) so githubActivityNote always has something to read, but
+  // it only ever contains anything once the poller below actually runs.
+  const githubActivityStore = new GitHubActivityStore(config.githubActivityDbPath);
+  const githubActivityEnabled = Boolean(githubClient && config.githubWatchedRepos.length > 0);
+  let githubActivityInterval: ReturnType<typeof setInterval> | undefined;
+  if (githubActivityEnabled) {
+    // Same in-flight-guard shape as weeklyDigestInterval above: a poll
+    // involves real network calls (one or more repos, each multiple GitHub
+    // API requests), so a slow poll straddling a tick boundary must not
+    // let a second tick start an overlapping poll — only boolean-level
+    // dedup is needed (there's only ever one poll "job" per tick, unlike
+    // the per-item id-set pattern used where a tick enumerates many
+    // independent due items).
+    let pollInFlight = false;
+    githubActivityInterval = setInterval(() => {
+      schedulerHealthTracker.tick("githubActivity");
+      if (pollInFlight) return;
+      pollInFlight = true;
+      pollGitHubActivity(githubClient!, githubActivityStore, config.githubWatchedRepos)
+        .catch((error) => {
+          // pollGitHubActivity already isolates per-repo failures and
+          // never throws in normal operation — this only catches a truly
+          // unexpected error (e.g. a bug), so the scheduler tick itself
+          // can never crash the process.
+          console.error("[jarvis] GitHub activity poll tick failed:", error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+          pollInFlight = false;
+        });
+    }, config.githubActivityPollMs);
+    console.log(`[jarvis] GitHub activity watching ${config.githubWatchedRepos.length} repo(s), polling every ${config.githubActivityPollMs}ms`);
   }
 
   const studioClient =
@@ -794,7 +839,8 @@ function main() {
         commitmentStore,
         { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
         behaviorCorrectionStore,
-        message
+        message,
+        githubActivityStore
       ),
     lockdownService,
     toolResultCache,
@@ -880,7 +926,8 @@ function main() {
           commitmentStore,
           { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
           behaviorCorrectionStore,
-          message
+          message,
+          githubActivityStore
         ),
       lockdownService,
       toolResultCache,
@@ -936,7 +983,8 @@ function main() {
           commitmentStore,
           { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
           behaviorCorrectionStore,
-          message
+          message,
+          githubActivityStore
         ),
       lockdownService,
       toolResultCache,
@@ -1025,7 +1073,8 @@ function main() {
           commitmentStore,
           { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
           behaviorCorrectionStore,
-          message
+          message,
+          githubActivityStore
         ),
       lockdownService,
       toolResultCache,
@@ -1087,7 +1136,8 @@ function main() {
           commitmentStore,
           { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
           behaviorCorrectionStore,
-          message
+          message,
+          githubActivityStore
         ),
       lockdownService,
       toolResultCache,
@@ -1225,7 +1275,8 @@ function main() {
           commitmentStore,
           { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
           behaviorCorrectionStore,
-          message
+          message,
+          githubActivityStore
         ),
       lockdownService,
       toolResultCache,
@@ -2129,6 +2180,8 @@ function main() {
     clearInterval(agentQueueInterval);
     agentTaskStore.close();
     goalStore.close();
+    githubActivityStore.close();
+    if (githubActivityInterval) clearInterval(githubActivityInterval);
     calendarTokenStore.close();
     spotifyTokenStore.close();
     canvaTokenStore.close();

@@ -496,6 +496,22 @@ export interface JarvisConfig {
    * (one GitHub account, David's own) is all GitHubClient needs.
    */
   githubToken?: string;
+  /**
+   * Repos (as "owner/repo", comma-separated) to proactively poll for new
+   * commits/issues/PRs and surface unprompted at conversation start — see
+   * `githubActivityNote.ts`. Deliberately a separate list from whatever
+   * repos `githubToken` can read: granting read access to a repo (for
+   * `CHECK_GITHUB_REPO_ACTIVITY` et al.) doesn't by itself mean David
+   * wants JARVIS proactively chattering about every commit to it. Empty
+   * (the default when unset) makes the whole proactive-surfacing feature
+   * inert — no polling, no note, not an error — which is the correct safe
+   * default rather than polling every repo the token can see.
+   */
+  githubWatchedRepos: string[];
+  /** Path to the SQLite database caching each watched repo's poll cursor and most-recently-found new activity (GitHubActivityStore). */
+  githubActivityDbPath: string;
+  /** How often (ms) the background GitHub activity poller ticks — see `pollGitHubActivity`. Only relevant when `githubWatchedRepos` is non-empty. */
+  githubActivityPollMs: number;
   /** Both required together to enable the video studio integration (reels list, publish, Instagram stats). */
   studioBaseUrl?: string;
   studioSecret?: string;
@@ -882,6 +898,38 @@ export function loadConfig(): JarvisConfig {
 
   const githubToken = process.env.GITHUB_TOKEN?.trim() || undefined;
 
+  // Comma-separated "owner/repo" list, same parsing convention as
+  // FREE_PROVIDER_PRIORITY above (split, trim, drop empties) — validated
+  // loosely here (just "has exactly one slash with something on both
+  // sides") since `parseWatchedRepo` in pollGitHubActivity.ts does the
+  // real per-entry validation and skips (rather than crashes on) anything
+  // malformed at poll time; this is just an early, friendlier startup
+  // error for an obviously wrong value.
+  const githubWatchedReposRaw = process.env.GITHUB_WATCHED_REPOS?.split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (githubWatchedReposRaw) {
+    const malformed = githubWatchedReposRaw.filter((entry) => entry.split("/").length !== 2 || entry.split("/").some((part) => part.length === 0));
+    if (malformed.length > 0) {
+      throw new ConfigError(
+        `Invalid GITHUB_WATCHED_REPOS: "${malformed.join(", ")}" — must be a comma-separated list of "owner/repo" entries`
+      );
+    }
+  }
+  const githubWatchedRepos = githubWatchedReposRaw ?? [];
+
+  const githubActivityDbPath = process.env.JARVIS_GITHUB_ACTIVITY_DB_PATH ?? "./data/jarvis-github-activity.sqlite";
+
+  const githubActivityPollMsRaw = process.env.JARVIS_GITHUB_ACTIVITY_POLL_MS?.trim();
+  // Default: 20 minutes — within the task description's recommended
+  // 15-30+ minute range for "did anything new happen" at a
+  // personal-project scale, without being so infrequent that genuinely
+  // new activity sits uncached for an hour-plus.
+  const githubActivityPollMs = githubActivityPollMsRaw ? Number(githubActivityPollMsRaw) : 20 * 60 * 1000;
+  if (!Number.isFinite(githubActivityPollMs) || githubActivityPollMs <= 0) {
+    throw new ConfigError("Invalid JARVIS_GITHUB_ACTIVITY_POLL_MS: must be a positive integer");
+  }
+
   const studioBaseUrl = process.env.JARVIS_STUDIO_BASE_URL?.trim() || undefined;
   const studioSecret = process.env.JARVIS_STUDIO_SECRET?.trim() || undefined;
   if (Boolean(studioBaseUrl) !== Boolean(studioSecret)) {
@@ -1144,6 +1192,9 @@ export function loadConfig(): JarvisConfig {
     spotifyClientSecret,
     spotifyTokenDbPath,
     githubToken,
+    githubWatchedRepos,
+    githubActivityDbPath,
+    githubActivityPollMs,
     studioBaseUrl,
     studioSecret,
     commitmentsDbPath,
