@@ -54,11 +54,14 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
         // banner, independent of Telegram being configured at all.
         //
         // UNUserNotificationCenter.current() hard-crashes (NSInternalInconsistencyException,
-        // "bundleProxyForCurrentProcess is nil") when the running process has no real bundle
-        // identifier — which is exactly what `swift run` / a raw unsigned executable produces.
-        // The proper `scripts/install.sh` flow code-signs a real app bundle, where this works
+        // "bundleProxyForCurrentProcess is nil") when the running process isn't a real,
+        // Launch-Services-registered .app bundle — which is exactly what `swift run` / a raw
+        // executable produces, even on newer toolchains that synthesize a non-nil
+        // Bundle.main.bundleIdentifier for such a build (so that alone isn't a safe check).
+        // The real signal is whether Bundle.main actually resolves to a `.app` bundle on disk.
+        // The proper `scripts/install.sh` flow code-signs a real .app bundle, where this works
         // fine, so this guard only short-circuits ad-hoc `swift run` smoke-testing.
-        if Bundle.main.bundleIdentifier != nil {
+        if Bundle.main.bundleURL.pathExtension == "app" {
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
                 if let error {
                     Logger.shared.log("Notification authorization request failed: \(error.localizedDescription)")
@@ -67,7 +70,7 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
                 }
             }
         } else {
-            Logger.shared.log("No bundle identifier (running unbundled, e.g. `swift run`) — skipping notification permission request.")
+            Logger.shared.log("Not running from a real .app bundle (e.g. `swift run`) — skipping notification permission request.")
         }
 
         // Accessibility (CLICK_ELEMENT, TYPE_TEXT) is the one permission
