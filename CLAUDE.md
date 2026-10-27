@@ -482,6 +482,55 @@ living on the Mac rather than Fly since the whole point is the voiceprint never 
 the device. The passphrase remains the right primary mechanism for now; voice verification,
 once viable, should layer on top of it (closer to 2FA) rather than replace it.
 
+## Built (2026-10-27): LOOK_AT_SCREEN (real vision on the screen) + OPEN_URL confirmed already-built
+
+David wanted "Hey Jarvis, look at my screen — what should I do here?" to actually work —
+JARVIS seeing a live screenshot and commenting on real specifics, not just saving a file and
+telling him a path exists (that's what `CAPTURE_SCREENSHOT` already does, and still does,
+unchanged). Built `LOOK_AT_SCREEN` (`src/tools/system/LookAtScreenTool.ts` +
+`agents/imac/JarvisAgent/Sources/JarvisAgent/Tools/LookAtScreenTool.swift`, CONFIRM-tier, same
+reasoning as `CAPTURE_SCREENSHOT`) as a sibling tool, not a replacement: it captures a JPEG
+screenshot, downscales/recompresses it (via `sips`, shared `ScreenCaptureCore.swift` extracted
+so both screenshot tools reuse the same `screencapture` subprocess logic) to comfortably fit
+under Core's existing `MAX_IMAGE_BASE64_LENGTH` cap, and returns the actual image bytes instead
+of a path.
+
+The real design work was the **Vision Bridge** (`src/core/orchestrator/screenVisionBridge.ts`):
+until now, an image could only enter a conversation as part of a brand-new human-sent
+`UserMessage` (the web chat image-upload path) — there was no way for a TOOL CALL's result to
+put a real image in front of the model within the same tool-calling turn, since
+`ToolResultMessage.content` is a plain string. The bridge special-cases a successful
+`LOOK_AT_SCREEN` result in `Orchestrator`'s tool loop: it extracts the image, attaches it as a
+synthetic `UserMessageImage` on the very next `brain.chat()` call in the same turn (so the
+model's next step genuinely sees it and correctly triggers `AIRouter`'s existing vision-provider
+routing), and redacts the raw base64 out of what actually gets persisted into
+`ConversationManager` — the bridge is one-shot and never written to long-term conversation
+history, so a multi-MB screenshot never gets resent on every later turn. An oversized or failed
+capture degrades gracefully (a normal tool-error/size-check result, no image attached) rather
+than crashing or silently truncating. Covered by
+`tests/core/orchestrator/screenVisionBridge.test.ts` and a new
+`tests/integration/orchestrator.test.ts` describe block exercising the full bridge end-to-end
+(including the oversized-payload and failed-capture paths).
+
+Also added: `OPEN_URL`'s own system-prompt nudge — "want me to open that for you?" offered
+first, then act on yes, matching David's own stated UX — in `systemPrompt.ts`. **`OPEN_URL`
+itself turned out to already be fully built** (`src/tools/system/OpenUrlTool.ts` +
+Swift counterpart, SAFE_ACTION-tier, http/https-only validation, already registered/tested) —
+no new code needed there beyond the prompt nudge.
+
+**Deliberate design choice, matching this repo's existing privacy posture (camera/always-on
+features)**: `LOOK_AT_SCREEN` is on-demand/user-triggered only, the same CONFIRM-gated,
+one-shot-per-call shape as `CAPTURE_SCREENSHOT` — there is no passive/continuous screen
+watcher anywhere in this change, and none should be added without a real, separate
+conversation with David first.
+
+**Honesty check, same as every other Swift Mac-agent tool**: `LookAtScreenTool.swift` and the
+`ScreenCaptureCore.swift` refactor have never been compiled or run against a real macOS
+runtime — no Xcode/macOS toolchain exists in this sandbox. The TypeScript side (the tool
+definition, the Vision Bridge, and the Orchestrator wiring) is real, typechecked
+(`bun run typecheck`, 0 errors), and tested (`bun test`, full suite green) — only the Swift
+half carries the standing "REQUIRES REAL macOS VALIDATION" caveat.
+
 ## Elaboration of wishlist #10 (2026-10-27): full scope once it's actually time to build it
 
 David expanded on what #10 ("JARVIS drives Claude Code to build/ship his apps") should actually

@@ -15,6 +15,7 @@ import type { LockdownService } from "@/core/lockdown/LockdownService";
 import type { JarvisLiveStateTracker } from "@/core/state/JarvisLiveState";
 import type { ToolResultCache } from "@/core/cache/ToolResultCache";
 import { quarantineToolResult } from "@/core/orchestrator/toolResultQuarantine";
+import { buildScreenVisionMessage, extractScreenVisionImage, redactScreenVisionPayload } from "@/core/orchestrator/screenVisionBridge";
 import { summarizeToolResult } from "./toolResultSummary";
 import { classifyFastPath } from "@/core/intent/FastPathClassifier";
 import { isLikelyStatusQuery, formatLiveStatus } from "@/core/state/liveStatusFormatter";
@@ -462,6 +463,14 @@ export class Orchestrator {
     let totalToolCallsThisRun = 0;
     const toolCallCountsThisRun = new Map<string, number>();
 
+    // Vision Bridge (see screenVisionBridge.ts): an image a LOOK_AT_SCREEN
+    // tool call produced in the PREVIOUS iteration, attached as a synthetic
+    // user message on THIS iteration's brain call only — one-shot, never
+    // persisted into `conversation` itself. Re-populated after each tool
+    // batch below; always consumed (and cleared) at the top of the next
+    // iteration regardless of whether it's empty.
+    let pendingVisionImages: UserMessageImage[] = [];
+
     try {
       this.transitionLiveState(sessionId, userId, "THINKING", { reason: "awaiting brain response" });
 
@@ -472,8 +481,14 @@ export class Orchestrator {
 
         eventBus.emit("brain.request", { messageCount: conversation.getMessages().length });
 
+        const baseMessages = conversation.getMessagesForBrain();
+        const messagesForBrain = pendingVisionImages.length
+          ? [...baseMessages, buildScreenVisionMessage(pendingVisionImages)]
+          : baseMessages;
+        pendingVisionImages = [];
+
         const brainRequest = {
-          messages: conversation.getMessagesForBrain(),
+          messages: messagesForBrain,
           tools: toolRegistry.toToolDefinitions(scopedTools),
           context: systemPrompt,
           runId,
@@ -543,7 +558,12 @@ export class Orchestrator {
           pendingToolCalls.push(toolCall);
         }
 
-        await this.runToolCallBatch(userId, sessionId, pendingToolCalls, runId);
+        const turnVisionImages: UserMessageImage[] = [];
+        await this.runToolCallBatch(userId, sessionId, pendingToolCalls, runId, turnVisionImages);
+        // Defense in depth: never carry more than MAX_IMAGES_PER_MESSAGE
+        // into the synthetic bridge message above, same cap enforced on a
+        // human-attached image at the top of this method.
+        pendingVisionImages = turnVisionImages.slice(0, MAX_IMAGES_PER_MESSAGE);
 
         if (liveState?.isStopRequested(sessionId)) {
           return "Stopped.";
@@ -712,9 +732,14 @@ export class Orchestrator {
     }
   }
 
-  private async runToolCall(userId: string, toolCall: ToolCallRequest, runId?: string): Promise<void> {
+  private async runToolCall(
+    userId: string,
+    toolCall: ToolCallRequest,
+    runId?: string,
+    visionImages?: UserMessageImage[]
+  ): Promise<void> {
     const result = await this.executeToolCall(userId, toolCall, runId);
-    this.completeToolCall(toolCall, result);
+    this.completeToolCall(toolCall, result, visionImages);
   }
 
   /**
@@ -747,7 +772,8 @@ export class Orchestrator {
     userId: string,
     sessionId: string,
     toolCalls: ToolCallRequest[],
-    runId?: string
+    runId?: string,
+    visionImages?: UserMessageImage[]
   ): Promise<void> {
     const { toolRegistry, liveState } = this.deps;
     let index = 0;
@@ -762,7 +788,7 @@ export class Orchestrator {
       const isReadOnly = tool?.requiredPermission === PermissionLevel.READ;
 
       if (!isReadOnly) {
-        await this.runToolCall(userId, toolCall, runId);
+        await this.runToolCall(userId, toolCall, runId, visionImages);
         index++;
         continue;
       }
@@ -776,7 +802,7 @@ export class Orchestrator {
         index++;
       }
 
-      const settled = await Promise.allSettled(batch.map((tc) => this.runToolCall(userId, tc, runId)));
+      const settled = await Promise.allSettled(batch.map((tc) => this.runToolCall(userId, tc, runId, visionImages)));
       const firstRejection = settled.find(
         (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected"
       );
@@ -1040,8 +1066,19 @@ export class Orchestrator {
    * untrusted data before it ever reaches the model — see
    * `quarantineToolResult`'s own doc comment for the full reasoning.
    */
-  private completeToolCall(toolCall: ToolCallRequest, result: ToolResult): void {
-    const quarantined = quarantineToolResult(toolCall.toolName, JSON.stringify(result));
+  /**
+   * Writes `result` into conversation history (quarantined, as always), and
+   * — see `screenVisionBridge.ts` — if this was a successful LOOK_AT_SCREEN
+   * call, pushes the extracted image onto `visionImages` (for the caller to
+   * attach to the NEXT brain call) and redacts the raw base64 payload out of
+   * what actually gets persisted into `ConversationManager`.
+   */
+  private completeToolCall(toolCall: ToolCallRequest, result: ToolResult, visionImages?: UserMessageImage[]): void {
+    const image = extractScreenVisionImage(toolCall, result, MAX_IMAGE_BASE64_LENGTH);
+    if (image) visionImages?.push(image);
+
+    const persistedResult = image ? redactScreenVisionPayload(toolCall, result) : result;
+    const quarantined = quarantineToolResult(toolCall.toolName, JSON.stringify(persistedResult));
     this.deps.conversation.addToolResult(toolCall.id, toolCall.toolName, quarantined);
   }
 }
