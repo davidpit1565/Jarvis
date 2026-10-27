@@ -62,6 +62,8 @@ export interface JarvisEventMap {
   "memory.extraction.skippedDeleted": { key: string };
   /** Continuous Memory/Profile: an extracted fact was written (or rejected by the Memory Poisoning Defense — `applied: false`) via `MemoryStore.save`. */
   "memory.extraction.wrote": { key: string; category: string; applied: boolean };
+  /** Scoped Fact-Consolidation (2026-10-27): the extraction call suspected `candidateKey`'s value might be superseded by a new fact it wasn't confident enough to merge, so it saved the new fact separately under `newKey` and flagged `candidateKey` for review — see `MemoryStore.flagAmbiguousUpdate`'s doc comment. */
+  "memory.extraction.ambiguousUpdateFlagged": { candidateKey: string; newKey: string };
   /** Correction Learning: a behavioral correction about `contextKey` (the tool it was about) was detected and written to `BehaviorCorrectionStore`. `flaggedPreferenceConflict` true means it was also flagged as conflicting with a standing MemoryStore preference — see `correctionNote.ts`'s caveat handling. */
   "behaviorCorrection.stored": { contextKey: string; flaggedPreferenceConflict: boolean };
   /**
