@@ -47,6 +47,11 @@ import { selfImprovementNote } from "@/watcher/selfImprovementNote";
  * watcher scheduler in index.ts most recently cached for David's
  * configured `NEWS_WATCH_TOPICS`; omitted (no topics configured) means no
  * contribution, same inert-by-default posture as everything else here.
+ * `gmailWatch` is the same shape of optional add-on again, for the
+ * Proactive Watcher's Gmail source (`GMAIL_WATCH_QUERIES`) — kept as its
+ * own separate parameter (not merged into `newsWatch`'s sources list)
+ * because each uses its own dedicated `WatcherStore`/db file, the same
+ * per-source-type-store convention GitHub/news already follow.
  * `selfImprovementWatcherStore`, likewise optional, reads whatever the
  * self-improvement watcher (`selfImprovementWatchSource.ts`) most recently
  * surfaced — a dedicated note composer (`selfImprovementNote`), not
@@ -65,6 +70,7 @@ export async function buildContextNote(
   currentMessage?: string,
   githubActivityStore?: GitHubActivityStore,
   newsWatch?: { store: WatcherStore; sources: Array<WatchSource<unknown, unknown>> },
+  gmailWatch?: { store: WatcherStore; sources: Array<WatchSource<unknown, unknown>> },
   selfImprovementWatcherStore?: WatcherStore
 ): Promise<string> {
   const calendarNote = calendarClient ? await todayCalendarNote(calendarClient) : undefined;
@@ -80,6 +86,13 @@ export async function buildContextNote(
       ? composeWatcherNote(newsWatch.store, newsWatch.sources, {
           intro: (count) =>
             `JARVIS has been watching the news for ${count} of the user's configured topic(s) that had new headlines since it last checked — ` +
+            `feel free to mention something relevant naturally if it fits, without being asked`,
+        })
+      : undefined,
+    gmailWatch
+      ? composeWatcherNote(gmailWatch.store, gmailWatch.sources, {
+          intro: (count) =>
+            `JARVIS has been watching Gmail for ${count} of the user's configured search(es) that had new matching messages since it last checked — ` +
             `feel free to mention something relevant naturally if it fits, without being asked`,
         })
       : undefined,

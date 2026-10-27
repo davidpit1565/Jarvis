@@ -541,6 +541,22 @@ export interface JarvisConfig {
   /** How often (ms) the background news-watch poller ticks. Only relevant when `newsWatchTopics` is non-empty. */
   newsWatchPollMs: number;
   /**
+   * Raw Gmail search queries (comma-separated, e.g. "from:someone@example.com",
+   * "subject:invoice") to proactively watch for new matching messages — the
+   * generalized Proactive Watcher's Gmail source (CLAUDE.md's "deferred
+   * follow-up" item), same explicit opt-in posture as `githubWatchedRepos`/
+   * `newsWatchTopics`: empty (the default) makes Gmail watching inert — no
+   * polling, no note, never an open-ended "watch the whole inbox" default.
+   * Only takes effect when a Google account is actually linked for Gmail
+   * (`gmailClient` configured). Each query is its own watch source
+   * (`gmail:<query>`, see `gmailWatchSource.ts`).
+   */
+  gmailWatchQueries: string[];
+  /** Path to the SQLite database caching each watched Gmail query's poll cursor and most-recently-found new messages (the shared WatcherStore). */
+  gmailWatchDbPath: string;
+  /** How often (ms) the background Gmail-watch poller ticks. Only relevant when `gmailWatchQueries` is non-empty. */
+  gmailWatchPollMs: number;
+  /**
    * Watch source ids (exact match, e.g. "news:ai safety", "github:owner/repo")
    * David has explicitly configured as warranting the louder device-announce
    * channel instead of the default quiet Telegram note — see
@@ -1021,6 +1037,26 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("Invalid JARVIS_NEWS_WATCH_POLL_MS: must be a positive integer");
   }
 
+  // Comma-separated raw Gmail search queries, same opt-in parsing
+  // convention as NEWS_WATCH_TOPICS/GITHUB_WATCHED_REPOS above —
+  // empty/unset means Gmail watching stays fully inert. No "owner/repo"-
+  // style structural validation here: Gmail's own search syntax is too
+  // open-ended to usefully pre-validate, and an empty query after parsing
+  // is just dropped by the same `.filter((entry) => entry.length > 0)` the
+  // other watch-list configs already use.
+  const gmailWatchQueries = process.env.GMAIL_WATCH_QUERIES?.split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0) ?? [];
+
+  const gmailWatchDbPath = process.env.JARVIS_GMAIL_WATCH_DB_PATH ?? "./data/jarvis-gmail-watch.sqlite";
+
+  const gmailWatchPollMsRaw = process.env.JARVIS_GMAIL_WATCH_POLL_MS?.trim();
+  // Same default rationale as JARVIS_GITHUB_ACTIVITY_POLL_MS/JARVIS_NEWS_WATCH_POLL_MS: 20 minutes.
+  const gmailWatchPollMs = gmailWatchPollMsRaw ? Number(gmailWatchPollMsRaw) : 20 * 60 * 1000;
+  if (!Number.isFinite(gmailWatchPollMs) || gmailWatchPollMs <= 0) {
+    throw new ConfigError("Invalid JARVIS_GMAIL_WATCH_POLL_MS: must be a positive integer");
+  }
+
   // Comma-separated exact watch-source ids (e.g. "news:ai safety",
   // "github:davidpit1565/Jarvis") David has explicitly flagged for the
   // louder device-announce channel — see WatcherChannelConfig's own doc
@@ -1320,6 +1356,9 @@ export function loadConfig(): JarvisConfig {
     newsWatchTopics,
     newsWatchDbPath,
     newsWatchPollMs,
+    gmailWatchQueries,
+    gmailWatchDbPath,
+    gmailWatchPollMs,
     watcherHighPrioritySourceIds,
     watcherAnnounceDeviceId,
     watcherPushNotificationsEnabled,

@@ -1162,3 +1162,40 @@ history capping, no baseline suppression), `tests/watcher/selfImprovementNote.te
 composition, source-id isolation), and a new case in `tests/watcher/WatcherChannelRouter.test.ts`
 confirming `alwaysQuietSourceIds` overrides high-priority/phone configuration. `bun run typecheck`
 (0 errors) and `bun test` (2802 pass, 0 fail) both clean.
+
+## Proactive Watcher: both explicitly-flagged follow-ups closed out (2026-10-27)
+
+When the generalized Proactive Watcher (`src/watcher/`) was first built, two follow-ups were
+flagged as deferred-but-wanted and never done. Both are now closed:
+
+1. **GitHub activity now gets real immediate push notifications, not just a next-conversation
+   mention.** `pollGitHubActivity`'s background tick (in `src/index.ts`) now calls the same
+   `WatcherNotifier`/`watcherChannelConfig` immediate-push mechanism news watching already used,
+   gated the same way (`WATCHER_PUSH_NOTIFICATIONS_ENABLED`, default off; GitHub sources aren't
+   high-priority by default — they go through `WATCHER_HIGH_PRIORITY_SOURCES` opt-in like any
+   other source). `githubActivityNote.ts`'s next-conversation surfacing is unchanged and still
+   runs independently — this is additive, so the same honest "could mention the same item via
+   push AND at the start of the next conversation" redundancy news already accepted now applies
+   to GitHub too. `githubActivityNote.ts` gained an exported `formatRepoActivitySummary()`
+   (factored out of its existing per-repo formatter) so the push text and the context-note bullet
+   share the same wording logic instead of drifting apart.
+2. **Gmail is now a third Watch Source**, `src/gmail/gmailWatchSource.ts`, following the exact
+   shape `src/news/newsWatchSources.ts` set as precedent: `GMAIL_WATCH_QUERIES` (comma-separated
+   raw Gmail search strings, e.g. `from:someone@example.com`, `subject:invoice` — confirmed
+   `GmailClient.searchMessages(query, maxResults, account?)` already accepts a raw query string
+   verbatim, so no new Gmail API code was needed) is the explicit opt-in list, matching
+   `GITHUB_WATCHED_REPOS`/`NEWS_WATCH_TOPICS`'s posture exactly: empty/unset leaves Gmail watching
+   fully inert. Each query is its own source id (`gmail:<query>`), cursor-deduped by message id
+   (same "seen set, first poll only establishes a baseline" shape as news's seen-links cursor),
+   and surfaced through the same `composeWatcherNote`/`WatcherNotifier` pipeline as any other
+   source — default quietest channel (Telegram) unless explicitly escalated via
+   `WATCHER_HIGH_PRIORITY_SOURCES`. Per the original spec's explicit privacy caution, a surfaced
+   item only ever shows sender + subject + Gmail's own short snippet (each individually capped at
+   160 chars, `MAX_PREVIEW_LENGTH` in `gmailWatchSource.ts`) — it never calls
+   `GmailClient.getMessageBody()`, so a full email body can never leak into a note that might
+   surface in an unrelated later conversation. New config:
+   `GMAIL_WATCH_QUERIES`/`JARVIS_GMAIL_WATCH_DB_PATH`/`JARVIS_GMAIL_WATCH_POLL_MS` (default 20
+   minutes, same as GitHub/news), only active when a Google account is linked (`gmailClient`
+   configured) — same "needs both a client and an explicit watch list" gating GitHub/news already
+   have. `buildContextNote` took a new optional `gmailWatch` parameter alongside `newsWatch`,
+   using its own dedicated `WatcherStore`/db file rather than merging into news's.
