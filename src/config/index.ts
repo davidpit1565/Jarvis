@@ -564,6 +564,24 @@ export interface JarvisConfig {
    * quieter note-only behavior.
    */
   watcherPushNotificationsEnabled: boolean;
+  /**
+   * Whether JARVIS's self-improvement suggestion watcher runs at all
+   * (CLAUDE.md "build the self-improvement suggestion engine"). Unlike
+   * every other Proactive Watcher source above, this one defaults to
+   * **true**, not opt-in-empty — see `selfImprovementWatchSource.ts`'s own
+   * doc comment for the reasoning: it reads only a static, in-repo
+   * candidate list (no external account/data access, no new privacy
+   * surface), and is exactly the "tell me about this unprompted, maybe
+   * once a week" behavior David asked to be built, so requiring him to
+   * discover and set an env var first would mean the feature silently never
+   * runs for anyone who doesn't already know it exists. An explicit
+   * `SELF_IMPROVEMENT_WATCH_ENABLED=false` opts out.
+   */
+  selfImprovementWatchEnabled: boolean;
+  /** Path to the SQLite database caching the self-improvement watcher's rotation cursor and most-recently-surfaced candidate (the shared WatcherStore). */
+  selfImprovementDbPath: string;
+  /** How often (ms) the self-improvement watcher polls — defaults to a weekly cadence, deliberately much slower than news/GitHub's 20-minute default since it watches a small, hand-curated static list rather than a fast-changing external source. */
+  selfImprovementPollMs: number;
   /** Both required together to enable the video studio integration (reels list, publish, Instagram stats). */
   studioBaseUrl?: string;
   studioSecret?: string;
@@ -1015,6 +1033,24 @@ export function loadConfig(): JarvisConfig {
 
   const watcherPushNotificationsEnabled = (process.env.WATCHER_PUSH_NOTIFICATIONS_ENABLED?.trim().toLowerCase() ?? "false") === "true";
 
+  // Self-improvement suggestion watcher: on BY DEFAULT (an explicit "false"
+  // opts out) — see this field's own doc comment above for why that's a
+  // deliberate exception to every other Watcher source's opt-in-empty
+  // default.
+  const selfImprovementWatchEnabled = (process.env.SELF_IMPROVEMENT_WATCH_ENABLED?.trim().toLowerCase() ?? "true") !== "false";
+
+  const selfImprovementDbPath = process.env.JARVIS_SELF_IMPROVEMENT_DB_PATH ?? "./data/jarvis-self-improvement-watch.sqlite";
+
+  const selfImprovementPollMsRaw = process.env.SELF_IMPROVEMENT_POLL_MS?.trim();
+  // Default: 7 days — matching David's own "maybe once a week" framing for
+  // this feature, intentionally much slower than news/GitHub's 20-minute
+  // default (those watch fast-changing external sources; this watches a
+  // small static list that doesn't change at that pace).
+  const selfImprovementPollMs = selfImprovementPollMsRaw ? Number(selfImprovementPollMsRaw) : 7 * 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(selfImprovementPollMs) || selfImprovementPollMs <= 0) {
+    throw new ConfigError("Invalid SELF_IMPROVEMENT_POLL_MS: must be a positive integer");
+  }
+
   const studioBaseUrl = process.env.JARVIS_STUDIO_BASE_URL?.trim() || undefined;
   const studioSecret = process.env.JARVIS_STUDIO_SECRET?.trim() || undefined;
   if (Boolean(studioBaseUrl) !== Boolean(studioSecret)) {
@@ -1287,6 +1323,9 @@ export function loadConfig(): JarvisConfig {
     watcherHighPrioritySourceIds,
     watcherAnnounceDeviceId,
     watcherPushNotificationsEnabled,
+    selfImprovementWatchEnabled,
+    selfImprovementDbPath,
+    selfImprovementPollMs,
     studioBaseUrl,
     studioSecret,
     commitmentsDbPath,

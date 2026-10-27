@@ -176,6 +176,8 @@ import { pollWatchSources } from "@/watcher/pollWatchSources";
 import { createPollScheduler } from "@/watcher/scheduler";
 import { WatcherNotifier } from "@/watcher/WatcherNotifier";
 import { emptyWatcherChannelConfig } from "@/watcher/WatcherChannelRouter";
+import { createSelfImprovementWatchSource, SELF_IMPROVEMENT_SOURCE_ID } from "@/watcher/selfImprovementWatchSource";
+import { selfImprovementNote } from "@/watcher/selfImprovementNote";
 import { createGetNewsTool } from "@/tools/news/GetNewsTool";
 import { createSearchNewsTool } from "@/tools/news/SearchNewsTool";
 import { isWeeklyDigestDue } from "@/digest/isWeeklyDigestDue";
@@ -571,6 +573,15 @@ function main() {
   const newsWatchEnabled = newsWatchSources.length > 0;
   const newsWatchContext = newsWatchEnabled ? { store: newsWatcherStore, sources: newsWatchSources } : undefined;
 
+  // Self-improvement suggestion watcher (CLAUDE.md "build the
+  // self-improvement suggestion engine") — on by default, see
+  // `config.selfImprovementWatchEnabled`'s own doc comment for why. Store is
+  // always constructed (cheap, same posture as `newsWatcherStore` above) so
+  // the context note always has something to read even before the poller
+  // below has run its first tick.
+  const selfImprovementStore = new WatcherStore(config.selfImprovementDbPath);
+  const selfImprovementSource = createSelfImprovementWatchSource();
+
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
   toolRegistry.registerTool(listRunningApplicationsTool);
@@ -915,7 +926,8 @@ function main() {
         behaviorCorrectionStore,
         message,
         githubActivityStore,
-        newsWatchContext
+        newsWatchContext,
+        selfImprovementStore
       ),
     lockdownService,
     toolResultCache,
@@ -1003,7 +1015,8 @@ function main() {
           behaviorCorrectionStore,
           message,
           githubActivityStore,
-          newsWatchContext
+          newsWatchContext,
+          selfImprovementStore
         ),
       lockdownService,
       toolResultCache,
@@ -1061,7 +1074,8 @@ function main() {
           behaviorCorrectionStore,
           message,
           githubActivityStore,
-          newsWatchContext
+          newsWatchContext,
+          selfImprovementStore
         ),
       lockdownService,
       toolResultCache,
@@ -1152,7 +1166,8 @@ function main() {
           behaviorCorrectionStore,
           message,
           githubActivityStore,
-          newsWatchContext
+          newsWatchContext,
+          selfImprovementStore
         ),
       lockdownService,
       toolResultCache,
@@ -1216,7 +1231,8 @@ function main() {
           behaviorCorrectionStore,
           message,
           githubActivityStore,
-          newsWatchContext
+          newsWatchContext,
+          selfImprovementStore
         ),
       lockdownService,
       toolResultCache,
@@ -1286,6 +1302,13 @@ function main() {
   const watcherChannelConfig = {
     ...emptyWatcherChannelConfig(),
     highPrioritySourceIds: new Set(config.watcherHighPrioritySourceIds),
+    // The self-improvement source is pinned to the quietest channel always,
+    // by hardcoded id — never derived from WATCHER_HIGH_PRIORITY_SOURCES or
+    // any other env var, so no configuration mistake can ever make JARVIS's
+    // own self-improvement suggestions ring a device or place a call. See
+    // CLAUDE.md: "self-improvement suggestions should NEVER be treated as
+    // high-urgency/device-announce-worthy."
+    alwaysQuietSourceIds: new Set([SELF_IMPROVEMENT_SOURCE_ID]),
   };
   const watcherNotifier = new WatcherNotifier(telegramGateway, config.telegramOwnerChatId, proactiveAnnouncer, config.watcherAnnounceDeviceId);
 
@@ -1320,6 +1343,33 @@ function main() {
       { onTick: () => schedulerHealthTracker.tick("newsWatch") }
     );
     console.log(`[jarvis] News watching ${newsWatchSources.length} topic(s), polling every ${config.newsWatchPollMs}ms`);
+  }
+
+  // Self-improvement suggestion watcher's own scheduler — a separate
+  // interval from news (weekly-scale vs. 20-minute-scale cadence; sharing
+  // one scheduler/interval across both would force them onto the same
+  // tick rate). Always-quiet channel is enforced via `watcherChannelConfig`
+  // above regardless of `config.watcherPushNotificationsEnabled`.
+  let selfImprovementScheduler: ReturnType<typeof createPollScheduler> | undefined;
+  if (config.selfImprovementWatchEnabled) {
+    selfImprovementScheduler = createPollScheduler(
+      [
+        () =>
+          pollWatchSources([selfImprovementSource], selfImprovementStore, (sourceId, error) => {
+            console.error(`[jarvis] self-improvement watch poll failed for "${sourceId}":`, error instanceof Error ? error.message : String(error));
+          }).then(() => {
+            if (!config.watcherPushNotificationsEnabled) return;
+            const note = selfImprovementNote(selfImprovementStore);
+            if (!note) return;
+            watcherNotifier.notify(SELF_IMPROVEMENT_SOURCE_ID, note, watcherChannelConfig).catch((error) => {
+              console.error(`[jarvis] watcher notify failed for "${SELF_IMPROVEMENT_SOURCE_ID}":`, error instanceof Error ? error.message : String(error));
+            });
+          }),
+      ],
+      config.selfImprovementPollMs,
+      { onTick: () => schedulerHealthTracker.tick("selfImprovementWatch") }
+    );
+    console.log(`[jarvis] Self-improvement suggestion watcher enabled, polling every ${config.selfImprovementPollMs}ms`);
   }
 
   // OPEN_CHAT only needs the bot's public username (to build the t.me
@@ -1415,7 +1465,8 @@ function main() {
           behaviorCorrectionStore,
           message,
           githubActivityStore,
-          newsWatchContext
+          newsWatchContext,
+          selfImprovementStore
         ),
       lockdownService,
       toolResultCache,
@@ -2323,6 +2374,8 @@ function main() {
     if (githubActivityInterval) clearInterval(githubActivityInterval);
     if (newsWatcherScheduler) newsWatcherScheduler.stop();
     newsWatcherStore.close();
+    if (selfImprovementScheduler) selfImprovementScheduler.stop();
+    selfImprovementStore.close();
     calendarTokenStore.close();
     spotifyTokenStore.close();
     canvaTokenStore.close();

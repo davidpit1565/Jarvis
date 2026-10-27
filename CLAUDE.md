@@ -1080,3 +1080,85 @@ added** to avoid a near-duplicate; `systemPrompt.ts`'s new translation note tell
 `NOTIFY_USER` when asked to send a translation (or anything else) to Telegram. If a future need
 genuinely diverges from `NOTIFY_USER`'s shape, build on top of it rather than starting a third
 telegram-send path.
+
+## Built (2026-10-27): the self-improvement suggestion engine
+
+Closes out the "JARVIS proactively suggests improvements to itself" item flagged as coming after
+`JARVIS_COMPETITIVE_RESEARCH.md` and the "Second research pass" section above landed. Plugs into
+the existing generalized Proactive Watcher (`src/watcher/`) as a new `WatchSource` rather than a
+new standalone mechanism.
+
+**Candidate-source shape, and its explicit staleness limitation**: `src/watcher/
+selfImprovementCandidates.ts` is a small, hand-curated, bounded (≤12) static list — NOT a live
+"ask an LLM to brainstorm improvements" prompt, and NOT a live `CLAUDE.md` read at runtime. Both
+alternatives were considered and rejected: an open-ended brainstorm has no grounding and would
+produce generic, un-vetted ideas with no connection to this actual codebase, violating the
+Watcher's own "not JARVIS deciding unilaterally what's worth watching" philosophy; having the
+live Fly process parse this prose `CLAUDE.md` file at runtime was judged impractical (it isn't
+guaranteed to ship with the deployed image, and reliably extracting "still-open items" from loose
+prose is itself a fragile feature, not a simple one). Every candidate is instead grounded in a
+real, already-written research pass or a real, still-open wishlist item, with concrete file/module
+references. **Honest limitation, same discipline as every other note in this file**: this list
+goes stale — it reflects the backlog as of 2026-10-27 and needs a human to update it by hand
+(remove an item once its PR lands, add new ones as the backlog grows) the same way
+`GITHUB_WATCHED_REPOS`/`NEWS_WATCH_TOPICS` need a human to update them. No live web-search
+candidate source was added either — the task explicitly allowed skipping it if not clearly a good
+idea, and a curated static list already gives every candidate real grounding, so an unbounded live
+search felt like overbuilding for this pass. Candidates explicitly EXCLUDE anything David has
+already deferred (App Store Connect/TestFlight automation, the full iPhone app, Mac/iMac hardware
+validation, voice/speaking-style adaptation) — suggesting one of those back to him would contradict
+his own stated sequencing and read as nagging, the opposite of this feature's "caring suggestion"
+framing.
+
+**Rotation, not repetition**: `src/watcher/selfImprovementWatchSource.ts` surfaces exactly one
+candidate per poll cycle, picking whichever was suggested longest ago (never-suggested beats
+everything), tracked via the cursor `WatcherStore` already persists — no new storage mechanism.
+Deliberately does NOT follow the other `WatchSource`s' "first poll is baseline-only, reports
+nothing" convention: that convention exists to avoid dumping an entire pre-existing backlog as a
+fabricated burst of "new" activity, and this source never reports more than one item regardless,
+so suppressing the first poll would only delay the feature by a full poll interval for no safety
+benefit.
+
+**Default-on, unlike every other Watcher source**: `SELF_IMPROVEMENT_WATCH_ENABLED` defaults to
+`true` (an explicit `false` opts out) — a deliberate, reasoned exception to `GITHUB_WATCHED_REPOS`/
+`NEWS_WATCH_TOPICS`'s opt-in-empty default. Reasoning: this source touches none of David's
+external accounts or data (no new privacy/cost surface, unlike watching his email or GitHub), and
+it's exactly the "tell me about this periodically, unprompted" behavior he asked to be built —
+requiring him to first discover and set an env var would mean the feature silently never runs for
+anyone who doesn't already know it exists. Polls weekly by default (`SELF_IMPROVEMENT_POLL_MS`,
+7 days), matching his own "maybe once a week" framing — much slower than news/GitHub's 20-minute
+default, since it watches a small static list, not a fast-changing external source.
+
+**Channel: always the quietest, enforced structurally, not just by default config**. Added a new
+`alwaysQuietSourceIds` field to `WatcherChannelConfig`/`routeWatcherSource`
+(`src/watcher/WatcherChannelRouter.ts`) — checked before `phoneSourceIds`/`highPrioritySourceIds`,
+and populated in `src/index.ts` with this source's hardcoded id, never derived from any env var.
+This means no future configuration mistake (e.g. someone later widening
+`WATCHER_HIGH_PRIORITY_SOURCES`) can ever escalate a self-improvement suggestion onto
+device-announce or phone — it is structurally pinned to Telegram/next-conversation-note, matching
+CLAUDE.md's own standing instruction that these suggestions "should NEVER be treated as
+high-urgency." Surfaces via `src/watcher/selfImprovementNote.ts` at the start of the next
+conversation (added to `buildContextNote.ts`, same pattern as `goalProgressNote`/
+`githubActivityNote`), plus an immediate quiet Telegram push when
+`WATCHER_PUSH_NOTIFICATIONS_ENABLED` is on — same dual-surfacing the news source already does.
+Deliberately NOT built on the generic `composeWatcherNote` (same reasoning `githubActivityNote`
+already gives for not reusing it): this source's one item needs to carry a real what/how/why
+explanation, not a short flat description, both so the model can phrase a specific-sounding
+suggestion and so it has real content to put in an email if David asks for one.
+
+**Email delivery**: no new capability — `SEND_EMAIL`/`SendEmailTool` already exists and takes
+arbitrary body text; `selfImprovementNote`'s full what/how/why content is already in the context
+the model sees, and a one-line `systemPrompt.ts` addition tells it to use `SEND_EMAIL`/
+`NOTIFY_USER` with that same content (not a shortened summary) when asked.
+
+**Framing, never a nag**: `systemPrompt.ts` addition tells the model to offer a surfaced
+suggestion once, briefly, like a thoughtful assistant noticing something — never as asking
+permission to do its job, never with sales-pitch energy — and to drop it for good (never
+re-raise the same one) once David has said no or shown no interest, tied to the same
+never-repeat-recently-suggested rotation logic above.
+
+Tests: `tests/watcher/selfImprovementWatchSource.test.ts` (candidate list shape, rotation/dedup,
+history capping, no baseline suppression), `tests/watcher/selfImprovementNote.test.ts` (note
+composition, source-id isolation), and a new case in `tests/watcher/WatcherChannelRouter.test.ts`
+confirming `alwaysQuietSourceIds` overrides high-priority/phone configuration. `bun run typecheck`
+(0 errors) and `bun test` (2802 pass, 0 fail) both clean.
