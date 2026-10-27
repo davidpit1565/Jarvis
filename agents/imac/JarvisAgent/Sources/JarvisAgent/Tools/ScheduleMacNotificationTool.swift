@@ -38,6 +38,17 @@ enum ScheduleMacNotificationTool {
                 )
             }
 
+            // Same `.app`-bundle requirement documented in main.swift/CapabilityReporter.swift:
+            // UNUserNotificationCenter hard-crashes (NSInternalInconsistencyException) outside
+            // a real, Launch-Services-registered .app bundle — e.g. a bare `swift run`.
+            guard Bundle.main.bundleURL.pathExtension == "app" else {
+                return ToolResultPayload(
+                    success: false,
+                    data: nil,
+                    error: "Not running from a real .app bundle (e.g. `swift run`) — notifications are unavailable until installed via scripts/install.sh"
+                )
+            }
+
             let center = UNUserNotificationCenter.current()
             let semaphore = DispatchSemaphore(value: 0)
             var authorized = false

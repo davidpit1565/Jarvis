@@ -172,6 +172,13 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
     /// request in applicationDidFinishLaunching) — the same best-effort
     /// posture as every other push channel in this codebase.
     private func showNotification(title: String, body: String) {
+        // Same `.app`-bundle requirement as the notification-permission request above and
+        // CapabilityReporter's own guard — UNUserNotificationCenter hard-crashes outside one.
+        guard Bundle.main.bundleURL.pathExtension == "app" else {
+            Logger.shared.log("Not running from a real .app bundle (e.g. `swift run`) — cannot post notification \"\(title)\".")
+            return
+        }
+
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
