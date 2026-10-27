@@ -47,6 +47,7 @@ import { createSaveMemoryTool } from "@/tools/memory/SaveMemoryTool";
 import { createSearchMemoryTool } from "@/tools/memory/SearchMemoryTool";
 import { createDeleteMemoryTool } from "@/tools/memory/DeleteMemoryTool";
 import { MemoryStore } from "@/memory/MemoryStore";
+import { MemoryExtractor } from "@/memory/MemoryExtractor";
 import { ReminderStore } from "@/reminders/ReminderStore";
 import { buildContextNote } from "@/core/buildContextNote";
 import { ToolAuditLog } from "@/audit/ToolAuditLog";
@@ -624,6 +625,14 @@ function main() {
   // GET /providers/health can call its getProviderStatus() — see
   // JARVIS_ROADMAP_AUDIT.md #174.
   const brain: Brain = aiRouter;
+  // Continuous Memory/Profile (JARVIS_MASTER_PLAN.md Phase 1): one shared
+  // instance across every channel's Orchestrator below, same reasoning as
+  // `brain`/`toolResultCache` being shared — a background extraction call
+  // from the phone channel writes to the exact same MemoryStore a web-chat
+  // SAVE_MEMORY call does. `undefined` when disabled means every
+  // Orchestrator below gets no `memoryExtractor` at all, identical to
+  // before this feature existed.
+  const memoryExtractor = config.memoryExtractionEnabled ? new MemoryExtractor(brain, memoryStore, eventBus) : undefined;
   const confirmationService = new ConfirmationService(confirmViaChat);
   const phoneConfirmationService = new ConfirmationService(denyPhoneConfirmation);
   // Shared across every channel's Orchestrator below — a repeated
@@ -654,6 +663,7 @@ function main() {
     lockdownService,
     toolResultCache,
     embeddingsClient,
+    memoryExtractor,
     maxToolCallsPerRun: config.maxToolCallsPerRun,
     localToolTimeoutMs: config.localToolTimeoutMs,
     liveState: liveStateTracker,
@@ -720,6 +730,7 @@ function main() {
       lockdownService,
       toolResultCache,
       embeddingsClient,
+      memoryExtractor,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -766,6 +777,7 @@ function main() {
       lockdownService,
       toolResultCache,
       embeddingsClient,
+      memoryExtractor,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -845,6 +857,7 @@ function main() {
       lockdownService,
       toolResultCache,
       embeddingsClient,
+      memoryExtractor,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -897,6 +910,7 @@ function main() {
       lockdownService,
       toolResultCache,
       embeddingsClient,
+      memoryExtractor,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,
@@ -1016,6 +1030,7 @@ function main() {
       lockdownService,
       toolResultCache,
       embeddingsClient,
+      memoryExtractor,
       maxToolCallsPerRun: config.maxToolCallsPerRun,
       localToolTimeoutMs: config.localToolTimeoutMs,
       liveState: liveStateTracker,

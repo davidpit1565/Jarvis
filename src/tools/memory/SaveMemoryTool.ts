@@ -4,7 +4,17 @@ import type { MemoryStore } from "@/memory/MemoryStore";
 import type { MemoryCategory, MemoryImportance, MemoryTrust } from "@/types/memory";
 import type { EmbeddingsClientLike } from "@/tools/memory/SearchMemoryTool";
 
-const MEMORY_CATEGORIES: MemoryCategory[] = ["fact", "preference", "commitment", "temporary"];
+const MEMORY_CATEGORIES: MemoryCategory[] = [
+  "fact",
+  "preference",
+  "commitment",
+  "temporary",
+  "project",
+  "decision",
+  "action",
+  "task",
+  "uncertain",
+];
 // EXTERNAL_CONTENT deliberately excluded from what the model may self-declare
 // here: a write genuinely sourced from untrusted external content should
 // come from ingestion code that sets it directly, not from the model
@@ -72,7 +82,12 @@ export function createSaveMemoryTool(
           type: "string",
           enum: MEMORY_CATEGORIES,
           description:
-            'Optional. One of "fact", "preference", "commitment", or "temporary". Defaults to "fact" if omitted.',
+            'Optional. One of "fact" (something true about the user), "preference" (a standing ' +
+            'instruction/preference), "commitment" (a promise/follow-up), "temporary" (perishable, ' +
+            'short-lived info), "project" (an active project and its history), "decision" (a decision ' +
+            'already made, and why), "action" (an action already taken and its verified result), "task" ' +
+            '(an open task/problem/next step), or "uncertain" (a fact that is unconfirmed or conflicts ' +
+            'with something else). Defaults to "fact" if omitted.',
         },
         importance: {
           type: "number",

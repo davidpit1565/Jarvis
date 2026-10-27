@@ -21,6 +21,7 @@ import { isLikelyStatusQuery, formatLiveStatus } from "@/core/state/liveStatusFo
 import { isLikelyWhyQuery, explainAction, findLastToolCall, noActionToExplain } from "@/core/state/actionExplainer";
 import type { LiveState, LiveStateSnapshot, LiveStateTransitionOptions } from "@/core/state/JarvisLiveState";
 import { scopeToolsForMessage } from "@/core/intent/ToolScoping";
+import type { MemoryExtractorLike } from "@/memory/MemoryExtractor";
 
 export interface OrchestratorDependencies {
   brain: Brain;
@@ -135,6 +136,17 @@ export interface OrchestratorDependencies {
    * `semanticCacheable` flag has no effect at all without this.
    */
   embeddingsClient?: { embed(text: string): Promise<number[]> };
+  /**
+   * Continuous Memory/Profile (JARVIS_MASTER_PLAN.md Phase 1): when given,
+   * fired (fire-and-forget, never awaited — see `MemoryExtractorLike`'s own
+   * doc comment) once a turn's final reply text is known, for every normal
+   * and Fast Path turn alike. Omitted means no background extraction
+   * happens at all — every existing Orchestrator construction/test keeps
+   * working exactly as before. Never consulted for a "Stopped."/thrown-error
+   * turn, since there's no real completed exchange to extract from in
+   * either case.
+   */
+  memoryExtractor?: MemoryExtractorLike;
 }
 
 const MAX_TOOL_ITERATIONS = 5;
@@ -380,7 +392,7 @@ export class Orchestrator {
 
       if (fastPathMatch && fastPathTool) {
         eventBus.emit("fastPath.hit", { userId, toolName: fastPathTool.name, shape: fastPathMatch.shape });
-        return await this.runFastPath(userId, sessionId, fastPathTool.name, fastPathMatch.input, systemPrompt, runId);
+        return await this.runFastPath(userId, sessionId, fastPathTool.name, fastPathMatch.input, systemPrompt, runId, content);
       }
 
       // Either nothing matched, or a recognized shape's tool isn't
@@ -445,6 +457,7 @@ export class Orchestrator {
           conversation.addAssistantMessage(response.text);
           this.transitionLiveState(sessionId, userId, "SPEAKING", { reason: "formatting final reply" });
           liveState?.reset(sessionId, userId, "turn complete");
+          this.fireMemoryExtraction(userId, content, response.text);
           return response.text;
         }
 
@@ -568,7 +581,8 @@ export class Orchestrator {
     toolName: string,
     input: Record<string, unknown>,
     systemPrompt: string,
-    runId: string
+    runId: string,
+    userMessage: string
   ): Promise<string> {
     const { eventBus, brain, conversation, liveState, toolRegistry } = this.deps;
 
@@ -624,7 +638,26 @@ export class Orchestrator {
     conversation.addAssistantMessage(response.text);
     this.transitionLiveState(sessionId, userId, "SPEAKING", { reason: "formatting final reply" });
     liveState?.reset(sessionId, userId, "turn complete (fast path)");
+    this.fireMemoryExtraction(userId, userMessage, response.text);
     return response.text;
+  }
+
+  /**
+   * Fire-and-forget by contract (see `MemoryExtractorLike`'s own doc
+   * comment) — never awaited here. Wrapped in try/catch anyway as
+   * defense-in-depth: `extractAndStore` itself should never throw
+   * synchronously, but a turn's real, already-computed reply must never be
+   * put at risk by a bug in a best-effort background pass regardless.
+   */
+  private fireMemoryExtraction(userId: string, userMessage: string, assistantReply: string): void {
+    try {
+      this.deps.memoryExtractor?.extractAndStore(userId, userMessage, assistantReply);
+    } catch (error) {
+      console.warn(
+        "[jarvis] memory extraction trigger failed (harmless, best-effort):",
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   }
 
   private async runToolCall(userId: string, toolCall: ToolCallRequest, runId?: string): Promise<void> {

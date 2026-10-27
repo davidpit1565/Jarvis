@@ -197,6 +197,47 @@ memory store (`src/memory/MemoryStore.ts`) that survives restarts:
 This is the first real step toward "JARVIS knows things about you between
 conversations" rather than only within a single session.
 
+## Continuous memory extraction (background, Phase 1)
+
+The explicit tools above only ever save a fact when Claude decides, mid-
+conversation, to call `SAVE_MEMORY`. `src/memory/MemoryExtractor.ts` adds a
+second, automatic path: after every completed turn (on every channel — web
+chat, phone, SMS, Telegram, voice — and on a Fast Path turn too), a small,
+cheap, best-effort Brain call looks at just that one exchange and proposes
+any new/updated facts worth remembering, categorized into `fact`,
+`preference`, `project`, `decision`, `action`, `task`, `temporary`, or
+`uncertain` (`src/types/memory.ts`'s `MemoryCategory`). This is
+fire-and-forget — it never delays or can break the user-facing reply, and
+any failure (a timed-out or refused Brain call, malformed JSON) is simply
+dropped.
+
+What this does and doesn't cover:
+
+- Extracted facts are written with `source: "BACKGROUND_INFERRED"` — a new,
+  lowest-but-one `MemoryTrust` rank (`src/types/memory.ts`) that the
+  existing Memory Poisoning Defense already protects: a background guess
+  can never silently overwrite a `USER_STATED`, `SYSTEM_DERIVED`, or
+  `MODEL_INFERRED` fact for the same key, only ever a prior
+  `BACKGROUND_INFERRED` one.
+- Each record also gets an optional `confidence` (0-1, self-reported by the
+  extraction call) — informational metadata, not a hard gate on anything
+  yet.
+- Basic duplicate/conflict handling: before writing, a lexical (word-
+  overlap, not semantic/embedding) check looks for an existing active
+  memory in the same category that's almost certainly the same fact under a
+  different key, and reuses its key (an upsert) instead of creating a
+  near-duplicate row. Real semantic conflict resolution is explicitly out
+  of scope for this pass.
+- An explicit `DELETE_MEMORY` always wins: deleting a key leaves a
+  tombstone (`MemoryStore.wasDeleted`) that blocks the background pass from
+  resurrecting that exact key from raw conversation text that still
+  mentions the old fact — only an explicit save (any source other than
+  `BACKGROUND_INFERRED`) clears it.
+- It calls the Brain through the same `AIRouter` instance every chat call
+  uses, so `ZERO_COST_MODE` and the daily/monthly/per-run budget caps all
+  apply to it automatically. `JARVIS_MEMORY_EXTRACTION_ENABLED=false` turns
+  it off entirely (default: on).
+
 ## Semantic memory & caching (optional, local-only)
 
 Everything above (`SEARCH_MEMORY`, `ToolResultCache`) is exact/substring
@@ -567,6 +608,9 @@ Then set `ANTHROPIC_API_KEY` in `.env`. Optional variables:
 - `JARVIS_PORT` — port for the HTTP/WebSocket server (default `4770`)
 - `JARVIS_MEMORY_DB_PATH` — path to the local SQLite memory database
   (default `./data/jarvis-memory.sqlite`)
+- `JARVIS_MEMORY_EXTRACTION_ENABLED` — set to `false` to turn off the
+  background continuous-memory extraction pass (see "Continuous memory
+  extraction" above). Default `true`.
 - `TWILIO_AUTH_TOKEN` / `TWILIO_PUBLIC_BASE_URL` — enable the phone-call
   channel (see below). **Both or neither** — setting only one throws a
   `ConfigError` at startup, since request-signature verification needs

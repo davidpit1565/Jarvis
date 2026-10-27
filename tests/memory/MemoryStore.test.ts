@@ -676,4 +676,135 @@ describe("MemoryStore", () => {
       store.close();
     });
   });
+
+  describe("confidence (Continuous Memory/Profile)", () => {
+    test("defaults confidence to null when omitted", () => {
+      const store = new MemoryStore(":memory:");
+      const record = store.save({ key: "user.hobby", value: "plays piano" });
+      expect(record.confidence).toBeNull();
+      store.close();
+    });
+
+    test("round-trips an explicit confidence", () => {
+      const store = new MemoryStore(":memory:");
+      const record = store.save({ key: "user.hobby", value: "plays piano", confidence: 0.75 });
+      expect(record.confidence).toBe(0.75);
+      expect(store.getByKey("user.hobby")?.confidence).toBe(0.75);
+      store.close();
+    });
+
+    test("a resave that omits confidence preserves the existing record's confidence", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.hobby", value: "plays piano", confidence: 0.6 });
+      const record = store.save({ key: "user.hobby", value: "plays classical piano" });
+
+      expect(record.confidence).toBe(0.6);
+      store.close();
+    });
+
+    test("a resave with an explicit confidence overrides the existing value", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.hobby", value: "plays piano", confidence: 0.4 });
+      const record = store.save({ key: "user.hobby", value: "plays piano", confidence: 0.9 });
+
+      expect(record.confidence).toBe(0.9);
+      store.close();
+    });
+  });
+
+  describe("BACKGROUND_INFERRED trust and deletion tombstones (Continuous Memory/Profile)", () => {
+    test("a BACKGROUND_INFERRED write cannot overwrite an existing USER_STATED value", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.job", value: "Software Engineer at Acme", source: "USER_STATED" });
+
+      const attempt = store.save({ key: "user.job", value: "guessing: works in tech", source: "BACKGROUND_INFERRED" });
+
+      expect(attempt.conflict).toBe(true);
+      expect(store.getByKey("user.job")?.value).toBe("Software Engineer at Acme");
+      store.close();
+    });
+
+    test("a BACKGROUND_INFERRED write cannot overwrite an existing MODEL_INFERRED value either", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.mood", value: "seems stressed lately", source: "MODEL_INFERRED" });
+
+      const attempt = store.save({ key: "user.mood", value: "seems fine", source: "BACKGROUND_INFERRED" });
+
+      expect(attempt.conflict).toBe(true);
+      store.close();
+    });
+
+    test("a BACKGROUND_INFERRED write updates a prior BACKGROUND_INFERRED value normally (equal trust)", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.hobby", value: "plays piano", source: "BACKGROUND_INFERRED" });
+      const second = store.save({ key: "user.hobby", value: "plays classical piano", source: "BACKGROUND_INFERRED" });
+
+      expect(second.conflict).toBeFalsy();
+      expect(store.getByKey("user.hobby")?.value).toBe("plays classical piano");
+      store.close();
+    });
+
+    test("wasDeleted is false for a key that was never deleted", () => {
+      const store = new MemoryStore(":memory:");
+      expect(store.wasDeleted("user.hobby")).toBe(false);
+      store.close();
+    });
+
+    test("deleteByKey tombstones the key so wasDeleted becomes true", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.hobby", value: "plays piano" });
+      store.deleteByKey("user.hobby");
+
+      expect(store.wasDeleted("user.hobby")).toBe(true);
+      store.close();
+    });
+
+    test("delete(id) also tombstones the key", () => {
+      const store = new MemoryStore(":memory:");
+      const record = store.save({ key: "user.hobby", value: "plays piano" });
+      store.delete(record.id);
+
+      expect(store.wasDeleted("user.hobby")).toBe(true);
+      store.close();
+    });
+
+    test("wasDeleted matches regardless of the key's casing", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.hobby", value: "plays piano" });
+      store.deleteByKey("User.Hobby");
+
+      expect(store.wasDeleted("user.hobby")).toBe(true);
+      expect(store.wasDeleted("USER.HOBBY")).toBe(true);
+      store.close();
+    });
+
+    test("any explicit (non-BACKGROUND_INFERRED) save clears a key's tombstone", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.hobby", value: "plays piano" });
+      store.deleteByKey("user.hobby");
+      expect(store.wasDeleted("user.hobby")).toBe(true);
+
+      store.save({ key: "user.hobby", value: "plays piano again", source: "USER_STATED" });
+
+      expect(store.wasDeleted("user.hobby")).toBe(false);
+      store.close();
+    });
+
+    test("a BACKGROUND_INFERRED save never clears a tombstone by itself attempting it", () => {
+      const store = new MemoryStore(":memory:");
+      store.save({ key: "user.hobby", value: "plays piano" });
+      store.deleteByKey("user.hobby");
+
+      // Nothing in MemoryStore itself blocks a bare save() call at this
+      // trust level from writing a brand-new row (that policy decision — "a
+      // background write must check wasDeleted() first" — lives in
+      // MemoryExtractor, not here) but the act of saving still must not
+      // silently clear the tombstone, since that would let the very write
+      // this mechanism exists to prevent re-establish the key.
+      store.save({ key: "user.hobby", value: "plays piano (resurrected)", source: "BACKGROUND_INFERRED" });
+
+      expect(store.wasDeleted("user.hobby")).toBe(true);
+      store.close();
+    });
+  });
 });
