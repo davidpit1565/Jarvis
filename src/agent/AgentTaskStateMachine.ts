@@ -2,11 +2,12 @@
  * The Autonomous Agent Core's task state machine:
  *
  *   PENDING -> PLANNING -> EXECUTING -> VERIFYING -> (COMPLETED
- *                                                     | RETRYING -> EXECUTING
- *                                                     | RECOVERING -> PLANNING
- *                                                     | WAITING
- *                                                     | FAILED
- *                                                     | CANCELLED)
+ *                            |                       | RETRYING -> EXECUTING
+ *                            |                       | RECOVERING -> PLANNING
+ *                            |                       | WAITING
+ *                            |                       | FAILED
+ *                            |                       | CANCELLED)
+ *                            `-> WAITING (recovery plan repeated the failed step; see recoveryPlanDiff.ts)
  *
  * This is the single source of truth for which transitions are legal —
  * AgentTaskStore and AgentCore both go through `assertValidTransition`
@@ -38,7 +39,12 @@ const TRANSITIONS: Record<AgentTaskState, ReadonlySet<AgentTaskState>> = {
   // it ever reaches PLANNING — roadmap items 28/29 (Dependencies/Waiting
   // States).
   PENDING: new Set(["PLANNING", "WAITING", "CANCELLED"]),
-  PLANNING: new Set(["EXECUTING", "FAILED", "CANCELLED"]),
+  // PLANNING -> WAITING: a RECOVERING replan whose first step looks like a
+  // repeat of the step that just failed (see src/agent/recoveryPlanDiff.ts
+  // and AgentCore.escalateRepeatedRecoveryFailure) is parked WAITING for a
+  // human rather than silently retried — the same WAITING state a
+  // dependency gate already uses, not a new one.
+  PLANNING: new Set(["EXECUTING", "WAITING", "FAILED", "CANCELLED"]),
   EXECUTING: new Set(["VERIFYING", "RETRYING", "RECOVERING", "EXECUTING", "COMPLETED", "WAITING", "FAILED", "CANCELLED"]),
   VERIFYING: new Set(["COMPLETED", "EXECUTING", "RETRYING", "RECOVERING", "WAITING", "FAILED", "CANCELLED"]),
   RETRYING: new Set(["EXECUTING", "FAILED", "CANCELLED"]),

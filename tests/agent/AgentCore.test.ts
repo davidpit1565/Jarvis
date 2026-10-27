@@ -243,10 +243,17 @@ describe("AgentCore", () => {
       execute: async () => ({ success: false, error: "Invalid input: always broken" }),
     });
 
+    // Each attempt uses a genuinely different input (not just a reworded
+    // description) so the recovery plan-diff check (recoveryPlanDiff.ts)
+    // does NOT recognize these as repeats of each other — this test is
+    // specifically about the maxRecoveryCycles backstop for a planner that
+    // keeps proposing different-looking approaches that each still fail
+    // for their own reason, which the plan-diff check is not meant to
+    // catch (see the dedicated recoveryPlanDiff tests for the repeat case).
     const planner = new ScriptedPlanner([
-      [{ toolName: "always_fails", input: {}, description: "step 1" }],
-      [{ toolName: "always_fails", input: {}, description: "step 1 retry" }],
-      [{ toolName: "always_fails", input: {}, description: "step 1 retry 2" }],
+      [{ toolName: "always_fails", input: { approach: "A" }, description: "try approach A" }],
+      [{ toolName: "always_fails", input: { approach: "B" }, description: "try approach B instead" }],
+      [{ toolName: "always_fails", input: { approach: "C" }, description: "try approach C instead" }],
     ]);
 
     const { agentCore, permissionService } = setup({
