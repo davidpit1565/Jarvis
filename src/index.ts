@@ -31,6 +31,7 @@ import { readTextFileTool } from "@/tools/system/ReadTextFileTool";
 import { readFileBytesTool } from "@/tools/system/ReadFileBytesTool";
 import { listRecentPhotosTool } from "@/tools/system/ListRecentPhotosTool";
 import { writeFileTool } from "@/tools/system/WriteFileTool";
+import { captureScreenshotTool } from "@/tools/system/CaptureScreenshotTool";
 import { scheduleMacNotificationTool } from "@/tools/system/ScheduleMacNotificationTool";
 import { createListDevicesTool } from "@/tools/devices/ListDevicesTool";
 import { composeEmailDraftTool } from "@/tools/system/ComposeEmailDraftTool";
@@ -464,6 +465,7 @@ function main() {
   toolRegistry.registerTool(readFileBytesTool);
   toolRegistry.registerTool(listRecentPhotosTool);
   toolRegistry.registerTool(writeFileTool);
+  toolRegistry.registerTool(captureScreenshotTool);
   toolRegistry.registerTool(scheduleMacNotificationTool);
   toolRegistry.registerTool(composeEmailDraftTool);
   toolRegistry.registerTool(clickElementTool);
@@ -595,6 +597,7 @@ function main() {
     "CREATE_MAC_REMINDER",
     "COMPLETE_MAC_REMINDER",
     "WRITE_FILE",
+    "CAPTURE_SCREENSHOT",
   ];
   function grantPrimaryDeviceTools(deviceId: string): void {
     for (const toolId of STANDARD_PRIMARY_DEVICE_TOOLS) {

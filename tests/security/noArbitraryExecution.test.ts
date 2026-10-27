@@ -21,6 +21,17 @@ const ALLOWED_EXCEPTIONS: Array<{ file: string; patternName: string }> = [
     file: "src/backup/createBackupArchive.ts",
     patternName: "Bun.spawn",
   },
+  {
+    // CAPTURE_SCREENSHOT's device-side implementation: a fixed executable
+    // path (/usr/sbin/screencapture) and a fixed flag (-x), with the only
+    // variable argument being a destination path this file computes itself
+    // (a timestamped filename under the Jarvis folder) — never any
+    // model-supplied or user-supplied string, and no shell is invoked. Not
+    // an interpreter for arbitrary instructions, same reasoning as the
+    // Bun.spawn exception above.
+    file: "agents/imac/JarvisAgent/Sources/JarvisAgent/Tools/CaptureScreenshotTool.swift",
+    patternName: "Swift Process() invocation",
+  },
 ];
 
 /**

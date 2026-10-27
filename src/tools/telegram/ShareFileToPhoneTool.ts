@@ -9,6 +9,18 @@ export interface ShareFileToPhoneInput extends Record<string, unknown> {
 
 const MAX_BASE64_LENGTH = 250_000; // ~187KB raw — generous headroom over read_file_bytes's own 150KB cap.
 
+// Extensions sent as a real inline Telegram photo (sendPhotoBytes) rather
+// than a generic document (sendDocument) — matches what CAPTURE_SCREENSHOT
+// produces (.png) plus the other common image types a user might ask to
+// share, so "send me a picture" actually renders as a picture on the phone
+// instead of a tap-to-download file attachment.
+const INLINE_PHOTO_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
+
+function isImageFilename(filename: string): boolean {
+  const extension = filename.split(".").pop()?.toLowerCase();
+  return extension !== undefined && INLINE_PHOTO_EXTENSIONS.has(extension);
+}
+
 /**
  * Delivers a file from the Mac to the user's phone via Telegram — real
  * cross-device file transfer, but honestly limited: it only works on
@@ -20,15 +32,22 @@ const MAX_BASE64_LENGTH = 250_000; // ~187KB raw — generous headroom over read
  * thumbnail-sized image; will fail on anything bigger like a real photo
  * or video. SAFE_ACTION: fully specified effect (exact bytes, exact
  * filename) once called, same reasoning as SEND_EMAIL.
+ *
+ * Image files (by extension) are sent via TelegramGateway.sendPhotoBytes
+ * so they render as a real inline photo — e.g. "picture from JARVIS" for
+ * a screenshot — rather than TelegramGateway.sendDocument's generic file
+ * attachment, which previously was used unconditionally here even though
+ * sendPhotoBytes already existed for GENERATE_IMAGE's own delivery path.
  */
 export function createShareFileToPhoneTool(telegramGateway: TelegramGateway, ownerChatId: string): LocalTool<ShareFileToPhoneInput> {
   return {
     id: "SHARE_FILE_TO_PHONE",
     name: "share_file_to_phone",
     description:
-      "Sends a file to the user's phone as a Telegram document, given base64Content from a prior " +
-      "read_file_bytes call (do not fabricate base64Content yourself). Only practical for small files — " +
-      "notes, short documents, small images — since read_file_bytes itself caps at 150KB.",
+      "Sends a file to the user's phone via Telegram, given base64Content from a prior read_file_bytes call " +
+      "(do not fabricate base64Content yourself) — e.g. use capture_screenshot then this tool to get a " +
+      "screenshot to the phone. Image files (.png/.jpg/.jpeg/.gif/.webp) are delivered as a real inline photo; " +
+      "anything else as a document. Only practical for small files since read_file_bytes itself caps at 150KB.",
     inputSchema: {
       type: "object",
       properties: {
@@ -54,7 +73,11 @@ export function createShareFileToPhoneTool(telegramGateway: TelegramGateway, own
       }
 
       try {
-        await telegramGateway.sendDocument(ownerChatId, base64Content, filename);
+        if (isImageFilename(filename)) {
+          await telegramGateway.sendPhotoBytes(ownerChatId, base64Content);
+        } else {
+          await telegramGateway.sendDocument(ownerChatId, base64Content, filename);
+        }
         return { success: true, data: { filename, sent: true } };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
