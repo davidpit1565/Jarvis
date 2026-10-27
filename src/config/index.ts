@@ -512,6 +512,45 @@ export interface JarvisConfig {
   githubActivityDbPath: string;
   /** How often (ms) the background GitHub activity poller ticks — see `pollGitHubActivity`. Only relevant when `githubWatchedRepos` is non-empty. */
   githubActivityPollMs: number;
+  /**
+   * Topics/keywords (comma-separated) to proactively watch the configured
+   * news RSS feed (`newsRssUrl`) for and surface unprompted — the
+   * generalized Proactive Watcher's first non-GitHub source (CLAUDE.md
+   * "Approved for build: generalized Proactive Watcher"). Same explicit
+   * opt-in posture as `githubWatchedRepos`: empty (the default) makes news
+   * watching inert — no polling, no note — never an open-ended "watch
+   * everything in the feed" default. Only takes effect when `newsRssUrl`
+   * is also configured.
+   */
+  newsWatchTopics: string[];
+  /** Path to the SQLite database caching each watched news topic's poll cursor and most-recently-found new headlines (the shared WatcherStore). */
+  newsWatchDbPath: string;
+  /** How often (ms) the background news-watch poller ticks. Only relevant when `newsWatchTopics` is non-empty. */
+  newsWatchPollMs: number;
+  /**
+   * Watch source ids (exact match, e.g. "news:ai safety", "github:owner/repo")
+   * David has explicitly configured as warranting the louder device-announce
+   * channel instead of the default quiet Telegram note — see
+   * `WatcherChannelRouter`'s own doc comment for why this is config, never
+   * a per-item model judgment call. Empty by default: every source stays
+   * on the default Telegram channel until explicitly escalated.
+   */
+  watcherHighPrioritySourceIds: string[];
+  /** The device id `WatcherNotifier` speaks a high-priority watcher notification on — required for the device-announce channel to actually fire (otherwise it falls back to Telegram, never silently drops). */
+  watcherAnnounceDeviceId?: string;
+  /**
+   * Whether a watcher poll finding new activity should also send an
+   * immediate notification (via `WatcherNotifier`), not just cache it for
+   * the next conversation's context note. Defaults to false: with it off,
+   * behavior is unchanged from before this feature (activity surfaces
+   * only at the start of the next conversation, the same honest
+   * limitation the GitHub feature already had — see the introducing PR
+   * description). Opt-in because an immediate push is a real behavior
+   * change (an unprompted Telegram message can arrive at any time of day)
+   * that shouldn't turn on silently for anyone already relying on the
+   * quieter note-only behavior.
+   */
+  watcherPushNotificationsEnabled: boolean;
   /** Both required together to enable the video studio integration (reels list, publish, Instagram stats). */
   studioBaseUrl?: string;
   studioSecret?: string;
@@ -930,6 +969,34 @@ export function loadConfig(): JarvisConfig {
     throw new ConfigError("Invalid JARVIS_GITHUB_ACTIVITY_POLL_MS: must be a positive integer");
   }
 
+  // Comma-separated topic/keyword list, same opt-in parsing convention as
+  // GITHUB_WATCHED_REPOS above — empty/unset means news watching stays
+  // fully inert.
+  const newsWatchTopics = process.env.NEWS_WATCH_TOPICS?.split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0) ?? [];
+
+  const newsWatchDbPath = process.env.JARVIS_NEWS_WATCH_DB_PATH ?? "./data/jarvis-news-watch.sqlite";
+
+  const newsWatchPollMsRaw = process.env.JARVIS_NEWS_WATCH_POLL_MS?.trim();
+  // Same default rationale as JARVIS_GITHUB_ACTIVITY_POLL_MS: 20 minutes.
+  const newsWatchPollMs = newsWatchPollMsRaw ? Number(newsWatchPollMsRaw) : 20 * 60 * 1000;
+  if (!Number.isFinite(newsWatchPollMs) || newsWatchPollMs <= 0) {
+    throw new ConfigError("Invalid JARVIS_NEWS_WATCH_POLL_MS: must be a positive integer");
+  }
+
+  // Comma-separated exact watch-source ids (e.g. "news:ai safety",
+  // "github:davidpit1565/Jarvis") David has explicitly flagged for the
+  // louder device-announce channel — see WatcherChannelConfig's own doc
+  // comment for why this must be explicit config, never inferred.
+  const watcherHighPrioritySourceIds = process.env.WATCHER_HIGH_PRIORITY_SOURCES?.split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0) ?? [];
+
+  const watcherAnnounceDeviceId = process.env.WATCHER_ANNOUNCE_DEVICE_ID?.trim() || undefined;
+
+  const watcherPushNotificationsEnabled = (process.env.WATCHER_PUSH_NOTIFICATIONS_ENABLED?.trim().toLowerCase() ?? "false") === "true";
+
   const studioBaseUrl = process.env.JARVIS_STUDIO_BASE_URL?.trim() || undefined;
   const studioSecret = process.env.JARVIS_STUDIO_SECRET?.trim() || undefined;
   if (Boolean(studioBaseUrl) !== Boolean(studioSecret)) {
@@ -1195,6 +1262,12 @@ export function loadConfig(): JarvisConfig {
     githubWatchedRepos,
     githubActivityDbPath,
     githubActivityPollMs,
+    newsWatchTopics,
+    newsWatchDbPath,
+    newsWatchPollMs,
+    watcherHighPrioritySourceIds,
+    watcherAnnounceDeviceId,
+    watcherPushNotificationsEnabled,
     studioBaseUrl,
     studioSecret,
     commitmentsDbPath,
