@@ -316,6 +316,80 @@ if this is ever revisited — just a one-line discipline (keep model files off t
 Worth a quick re-check only if BitNet (or something similar) ships a materially larger context
 window in a future release — not something to schedule as a project today.
 
+## Architecture decision (2026-10-27): hybrid Fly + Mac split, and Claude Code via subscription not API
+
+David proposed, and this is now the target architecture: **Fly.io stays the light, always-on
+home for everything that must work regardless of whether his Mac is on** — memory (SQLite),
+reminders, the Goal Engine, conversation itself when he's on his phone. **The Mac agent
+(`agents/imac/JarvisAgent`) is the "strong hands"** — real local power (files, terminal,
+eventually driving a real browser for narrow cases, see below) — invoked by the Fly
+orchestrator over the existing WebSocket channel, and only available when the Mac is on. This
+isn't a new idea so much as making explicit how wishlist #8 (full device control) and #10
+(JARVIS driving Claude Code to build/ship his own apps) actually fit together with #15
+(why Fly, not Vercel) and #17 (zero-cost Claude).
+
+**Important specific insight from David**: when the Mac agent eventually drives Claude Code in
+his terminal (#10), it should invoke the `claude` CLI itself — using his own Pro/Max
+subscription's flat-rate billing — **never a Claude API key** (metered, pay-per-token, exactly
+what wishlist #17's zero-cost mandate rules out). This is the same brain-pattern already
+reviewed and partially credited in wishlist #16's `ethanplusai/jarvis` review (a persistent
+`claude -p` subprocess on the user's own subscription) — there it was for voice; here it's for
+real execution power without touching API billing. Still explicitly the LAST thing to build
+(#10's own ordering, high-privilege, needs real CONFIRM/DANGEROUS gating) — recorded now so the
+design intent isn't lost before that phase starts.
+
+## Researched and rejected (for now): general Mac browser automation as a unifying access strategy (2026-10-27)
+
+David's broader idea — instead of a dedicated OAuth/API integration per web service
+(GitHub/Canva/Instagram), have JARVIS drive his actual Chrome browser on the Mac, reusing
+sessions already logged in there — was researched and the verdict is clear: **build the
+per-service integrations as already planned; do not build general browser automation as an
+alternative or parallel strategy.** Reasons:
+- **Technically real but the worst fit for this codebase as a default tool.** CDP-attaching to
+  an already-running real Chrome profile works in principle, but conflicts with having Chrome
+  already open (one-process-per-profile-directory), and CDP-driven Chrome is increasingly
+  fingerprinted/blocked by exactly the sites that matter most here (Google/banking). The
+  best-fit technical shape, if ever built, is a Chrome extension + native messaging to the
+  Swift agent (not CDP, not AppleScript/Accessibility — that pattern, already used well by
+  `ClickElementTool.swift` for native macOS apps, is markedly more fragile against real, dynamic
+  web pages).
+- **The real blocker is safety, not plumbing.** Unlike every tool JARVIS has today, this one's
+  blast radius is "whatever's logged into that browser" — email, banking, everything — not one
+  named, scoped operation. Prior art (OpenAI's own hosted computer-use docs, Browserbase/Anchor
+  Browser's isolated-session model, Vercel's `agent-browser` confirm-by-category pattern) all
+  converge on the same answer: real products either isolate the session entirely (never reuse
+  the human's real logged-in identity) or require per-action-category confirmation with a hard
+  domain allowlist enforced *before* any action reaches a permission check. If this is ever
+  built: READ (navigate/extract) allowed by default and logged; CONFIRM for anything that types
+  into a field or clicks non-destructively; DANGEROUS (stricter than today's DANGEROUS tools,
+  must show the actual destination domain in the prompt) for any form submission or anything
+  touching email/banking/payments at all; a short David-approved domain allowlist enforced at
+  the agent layer, fail-closed for anything not on it.
+- **This sits even later than #10 (App Store Connect), not alongside it** — #10 is scoped, has
+  an official API, and only touches David's own software; general browser automation has no
+  default scope boundary and is a harder safety problem. Only worth building later, narrowly,
+  for a specific site that turns out to have no usable API — not as a general capability.
+
+**Per-service verdict for the three services actually asked about:**
+- **GitHub**: build a real dedicated integration (PAT or GitHub App) — matches the
+  "continuously watch my repos" ask directly, nothing like this exists in the codebase yet, and
+  it's a clean build. **Not built yet — next concrete thing to build when ready.**
+  Not API-key-churn if built as a GitHub App rather than a personal access token, per wishlist
+  #12's stable-identity preference — worth deciding which at build time.
+- **Canva**: build the official Connect API integration (Design/Export/Asset/Autofill/Brand
+  Template APIs — OAuth-based, matches wishlist #18-style generation asks), BUT Canva's own
+  docs say Connect is for **web apps with a backend, not desktop apps** — route it through the
+  existing Fly-hosted core (same pattern as `GoogleDriveClient.ts`/`SpotifyClient.ts`), never
+  through the Swift Mac agent directly. **Not built yet.**
+- **Instagram: already solved, confirmed in this pass — no new work needed.**
+  `src/studio/StudioClient.ts` already talks to `davidpit1565/videos-ai`'s own `/api/jarvis/*`
+  endpoints (bearer-secret-authenticated, not the studio's browser PIN cookie) for reading
+  Instagram stats/reels and triggering the same publish action the studio's own button calls —
+  which itself uses the real Instagram Graph API. This is real, already-written code, but **it
+  carries its own "REQUIRES REAL VALIDATION: never exercised against the real deployed studio"
+  flag** — the remaining work here is validating it against the live studio deployment (and
+  confirming `JARVIS_STUDIO_SECRET` is actually configured), not building a new integration.
+
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
 - `davidpit1565/Rudder` — the app he initially called "Decide" (that was its working
