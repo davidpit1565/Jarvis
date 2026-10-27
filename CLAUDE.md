@@ -390,6 +390,36 @@ alternative or parallel strategy.** Reasons:
   flag** — the remaining work here is validating it against the live studio deployment (and
   confirming `JARVIS_STUDIO_SECRET` is actually configured), not building a new integration.
 
+## Spec for later: multi-device wake-word routing (2026-10-27, not built yet)
+
+David uses JARVIS across three devices simultaneously (iPhone, iMac, MacBook) and gave a
+precise, concrete spec for how wake-word activation across them should behave once this is
+actually built — recording it now so the design survives until that work starts. **This
+explicitly depends on both the Mac/iMac hardware validation pass and the iPhone app existing**
+(neither is done yet — this is not something to build today), and both of those are themselves
+gated on doing the work together with him in front of the real devices (per his own "Real
+device/hardware validation... deferred until he's physically at the Mac together with this
+session" decision above). The spec:
+- **Plain wake phrase ("Hey Jarvis" / "Jarvis שומע", no device named) always routes to the
+  device he most recently talked to JARVIS on** — not all three devices waking/responding at
+  once. This needs a server-side (Fly-hosted) "last active device" pointer per user, updated on
+  every turn regardless of which device it came in on, that each device's wake-word listener
+  (or the orchestrator routing its output) consults before deciding whether to actually respond.
+- **Saying a wake phrase with an explicit device name, in English** — "Hey Jarvis iPhone," "Hey
+  Jarvis iMac," "Hey Jarvis MacBook" — routes to that specific named device regardless of which
+  one was last active, and only that device should wake/respond, not the others. This means
+  each device's local wake-word listener needs to recognize both its own generic wake phrase
+  and its own name-suffixed variant, and explicitly NOT respond to another device's
+  name-suffixed phrase even if it's in earshot (e.g. the MacBook should ignore "Hey Jarvis
+  iPhone" even if it hears it clearly).
+- Net requirement: the existing per-device `WakeWordListener.swift` pattern
+  (`agents/imac/JarvisAgent`) needs to (a) know its own device name/identity, (b) check a
+  shared "who's last active" state before responding to a bare wake phrase, and (c) parse an
+  optional trailing device-name token and only engage if it matches its own identity or there is
+  none. The MacBook variant of the agent doesn't exist yet (today's Swift agent work has only
+  targeted the iMac) — per David's explicit ask here, the same agent needs to run on **both**
+  his iMac and his MacBook, not just one, once this phase starts.
+
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
 - `davidpit1565/Rudder` — the app he initially called "Decide" (that was its working
