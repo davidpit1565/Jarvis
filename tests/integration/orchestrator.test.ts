@@ -7,7 +7,7 @@ import { PermissionService } from "@/permissions/PermissionService";
 import { PermissionLevel } from "@/types/permissions";
 import { DeviceRegistry } from "@/devices/registry/DeviceRegistry";
 import { DeviceConnectionManager, type DeviceConnection } from "@/communication/websocket/DeviceConnectionManager";
-import { parseDeviceToCoreMessage, type ToolResultMessage } from "@/communication/websocket/protocol";
+import { parseDeviceToCoreMessage, type ToolResultMessage, type ToolResultPayload } from "@/communication/websocket/protocol";
 import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { DeviceTool, LocalTool } from "@/types/tools";
 import { LockdownService } from "@/core/lockdown/LockdownService";
@@ -861,6 +861,165 @@ describe("Orchestrator remote tool execution", () => {
     });
 
     await expect(resultPromise).rejects.toThrow(/timed out/i);
+  });
+});
+
+describe("Orchestrator Vision Bridge (LOOK_AT_SCREEN -> next brain call sees a real image)", () => {
+  /** A ScriptedBrain that also records every request it was called with, so a test can assert on the SECOND call's `messages`. */
+  class RecordingScriptedBrain implements Brain {
+    private calls = 0;
+    public requests: BrainRequest[] = [];
+    constructor(private readonly responses: BrainResponse[]) {}
+
+    async chat(request: BrainRequest): Promise<BrainResponse> {
+      this.requests.push(request);
+      const response = this.responses[this.calls];
+      this.calls++;
+      if (!response) throw new Error("RecordingScriptedBrain ran out of scripted responses");
+      return response;
+    }
+  }
+
+  function setupDeviceFor(deviceId = "imac-1") {
+    const deviceRegistry = new DeviceRegistry();
+    deviceRegistry.registerDevice({
+      id: deviceId,
+      name: "Test iMac",
+      type: "mac",
+      platform: "macos",
+      agentVersion: "0.1.0",
+      protocolVersion: "1",
+    });
+    deviceRegistry.setRole(deviceId, "primary");
+    const eventBus = new EventBus();
+    const deviceConnectionManager = new DeviceConnectionManager(eventBus, 50);
+    return { deviceRegistry, deviceConnectionManager };
+  }
+
+  function makeLookAtScreenTool(): DeviceTool {
+    return {
+      id: "LOOK_AT_SCREEN",
+      name: "look_at_screen",
+      description: "Captures a screenshot and returns the image bytes.",
+      inputSchema: { type: "object", properties: { deviceId: { type: "string" } } },
+      requiredPermission: PermissionLevel.CONFIRM,
+      target: "device",
+    };
+  }
+
+  /** Wires a mock device that answers any tool.request with `payload` — same pattern as the remote-execution describe block above. */
+  function registerRespondingDevice(deviceConnectionManager: DeviceConnectionManager, deviceId: string, payload: ToolResultPayload) {
+    const connection = new MockDeviceConnection((raw) => {
+      const parsed = JSON.parse(raw) as { requestId: string; type: string };
+      if (parsed.type !== "tool.request") return;
+      const resultMessage: ToolResultMessage = {
+        requestId: parsed.requestId,
+        timestamp: new Date().toISOString(),
+        deviceId,
+        type: "tool.result",
+        payload,
+      };
+      queueMicrotask(() => deviceConnectionManager.handleToolResult(resultMessage));
+    });
+    deviceConnectionManager.registerConnection(deviceId, connection);
+  }
+
+  test("a successful LOOK_AT_SCREEN result is attached as a real UserMessageImage on the NEXT brain call", async () => {
+    const { deviceRegistry, deviceConnectionManager } = setupDeviceFor();
+    registerRespondingDevice(deviceConnectionManager, "imac-1", {
+      success: true,
+      data: { mediaType: "image/jpeg", data: "ZmFrZS1zY3JlZW5zaG90LWJ5dGVz", sizeBytes: 21 },
+    });
+
+    const brain = new RecordingScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "look_at_screen", input: {} }], stopReason: "tool_use" },
+      { text: "I can see a terminal window with a green prompt.", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const confirmationService = new ConfirmationService(async () => true);
+    const { orchestrator, permissionService } = setup(brain, [makeLookAtScreenTool()], {
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService,
+    });
+    permissionService.grant("user-1", "LOOK_AT_SCREEN", "imac-1");
+
+    const reply = await orchestrator.handleUserMessage("user-1", "what's on my screen?");
+
+    expect(reply).toBe("I can see a terminal window with a green prompt.");
+    expect(brain.requests).toHaveLength(2);
+
+    // First call (before the tool ran) carries no images at all.
+    expect(brain.requests[0]!.messages.some((m) => m.role === "user" && (m.images?.length ?? 0) > 0)).toBe(false);
+
+    // Second call (after LOOK_AT_SCREEN ran) must carry a synthetic user
+    // message with the real image — this is the whole point of the bridge.
+    const secondMessages = brain.requests[1]!.messages;
+    const visionMessage = secondMessages.find((m) => m.role === "user" && (m.images?.length ?? 0) > 0);
+    expect(visionMessage).toBeDefined();
+    expect((visionMessage as { images?: { mediaType: string; data: string }[] }).images).toEqual([
+      { mediaType: "image/jpeg", data: "ZmFrZS1zY3JlZW5zaG90LWJ5dGVz" },
+    ]);
+
+    // The image bytes are never persisted into real conversation history —
+    // only the raw tool-result message (redacted) is kept there.
+    const toolResultText = brain.requests[1]!.messages.find((m) => m.role === "tool") as { content: string } | undefined;
+    expect(toolResultText?.content).not.toContain("ZmFrZS1zY3JlZW5zaG90LWJ5dGVz");
+  });
+
+  test("an oversized LOOK_AT_SCREEN payload is dropped from the vision bridge, not forwarded or truncated", async () => {
+    const { deviceRegistry, deviceConnectionManager } = setupDeviceFor();
+    const oversizedBase64 = "x".repeat(8_000_000); // over Orchestrator's MAX_IMAGE_BASE64_LENGTH (7,000,000)
+    registerRespondingDevice(deviceConnectionManager, "imac-1", {
+      success: true,
+      data: { mediaType: "image/jpeg", data: oversizedBase64 },
+    });
+
+    const brain = new RecordingScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "look_at_screen", input: {} }], stopReason: "tool_use" },
+      { text: "I couldn't quite see that.", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const confirmationService = new ConfirmationService(async () => true);
+    const { orchestrator, permissionService } = setup(brain, [makeLookAtScreenTool()], {
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService,
+    });
+    permissionService.grant("user-1", "LOOK_AT_SCREEN", "imac-1");
+
+    const reply = await orchestrator.handleUserMessage("user-1", "what's on my screen?");
+
+    expect(reply).toBe("I couldn't quite see that.");
+    const secondMessages = brain.requests[1]!.messages;
+    expect(secondMessages.some((m) => m.role === "user" && (m.images?.length ?? 0) > 0)).toBe(false);
+  });
+
+  test("a failed LOOK_AT_SCREEN call degrades gracefully — no crash, no image, normal error text flows to the brain", async () => {
+    const { deviceRegistry, deviceConnectionManager } = setupDeviceFor();
+    registerRespondingDevice(deviceConnectionManager, "imac-1", {
+      success: false,
+      error: "screencapture exited with status 1 — check Screen Recording permission",
+    });
+
+    const brain = new RecordingScriptedBrain([
+      { text: "", toolCalls: [{ id: "call-1", toolName: "look_at_screen", input: {} }], stopReason: "tool_use" },
+      { text: "I wasn't able to see your screen just now.", toolCalls: [], stopReason: "end_turn" },
+    ]);
+
+    const confirmationService = new ConfirmationService(async () => true);
+    const { orchestrator, permissionService } = setup(brain, [makeLookAtScreenTool()], {
+      deviceRegistry,
+      deviceConnectionManager,
+      confirmationService,
+    });
+    permissionService.grant("user-1", "LOOK_AT_SCREEN", "imac-1");
+
+    const reply = await orchestrator.handleUserMessage("user-1", "what's on my screen?");
+
+    expect(reply).toBe("I wasn't able to see your screen just now.");
+    const secondMessages = brain.requests[1]!.messages;
+    expect(secondMessages.some((m) => m.role === "user" && (m.images?.length ?? 0) > 0)).toBe(false);
   });
 });
 

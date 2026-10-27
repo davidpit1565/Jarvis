@@ -67,6 +67,7 @@ export const TOPIC_TOOL_IDS: Record<MessageTopic, readonly string[]> = {
     "OPEN_URL",
     "LIST_RECENT_PHOTOS",
     "CAPTURE_SCREENSHOT",
+    "LOOK_AT_SCREEN",
     "SCHEDULE_MAC_NOTIFICATION",
     "CREATE_MAC_REMINDER",
     "LIST_MAC_REMINDERS",

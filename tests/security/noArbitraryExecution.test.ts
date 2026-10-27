@@ -22,14 +22,16 @@ const ALLOWED_EXCEPTIONS: Array<{ file: string; patternName: string }> = [
     patternName: "Bun.spawn",
   },
   {
-    // CAPTURE_SCREENSHOT's device-side implementation: a fixed executable
-    // path (/usr/sbin/screencapture) and a fixed flag (-x), with the only
-    // variable argument being a destination path this file computes itself
-    // (a timestamped filename under the Jarvis folder) — never any
-    // model-supplied or user-supplied string, and no shell is invoked. Not
-    // an interpreter for arbitrary instructions, same reasoning as the
-    // Bun.spawn exception above.
-    file: "agents/imac/JarvisAgent/Sources/JarvisAgent/Tools/CaptureScreenshotTool.swift",
+    // Shared by CAPTURE_SCREENSHOT and LOOK_AT_SCREEN's device-side
+    // implementations: fixed executable paths (/usr/sbin/screencapture,
+    // /usr/bin/sips) and fixed/caller-computed flags (-x, -t jpg, a
+    // resize dimension and JPEG quality this code itself picks, a
+    // destination path this file computes itself — a timestamped filename
+    // under the Jarvis folder, or a temp-directory UUID filename) — never
+    // any model-supplied or user-supplied string, and no shell is
+    // invoked. Not an interpreter for arbitrary instructions, same
+    // reasoning as the Bun.spawn exception above.
+    file: "agents/imac/JarvisAgent/Sources/JarvisAgent/Tools/ScreenCaptureCore.swift",
     patternName: "Swift Process() invocation",
   },
 ];

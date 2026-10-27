@@ -76,43 +76,14 @@ enum CaptureScreenshotTool {
             let filename = "jarvis-screenshot-\(formatter.string(from: Date())).png"
             let destination = jarvisFolder.appendingPathComponent(filename)
 
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-            // -x: silent (no camera shutter sound/flash) and skips the
-            // "select area" interaction — full-screen, all displays.
-            process.arguments = ["-x", destination.path]
-
-            let stderrPipe = Pipe()
-            process.standardError = stderrPipe
-
-            // Same async-completion-via-semaphore idiom ListRecentPhotosTool
-            // uses for PHPhotoLibrary.requestAuthorization — AgentTool.execute
-            // is synchronous, so a blocking wait with a timeout is how this
-            // registry's tools bridge an async/subprocess completion back.
-            let semaphore = DispatchSemaphore(value: 0)
-            process.terminationHandler = { _ in semaphore.signal() }
-
             do {
-                try process.run()
+                // -x: silent (no camera shutter sound/flash) and skips the
+                // "select area" interaction — full-screen, all displays.
+                try ScreenCaptureCore.run(args: ["-x"], destination: destination, timeoutSeconds: timeoutSeconds)
+            } catch let error as ScreenCaptureCore.CaptureError {
+                return ToolResultPayload(success: false, data: nil, error: error.message)
             } catch {
-                return ToolResultPayload(success: false, data: nil, error: "Failed to launch screencapture: \(error.localizedDescription)")
-            }
-
-            if semaphore.wait(timeout: .now() + timeoutSeconds) == .timedOut {
-                process.terminate()
-                return ToolResultPayload(success: false, data: nil, error: "screencapture timed out after \(Int(timeoutSeconds))s")
-            }
-
-            guard process.terminationStatus == 0 else {
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrText = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return ToolResultPayload(
-                    success: false,
-                    data: nil,
-                    error: "screencapture exited with status \(process.terminationStatus)" +
-                        (stderrText.isEmpty ? "" : ": \(stderrText)") +
-                        " — check that Screen Recording permission is granted to JarvisAgent in System Settings"
-                )
+                return ToolResultPayload(success: false, data: nil, error: "screencapture failed: \(error.localizedDescription)")
             }
 
             guard fileManager.fileExists(atPath: destination.path),
