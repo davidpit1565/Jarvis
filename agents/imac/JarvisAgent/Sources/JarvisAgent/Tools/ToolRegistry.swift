@@ -54,6 +54,7 @@ final class AgentToolRegistry {
         registry.register(ReadTextFileTool.make())
         registry.register(ReadFileBytesTool.make())
         registry.register(ListRecentPhotosTool.make())
+        registry.register(CaptureScreenshotTool.make())
         registry.register(WriteFileTool.make())
         registry.register(ScheduleMacNotificationTool.make())
         registry.register(ComposeEmailDraftTool.make())

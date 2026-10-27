@@ -71,4 +71,44 @@ describe("SHARE_FILE_TO_PHONE tool", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("500");
   });
+
+  test("sends a .png file as an inline photo via sendPhotoBytes, not sendDocument", async () => {
+    let capturedUrl: string | undefined;
+    let capturedForm: FormData | undefined;
+    global.fetch = (async (url: unknown, init?: RequestInit) => {
+      capturedUrl = String(url);
+      capturedForm = init?.body as FormData;
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const tool = createShareFileToPhoneTool(makeGateway(), "12345");
+    const result = await tool.execute(
+      { base64Content: Buffer.from("fake-png-bytes").toString("base64"), filename: "jarvis-screenshot-2026-10-27.png" },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(capturedUrl).toContain("/sendPhoto");
+    expect(capturedUrl).not.toContain("/sendDocument");
+    expect(capturedForm?.get("chat_id")).toBe("12345");
+    const uploaded = capturedForm?.get("photo") as unknown as Blob;
+    expect(await uploaded.text()).toBe("fake-png-bytes");
+  });
+
+  test.each(["jpg", "jpeg", "gif", "webp", "PNG"])("treats a .%s filename as an image", async (extension) => {
+    let capturedUrl: string | undefined;
+    global.fetch = (async (url: unknown) => {
+      capturedUrl = String(url);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const tool = createShareFileToPhoneTool(makeGateway(), "12345");
+    const result = await tool.execute(
+      { base64Content: Buffer.from("x").toString("base64"), filename: `picture.${extension}` },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    expect(capturedUrl).toContain("/sendPhoto");
+  });
 });

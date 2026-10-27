@@ -20,7 +20,9 @@ export const readFileBytesTool: DeviceTool = {
     "Reads any file (not just text) on the target device and returns its raw bytes, base64-encoded. Only " +
     "works within a small allowlist of user folders (Desktop, Documents, Downloads, Jarvis), and only for " +
     "files up to 150KB — this is meant for a small document, note, or thumbnail-sized image, not a real " +
-    "photo or video. Use with share_file_to_phone to actually deliver the file to the user's phone.",
+    "photo or video. Use with share_file_to_phone to actually deliver the file to the user's phone — e.g. " +
+    "to send a screenshot, call capture_screenshot first, then read_file_bytes on the path it returns, then " +
+    "share_file_to_phone.",
   inputSchema: {
     type: "object",
     properties: {
