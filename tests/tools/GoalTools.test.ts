@@ -108,6 +108,20 @@ describe("CREATE_GOAL tool", () => {
     const result = await tool.execute({ description: "Goal", steps: "not an array" as never }, context);
     expect(result.success).toBe(false);
   });
+
+  test("rejects an absurdly long description (would be re-injected into every future conversation)", async () => {
+    const tool = createCreateGoalTool(env.goalStore, env.agentCore);
+    const result = await tool.execute({ description: "x".repeat(10_000), steps: ["a"] }, context);
+    expect(result.success).toBe(false);
+    expect(env.taskStore.list()).toHaveLength(0);
+  });
+
+  test("rejects an absurdly long step", async () => {
+    const tool = createCreateGoalTool(env.goalStore, env.agentCore);
+    const result = await tool.execute({ description: "Goal", steps: ["y".repeat(10_000)] }, context);
+    expect(result.success).toBe(false);
+    expect(env.taskStore.list()).toHaveLength(0);
+  });
 });
 
 describe("CHECK_GOAL_PROGRESS tool", () => {
@@ -232,5 +246,27 @@ describe("CANCEL_GOAL tool", () => {
     const tool = createCancelGoalTool(env.goalStore, env.agentCore, env.taskStore);
     const result = await tool.execute({ goalId: "missing" }, context);
     expect(result.success).toBe(false);
+  });
+
+  test("durably cancels a not-yet-started (PENDING) task so it survives a process restart", async () => {
+    const createTool = createCreateGoalTool(env.goalStore, env.agentCore);
+    const created = await createTool.execute({ description: "Goal A", steps: ["s1", "s2"] }, context);
+    const goalId = (created.data as { goalId: string }).goalId;
+
+    const tool = createCancelGoalTool(env.goalStore, env.agentCore, env.taskStore);
+    await tool.execute({ goalId }, context);
+
+    // The fix: cancellation for a never-started task must be persisted in
+    // AgentTaskStore itself, not only in AgentCore's in-memory `cancelled`
+    // Set — otherwise a process restart between this call and the queue
+    // worker picking the task up would lose the cancellation and the task
+    // would execute anyway.
+    for (const task of env.taskStore.listForGoal(goalId)) {
+      expect(task.state).toBe("CANCELLED");
+    }
+
+    // Simulate a restart: a brand new AgentCore sharing the same durable
+    // taskStore must never pick this task back up.
+    expect(env.taskStore.getNextEligibleQueuedTask()).toBeNull();
   });
 });

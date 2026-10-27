@@ -9,6 +9,17 @@ export interface CreateGoalInput extends Record<string, unknown> {
 }
 
 const MIN_STEPS = 1;
+// Both `description` and each `step` are free text the model writes from
+// the user's own words, and both get re-inserted verbatim into a future
+// conversation's system prompt via `goalProgressNote.ts` — potentially
+// every conversation until the goal is explicitly completed/abandoned.
+// Without a cap, an absurdly long description or step (whether from a
+// confused model call or adversarial text the user was tricked into
+// pasting) would sit in that prompt forever, wasting context on every
+// future turn. These limits are generous for a real goal/step (a
+// sentence or two) while still bounding the worst case.
+const MAX_DESCRIPTION_LENGTH = 500;
+const MAX_STEP_LENGTH = 300;
 // A hard ceiling on how many steps a single CREATE_GOAL call may create.
 // This is the concrete guard against the AutoGPT/BabyAGI-style failure
 // mode (a model recursively expanding a goal into an ever-growing,
@@ -77,8 +88,14 @@ export function createCreateGoalTool(goalStore: GoalStore, agentCore: AgentCore)
       if (typeof input.description !== "string" || input.description.trim() === "") {
         return { success: false, error: "description must be a non-empty string" };
       }
+      if (input.description.length > MAX_DESCRIPTION_LENGTH) {
+        return { success: false, error: `description must not exceed ${MAX_DESCRIPTION_LENGTH} characters` };
+      }
       if (!Array.isArray(input.steps) || input.steps.some((step) => typeof step !== "string" || step.trim() === "")) {
         return { success: false, error: "steps must be an array of non-empty strings" };
+      }
+      if (input.steps.some((step) => step.length > MAX_STEP_LENGTH)) {
+        return { success: false, error: `each step must not exceed ${MAX_STEP_LENGTH} characters` };
       }
       if (input.steps.length < MIN_STEPS) {
         return { success: false, error: "steps must contain at least one step" };
