@@ -239,7 +239,45 @@ execution was added. PR #151 (merged) also did a post-merge security/bug audit o
 #143-#149: two real defense-in-depth fixes (constant-time passphrase comparison, device-binding
 on proactive-announcement replies), no exploitable issue found. `JARVIS_ROADMAP_AUDIT.md`
 itself has not been re-edited to reflect this — treat its Task State Machine / Goal Engine
-"MISSING" verdicts as outdated until it's refreshed.
+"MISSING" verdicts as outdated until it's refreshed (a dedicated re-verification pass against
+the real codebase was kicked off 2026-10-27 — see its own PR for the corrected item-by-item
+status once merged).
+
+**Spotify is also already fully built and wired, contrary to what David was told earlier
+today**: `src/spotify/SpotifyClient.ts`, `SpotifyTokenStore.ts`, and five tools
+(`PlayMusicTool`/`PauseMusicTool`/`SkipTrackTool`/`GetCurrentlyPlayingTool`/`UnlinkSpotifyTool`)
+are implemented and registered in `src/index.ts` behind `SPOTIFY_CLIENT_ID`/
+`SPOTIFY_CLIENT_SECRET`/`JARVIS_PUBLIC_BASE_URL`. What's actually unconfirmed is only
+operational: whether those env vars are set on the live Fly deployment, and whether David has
+completed the one-time Spotify OAuth link. Don't tell him Spotify "isn't built" again —
+check `src/index.ts`'s `spotifyEnabled` wiring and ask him to confirm the live secrets/OAuth
+link instead.
+
+## David's decisions on "what's missing" items (2026-10-27)
+
+Responding to a list of remaining gaps he was given, he decided:
+- **Spotify**: build it — see above, turned out to already be built; what remains is
+  confirming/activating it (live secrets + OAuth link), not new code.
+- **"Open your chat"** (wishlist #22): build it now — in progress (see PR for
+  `claude/open-your-chat` branch).
+- **Voice/speaking-style adaptation** (wishlist #25): confirmed, but explicitly **not now** —
+  keep it recorded, revisit later.
+- **Real device/hardware validation** (Mac/iMac agent): explicitly deferred until he's
+  physically at the Mac **together** with this session — not something to attempt unsupervised
+  before then.
+- **Refreshing `JARVIS_ROADMAP_AUDIT.md`**: he didn't understand this item when first listed
+  (it's a documentation/bookkeeping task, not a product feature) but said it "seems important"
+  once it was explained that the doc has already been caught stale twice in one session
+  (Task/Goal Engine, Spotify) — a re-verification pass was kicked off right away (see above).
+- **iPhone app** (wishlist #8-11, #23): confirmed still deferred until the rest of the
+  functional core is solid, per the priority ordering already recorded in wishlist #20 — but
+  he added a concrete new requirement for when it's eventually built: saying "Hey Jarvis" on
+  the phone should trigger a **real visual indicator appearing on-screen**, similar to how the
+  newest Siri shows its orb/glow when activated — his own words were "not an animation, but
+  some kind of real 'core' that appears." This is a functional wake-indicator requirement, not
+  the separate ChatGPT-driven visual/icon design work he's doing independently — record it as a
+  requirement for whichever phase actually builds the iPhone app's wake-word UI, not something
+  to build now.
 
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
