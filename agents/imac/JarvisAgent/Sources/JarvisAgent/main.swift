@@ -12,6 +12,7 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
     private let tools = AgentToolRegistry.buildDefault()
     private let statusBar = StatusItemController()
     private let wakeWordListener = WakeWordListener()
+    private let globalHotkeyListener = GlobalHotkeyListener()
     private var connection: CoreConnection!
 
     // JARVIS Core (Bun.serve) speaks plain WebSocket, not TLS, so this
@@ -37,6 +38,16 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             self?.sendVoiceTranscript(text, forcedLanguage: language)
         }
         wakeWordListener.start()
+
+        // Keyboard-shortcut equivalent of "Hey JARVIS, look at my screen" —
+        // see GlobalHotkeyListener's own doc comment for why this chord and
+        // why it reuses `sendVoiceTranscript` rather than a new message
+        // type. No forced language, same as a clap-triggered command: a key
+        // chord carries no language signal either, so Core auto-detects.
+        globalHotkeyListener.onTrigger = { [weak self] in
+            self?.sendVoiceTranscript(GlobalHotkeyListener.triggerPhrase, forcedLanguage: "")
+        }
+        globalHotkeyListener.start()
 
         // Native notification permission — needed for show_notification
         // (due reminders, automation results) to actually appear as a
