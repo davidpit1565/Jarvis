@@ -721,10 +721,19 @@ export function loadConfig(): JarvisConfig {
   // be present, exactly as before.
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY?.trim() || undefined;
   const groqApiKey = process.env.GROQ_API_KEY?.trim() || undefined;
-  if (brainProvider === "anthropic" && !anthropicApiKey) {
+  // Only an EXPLICIT JARVIS_BRAIN_PROVIDER pins a required key — the implicit
+  // "anthropic" default above exists only as brainProviderExplicit's inert
+  // fallback value (AIRouter ignores it when brainProviderExplicit is false
+  // and free-tier-routes on its own), so it must never force an Anthropic
+  // key requirement on a deployment that intentionally has none (wishlist
+  // #17's zero-cost mandate: Claude is opt-in, never a silent hard
+  // dependency). Previously this crashed the whole server on boot
+  // (ConfigError thrown unconditionally) the moment ANTHROPIC_API_KEY was
+  // removed, even with GROQ_API_KEY present and working.
+  if (brainProviderExplicit && brainProvider === "anthropic" && !anthropicApiKey) {
     throw new ConfigError("Missing required environment variable: ANTHROPIC_API_KEY");
   }
-  if (brainProvider === "groq" && !groqApiKey) {
+  if (brainProviderExplicit && brainProvider === "groq" && !groqApiKey) {
     throw new ConfigError("Missing required environment variable: GROQ_API_KEY");
   }
   if (!anthropicApiKey && !groqApiKey) {
