@@ -293,11 +293,34 @@ export class Orchestrator {
    * caller that passes this callback against a brain without streaming
    * support still gets a correct reply, just without incremental deltas.
    */
+  /**
+   * `onInterimMessage`, when given, fires once per tool-calling iteration
+   * where the brain's response carried non-empty `text` ALONGSIDE
+   * `toolCalls` — i.e. the model narrated something ("checking now," "one
+   * moment, looking that up") before deciding to act. Fired synchronously,
+   * right when that iteration's response is received and BEFORE its tool
+   * calls are executed, with exactly that narration text and nothing else
+   * — never a token-level fragment, since the whole point is one clean,
+   * complete message a caller like Telegram can send as its own real
+   * message immediately, rather than silently buffering it in conversation
+   * history until the entire tool loop eventually resolves (see
+   * `TelegramGateway.ts`'s call site for why that buffering previously made
+   * Telegram "go quiet" during any multi-step or networked tool call).
+   * Distinct from `onTextDelta` (which streams the FINAL reply's text
+   * token-by-token for a caller doing live typing/TTS effects): a brain
+   * response that triggers tool calls is never the final reply, so
+   * `onTextDelta` is never invoked for it today regardless of this
+   * parameter. Purely additive — every existing caller that omits it
+   * behaves exactly as before (the narration text is still recorded into
+   * conversation history via `addAssistantMessage` either way; this
+   * callback only adds an extra, immediate delivery of it).
+   */
   async handleUserMessage(
     userId: string,
     content: string,
     images?: UserMessageImage[],
-    onTextDelta?: (text: string) => void
+    onTextDelta?: (text: string) => void,
+    onInterimMessage?: (text: string) => void
   ): Promise<string> {
     const { brain, conversation, toolRegistry, eventBus, channelContext, contextProvider, liveState } = this.deps;
     const extraContext = [channelContext, await contextProvider?.(content)].filter(Boolean).join("\n\n");
@@ -486,6 +509,10 @@ export class Orchestrator {
         }
 
         conversation.addAssistantMessage(response.text, response.toolCalls);
+
+        if (response.text.trim().length > 0) {
+          onInterimMessage?.(response.text);
+        }
 
         this.transitionLiveState(sessionId, userId, "EXECUTING", {
           reason: `running ${response.toolCalls.length} tool call(s)`,

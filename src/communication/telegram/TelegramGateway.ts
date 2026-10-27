@@ -366,7 +366,20 @@ export class TelegramGateway {
 
     const session = this.getOrCreateSession(chatIdStr);
     try {
-      const reply = await session.orchestrator.handleUserMessage(session.userId, text);
+      // Interim narration ("one moment, checking") is sent as its own real
+      // message the instant a tool-calling iteration produces it — see
+      // `Orchestrator.handleUserMessage`'s `onInterimMessage` doc comment —
+      // instead of only ever reaching the chat once the whole tool loop
+      // (potentially several iterations, real network calls) finally
+      // resolves. A send failure here is logged, not thrown: losing one
+      // interim "checking now" message is harmless (the real answer still
+      // follows), unlike a failure sending the final `reply` below, which
+      // is already handled by the surrounding catch.
+      const reply = await session.orchestrator.handleUserMessage(session.userId, text, undefined, undefined, (interim) => {
+        this.sendMessage(chatIdStr, interim).catch((sendError) => {
+          console.error(`[jarvis] Telegram interim-message send failed for chat ${chatIdStr}:`, sendError);
+        });
+      });
       await this.sendMessage(chatIdStr, reply);
     } catch (error) {
       console.error(`[jarvis] Telegram message handling failed for chat ${chatIdStr}:`, error);
