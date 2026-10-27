@@ -85,6 +85,7 @@ const ENV_KEYS = [
   "OLLAMA_EMBEDDING_MODEL",
   "GITHUB_TOKEN",
   "GITHUB_WATCHED_REPOS",
+  "GITHUB_WATCH_ALL_OWN_REPOS",
   "JARVIS_GITHUB_ACTIVITY_DB_PATH",
   "JARVIS_GITHUB_ACTIVITY_POLL_MS",
 ];
@@ -1181,6 +1182,23 @@ describe("redactConfigForDisplay", () => {
 
   test("rejects a malformed GITHUB_WATCHED_REPOS entry", () => {
     process.env.GITHUB_WATCHED_REPOS = "davidpit1565/Jarvis,not-a-valid-entry";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("githubWatchAllOwnRepos defaults to false", () => {
+    const config = loadConfig();
+    expect(config.githubWatchAllOwnRepos).toBe(false);
+  });
+
+  test("GITHUB_WATCH_ALL_OWN_REPOS=true turns on auto-discovery when GITHUB_TOKEN is set", () => {
+    process.env.GITHUB_TOKEN = "fake-token";
+    process.env.GITHUB_WATCH_ALL_OWN_REPOS = "true";
+    const config = loadConfig();
+    expect(config.githubWatchAllOwnRepos).toBe(true);
+  });
+
+  test("rejects GITHUB_WATCH_ALL_OWN_REPOS=true without GITHUB_TOKEN", () => {
+    process.env.GITHUB_WATCH_ALL_OWN_REPOS = "true";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 

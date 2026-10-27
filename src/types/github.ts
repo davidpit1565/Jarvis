@@ -61,3 +61,16 @@ export interface GitHubMergeResult {
   merged: boolean;
   message: string;
 }
+
+/**
+ * One repo David owns, as returned by `GitHubClient.listMyRepos` — kept
+ * deliberately minimal (just enough for the auto-discovery watch list to
+ * build "owner/repo" strings from) rather than mirroring GitHub's full repo
+ * object.
+ */
+export interface GitHubRepoSummary {
+  /** "owner/repo", exactly the shape `GITHUB_WATCHED_REPOS` entries use. */
+  fullName: string;
+  /** ISO 8601 timestamp, or null if GitHub didn't report one — not used by auto-discovery today, kept for future use (e.g. "recently active own repos first"). */
+  updatedAt: string | null;
+}

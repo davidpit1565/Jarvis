@@ -18,6 +18,42 @@ export function parseWatchedRepo(entry: string): { owner: string; repo: string }
   return { owner: parts[0], repo: parts[1] };
 }
 
+/**
+ * Builds the actual list of repos to poll for one cycle: the explicit
+ * `GITHUB_WATCHED_REPOS` list, unioned (deduped) with every repo David owns
+ * when `watchAllOwnRepos` is on. Deliberately called fresh every poll cycle
+ * (not once at boot) — repos he creates after JARVIS starts should get
+ * picked up on the very next cycle, not require a restart.
+ *
+ * If auto-discovery itself fails (rate limit, token issue, GitHub down),
+ * this falls back to the explicit list for that cycle rather than throwing —
+ * same per-source defensive posture as `pollGitHubActivity`'s own per-repo
+ * try/catch and `pollWatchSources`'s per-source try/catch: one broken piece
+ * degrades gracefully instead of taking the whole poller down.
+ */
+export async function resolveWatchedRepos(
+  client: GitHubClient,
+  explicitRepos: string[],
+  watchAllOwnRepos: boolean,
+  onError: (error: unknown) => void = (error) =>
+    console.error(
+      "[jarvis] GitHub auto-discovery (GITHUB_WATCH_ALL_OWN_REPOS) failed this cycle, falling back to GITHUB_WATCHED_REPOS only:",
+      error instanceof Error ? error.message : String(error)
+    )
+): Promise<string[]> {
+  if (!watchAllOwnRepos) return explicitRepos;
+
+  try {
+    const ownedRepos = await client.listMyRepos();
+    const merged = new Set(explicitRepos);
+    for (const r of ownedRepos) merged.add(r.fullName);
+    return Array.from(merged);
+  } catch (error) {
+    onError(error);
+    return explicitRepos;
+  }
+}
+
 function diffCommits(commits: GitHubCommit[], previousSha: string | undefined): GitHubCommit[] {
   // No previous cursor at all means this is the first time this repo has
   // ever been polled — there's no "since last check" baseline yet, so

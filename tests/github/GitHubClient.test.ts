@@ -205,6 +205,104 @@ describe("GitHubClient.getRepoActivitySummary", () => {
   });
 });
 
+describe("GitHubClient.listMyRepos", () => {
+  test("requests affiliation=owner and maps full_name/updated_at", async () => {
+    let requestedUrl = "";
+    global.fetch = (async (url: string) => {
+      requestedUrl = url;
+      return new Response(
+        JSON.stringify([
+          { full_name: "davidpit1565/Jarvis", updated_at: "2026-10-27T00:00:00Z" },
+          { full_name: "davidpit1565/Rudder", updated_at: "2026-10-26T00:00:00Z" },
+        ]),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const repos = await makeClient().listMyRepos();
+
+    expect(requestedUrl).toContain("/user/repos");
+    expect(requestedUrl).toContain("affiliation=owner");
+    expect(requestedUrl).toContain("page=1");
+    expect(repos).toEqual([
+      { fullName: "davidpit1565/Jarvis", updatedAt: "2026-10-27T00:00:00Z" },
+      { fullName: "davidpit1565/Rudder", updatedAt: "2026-10-26T00:00:00Z" },
+    ]);
+  });
+
+  test("handles a missing updated_at gracefully", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify([{ full_name: "o/r" }]), { status: 200 })) as unknown as typeof fetch;
+
+    const repos = await makeClient().listMyRepos();
+    expect(repos).toEqual([{ fullName: "o/r", updatedAt: null }]);
+  });
+
+  test("paginates across a full page and a short following page", async () => {
+    // Page 1 is a full page (100, GitHub's own max per_page), page 2 is
+    // short — the short page is what ends the loop here, well under the
+    // 200-repo cap, so this exercises genuine multi-page pagination.
+    const page1 = Array.from({ length: 100 }, (_, i) => ({ full_name: `o/repo${i}`, updated_at: null }));
+    const page2 = [{ full_name: "o/last-repo", updated_at: null }];
+    let calls = 0;
+    const requestedPages: string[] = [];
+    global.fetch = (async (url: string) => {
+      calls++;
+      const page = new URL(url).searchParams.get("page");
+      requestedPages.push(page ?? "");
+      return new Response(JSON.stringify(page === "1" ? page1 : page2), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const repos = await makeClient().listMyRepos();
+
+    expect(calls).toBe(2);
+    expect(requestedPages).toEqual(["1", "2"]);
+    expect(repos).toHaveLength(101);
+    expect(repos[100]).toEqual({ fullName: "o/last-repo", updatedAt: null });
+  });
+
+  test("stops and logs once the 200-repo cap is hit, never looping unboundedly", async () => {
+    let calls = 0;
+    global.fetch = (async () => {
+      calls++;
+      // Always returns a full page — without the cap, this would loop forever.
+      const fullPage = Array.from({ length: 100 }, (_, i) => ({ full_name: `o/repo-p${calls}-${i}`, updated_at: null }));
+      return new Response(JSON.stringify(fullPage), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const errorSpy = (() => {
+      const original = console.error;
+      let called = false;
+      console.error = (...args: unknown[]) => {
+        called = true;
+        original(...args);
+      };
+      return { wasCalled: () => called, restore: () => (console.error = original) };
+    })();
+
+    const repos = await makeClient().listMyRepos();
+
+    expect(repos).toHaveLength(200);
+    // Exactly two full pages (100 each) are needed to hit the 200 cap,
+    // confirming the loop stopped rather than continuing unboundedly.
+    expect(calls).toBe(2);
+    expect(errorSpy.wasCalled()).toBe(true);
+    errorSpy.restore();
+  });
+
+  test("an empty account returns an empty list without extra requests", async () => {
+    let calls = 0;
+    global.fetch = (async () => {
+      calls++;
+      return new Response(JSON.stringify([]), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const repos = await makeClient().listMyRepos();
+    expect(repos).toEqual([]);
+    expect(calls).toBe(1);
+  });
+});
+
 describe("GitHubClient.commentOnIssue", () => {
   test("posts the comment body and maps the response", async () => {
     let requestedUrl = "";
