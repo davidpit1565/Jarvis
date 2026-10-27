@@ -34,6 +34,22 @@ function failingBrain(message: string): Brain {
   };
 }
 
+/**
+ * A `chat()` that never resolves or rejects — the real shape of the
+ * 2026-10-27 silent-failure bug (`GeminiBrain`/`GroqBrain`/`OpenRouterBrain`
+ * calling bare `fetch()` with no timeout of their own, so a stalled
+ * connection left the promise pending forever). Used to prove
+ * `providerCallTimeoutMs` turns a hang into an ordinary, fallback-eligible
+ * failure instead of leaving `AIRouter.chat()` pending indefinitely.
+ */
+function hangingBrain(): Brain {
+  return {
+    chat(): Promise<BrainResponse> {
+      return new Promise(() => {});
+    },
+  };
+}
+
 function countingBrain(text: string, calls: string[], name: string): Brain {
   return {
     async chat(): Promise<BrainResponse> {
@@ -343,6 +359,39 @@ describe("AIRouter", () => {
       const router = new AIRouter(registry, costTracker, { freeFirst: true });
 
       await expect(router.chat(REQUEST)).rejects.toThrow("anthropic down");
+    });
+  });
+
+  describe("provider call timeout (2026-10-27 silent-failure fix)", () => {
+    test("a hanging provider call is treated as a failure and falls back, instead of leaving chat() pending forever", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", hangingBrain(), "free");
+      registry.register("anthropic", okBrain("paid reply"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { freeFirst: true, providerCallTimeoutMs: 20 });
+
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("paid reply");
+    });
+
+    test("throws ProviderTimeoutError (not a silent hang) when every configured provider hangs", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", hangingBrain(), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { providerCallTimeoutMs: 20 });
+
+      await expect(router.chat(REQUEST)).rejects.toThrow(/did not respond within/);
+    });
+
+    test("chatStream also treats a hanging non-streaming provider as a failure, not a stuck promise", async () => {
+      const registry = new AIProviderRegistry();
+      registry.register("groq", hangingBrain(), "free");
+      registry.register("anthropic", okBrain("paid reply"), "paid");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { freeFirst: true, providerCallTimeoutMs: 20 });
+
+      const response = await router.chatStream(REQUEST, () => {});
+      expect(response.text).toBe("paid reply");
     });
   });
 
