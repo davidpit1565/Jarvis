@@ -1,5 +1,6 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { PollinationsImageClient } from "@/images/PollinationsImageClient";
+import { CloudflareImageClient } from "@/images/CloudflareImageClient";
 import { TelegramGateway } from "@/communication/telegram/TelegramGateway";
 import { createGenerateImageTool } from "@/tools/images/GenerateImageTool";
 import { PermissionLevel } from "@/types/permissions";
@@ -73,5 +74,82 @@ describe("GENERATE_IMAGE tool", () => {
     const data = result.data as { url: string; telegramDelivery?: string };
     expect(data.url).toContain("image.pollinations.ai");
     expect(data.telegramDelivery).toContain("failed");
+  });
+
+  test("labels the Pollinations result with source: 'pollinations'", async () => {
+    const tool = createGenerateImageTool(new PollinationsImageClient());
+    const result = await tool.execute({ prompt: "a cute robot" }, context);
+    const data = result.data as { source: string };
+    expect(data.source).toBe("pollinations");
+  });
+
+  describe("with CloudflareImageClient configured", () => {
+    test("prefers Cloudflare over Pollinations and returns a data: URI", async () => {
+      global.fetch = (async () =>
+        new Response(JSON.stringify({ result: { image: "ZmFrZWJ5dGVz" }, success: true, errors: [] }), {
+          status: 200,
+        })) as unknown as typeof fetch;
+
+      const tool = createGenerateImageTool(
+        new PollinationsImageClient(),
+        undefined,
+        undefined,
+        new CloudflareImageClient("acct-1", "cf-token")
+      );
+      const result = await tool.execute({ prompt: "a cute robot" }, context);
+
+      expect(result.success).toBe(true);
+      const data = result.data as { url: string; source: string };
+      expect(data.source).toBe("cloudflare");
+      expect(data.url).toBe("data:image/jpeg;base64,ZmFrZWJ5dGVz");
+    });
+
+    test("uploads the image bytes directly to Telegram via sendPhotoBytes", async () => {
+      let capturedUrl: string | undefined;
+      global.fetch = (async (url: unknown) => {
+        const u = String(url);
+        if (u.includes("ai.cloudflare.com") || u.includes("/ai/run/")) {
+          return new Response(JSON.stringify({ result: { image: "ZmFrZWJ5dGVz" }, success: true, errors: [] }), {
+            status: 200,
+          });
+        }
+        capturedUrl = u;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const tool = createGenerateImageTool(
+        new PollinationsImageClient(),
+        makeTelegramGateway(),
+        "12345",
+        new CloudflareImageClient("acct-1", "cf-token")
+      );
+      const result = await tool.execute({ prompt: "a cute robot" }, context);
+
+      expect(result.success).toBe(true);
+      expect(capturedUrl).toContain("/sendPhoto");
+    });
+
+    test("falls back to Pollinations when the Cloudflare call fails", async () => {
+      global.fetch = (async (url: unknown) => {
+        if (String(url).includes("/ai/run/")) {
+          return new Response("rate limited", { status: 429 });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const tool = createGenerateImageTool(
+        new PollinationsImageClient(),
+        undefined,
+        undefined,
+        new CloudflareImageClient("acct-1", "cf-token")
+      );
+      const result = await tool.execute({ prompt: "a cute robot" }, context);
+
+      expect(result.success).toBe(true);
+      const data = result.data as { url: string; source: string; cloudflareFallback?: string };
+      expect(data.source).toBe("pollinations");
+      expect(data.url).toContain("image.pollinations.ai/prompt/");
+      expect(data.cloudflareFallback).toContain("429");
+    });
   });
 });

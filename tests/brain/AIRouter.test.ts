@@ -240,6 +240,38 @@ describe("AIRouter", () => {
       expect(calls).toEqual(["groq"]);
     });
 
+    test("prefers gemini over groq when both free providers are configured, per FREE_PROVIDER_PRIORITY's default order", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      // Registered in an order that would pick groq first under plain
+      // registration order — the whole point of this test is that the
+      // explicit priority list overrides that, regardless of registration
+      // order.
+      registry.register("groq", countingBrain("groq reply", calls, "groq"), "free");
+      registry.register("gemini", countingBrain("gemini reply", calls, "gemini"), "free");
+      const costTracker = new CostTracker(":memory:");
+      const router = new AIRouter(registry, costTracker, { freeFirst: true });
+
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("gemini reply");
+      expect(calls).toEqual(["gemini"]);
+    });
+
+    test("honors a custom freeProviderPriority override instead of the default order", async () => {
+      const registry = new AIProviderRegistry();
+      const calls: string[] = [];
+      registry.register("gemini", countingBrain("gemini reply", calls, "gemini"), "free");
+      registry.register("groq", countingBrain("groq reply", calls, "groq"), "free");
+      const costTracker = new CostTracker(":memory:");
+      // Explicitly flips the default order — groq should now win despite
+      // ranking last in AIRouter's own built-in default.
+      const router = new AIRouter(registry, costTracker, { freeFirst: true, freeProviderPriority: ["groq", "gemini"] });
+
+      const response = await router.chat(REQUEST);
+      expect(response.text).toBe("groq reply");
+      expect(calls).toEqual(["groq"]);
+    });
+
     test("uses the paid provider when freeFirst is false and no explicit provider is set", async () => {
       const registry = new AIProviderRegistry();
       registry.register("groq", okBrain("free reply"), "free");
@@ -363,21 +395,33 @@ describe("AIRouter", () => {
       await expect(router.chat(REQUEST)).rejects.toThrow(BudgetExceededError);
     });
 
+    // Rewritten for FREE_PROVIDER_PRIORITY (gemini > openrouter >
+    // cloudflare-workers-ai > groq, see AIRouter's own doc comment): this
+    // test used to register "groq" then "openrouter" and rely on groq
+    // (registered first) being picked as the free-first primary. With an
+    // explicit priority order, gemini now outranks groq for that primary
+    // pick, so the two free providers here are "gemini" (which fails, and
+    // is the free-first primary) and "groq" (the lowest-priority free
+    // provider, used only once gemini has already been tried and
+    // excluded) — same test intent, updated to providers whose relative
+    // priority actually matches what's being exercised.
     test("excludes an already-tried free provider from the hard-budget-exceeded fallback, trying a different free provider instead", async () => {
       const registry = new AIProviderRegistry();
-      registry.register("groq", failingBrain("groq down"), "free");
+      registry.register("gemini", failingBrain("gemini down"), "free");
       registry.register("anthropic", okBrain("paid reply — should never be used"), "paid");
-      registry.register("openrouter", okBrain("openrouter reply"), "free");
+      registry.register("groq", okBrain("groq reply"), "free");
       const costTracker = new CostTracker(":memory:");
       costTracker.record("anthropic", 10); // already over the daily cap below
       const router = new AIRouter(registry, costTracker, { freeFirst: true, maxDailyCostUsd: 5 });
 
-      // Primary (free-first) is groq, which fails; routeToFallback resolves
-      // anthropic (paid) as the fallback candidate, but the daily cap is
-      // exceeded — applyBudget must not hand back groq (already tried and
-      // already failed this same request) as the "free" substitute.
+      // Primary (free-first, highest-priority free provider) is gemini,
+      // which fails; routeToFallback resolves anthropic (paid) as the
+      // fallback candidate, but the daily cap is exceeded — applyBudget
+      // must not hand back gemini (already tried and already failed this
+      // same request) as the "free" substitute, and falls through to the
+      // next-priority untried free provider instead.
       const response = await router.chat(REQUEST);
-      expect(response.text).toBe("openrouter reply");
+      expect(response.text).toBe("groq reply");
     });
 
     test("never restricts a free provider, even past the cap", async () => {

@@ -85,17 +85,112 @@ sessions/compaction. None of this is built yet unless a specific PR/commit is no
     assistant projects on GitHub — not just abstract patterns (already done, see
     `JARVIS_COMPETITIVE_RESEARCH.md`) but literally reviewing specific repos' code and
     potentially reusing substantial pieces outright where it saves real rebuilding effort.
-    A first-pass web search (2026-10-26, no specific repos confirmed with him yet) turned
-    up candidates worth a closer look if he confirms interest: `RehanIlyas-dev/JARVIS`
-    (Python, wake-word, pluggable Gemini/OpenAI/local-Ollama backend), `llm-guy/jarvis`
-    (local Ollama + LangChain wake-word assistant), `Priler/jarvis` (Rust/Tauri, fully
-    offline STT/TTS/wake-word/NLU, MIT-licensed), `AFIN7/jarvis` (desktop assistant, no
-    paid APIs, MIT-licensed). None of these have been cloned/reviewed in depth yet — he
-    also mentioned seeing specific projects via Instagram videos pointing to GitHub, which
+    A star-ranked search (2026-10-26) surfaced real candidates by actual GitHub star count:
+    `GauravSingh9356/J.A.R.V.I.S` (1.1k★), `alexylem/jarvis` (841★), `danilofalcao/jarvis`
+    (625★), `Gladiator07/JARVIS` (600★), `isair/jarvis` (599★, offline voice),
+    `ethanplusai/jarvis` (520★, macOS voice-first). Two of these were reviewed in depth on
+    2026-10-26 (cloned and actually read, not just README-skimmed):
+    - **`danilofalcao/jarvis`** — a Flask+SocketIO local web IDE with a manual model
+      dropdown over 11 SDK clients (`app.py`). **Verdict: not worth adopting** — our own
+      `AIRouter.ts`/`AIProviderRegistry.ts` is already categorically more sophisticated
+      (cost-tier routing, vision-capability gating, circuit breaker, budget caps, fallback
+      with events, escalation) vs. this repo's zero retry/fallback/cost-tracking. MIT
+      licensed (reusable) but nothing here is actually better than what we have. Last
+      commit 2025-01-26, stale. One minor side-note: its `workspace_manager.py` does
+      simple query-relevant local file selection for prompt context — maybe worth a quick
+      look only if JARVIS ever builds its own code-assistant/RAG feature, unrelated to
+      voice/routing.
+    - **`ethanplusai/jarvis`** — FastAPI + Chrome Web-Speech-API voice-first macOS
+      assistant, brain = a persistent `claude -p` subprocess on the user's own Claude
+      subscription. **Verdict: don't adopt wholesale** (custom non-commercial license —
+      ideas/patterns only, not verbatim code reuse; Chrome-dependent always-listening is
+      less private/free than our own on-device `agents/imac/.../WakeWordListener.swift`;
+      depends on paid Fish Audio TTS with no fallback) **but its voice-scheduling design is
+      genuinely worth reimplementing as our own code**: (1) a real barge-in/interruption +
+      echo-rejection system (`speech.py`'s `SpeechScheduler` — token-overlap + stem-match
+      heuristics so JARVIS doesn't hear/react to its own voice, and so the user can
+      interrupt JARVIS mid-sentence) — this directly solves two real gaps in wishlist items
+      #3-5 (voice-first, always-on wake phrase) that nothing else built so far addresses;
+      (2) sentence-boundary streaming TTS (`SentenceSplitter`, ~120 lines) for lower
+      perceived latency, worth porting once JARVIS has any TTS pipeline. Very actively
+      maintained (last commit 2026-09-07, ~1,640 tests) and unusually well-documented/
+      defensive code — no real quality red flags found reading it.
+    He also mentioned seeing specific projects via Instagram videos pointing to GitHub, which
     isn't content Claude can browse directly; get the actual repo links from him directly
     when he has them, then use `add_repo` to attach the specific one(s) he wants reviewed.
-
-## Other David repos worth knowing about
+17. **Absolute zero-cost guarantee on Claude — this is not a preference, it's a hard
+    requirement, he's repeated it firmly multiple times.** `ZERO_COST_MODE=true` (already
+    exists in `src/config/index.ts`/`AIRouter.ts`) is the real answer: when set, a paid
+    provider (Claude) is NEVER called, not even as a last-resort fallback if every free
+    provider fails — the request just fails instead. This should be set on the live Fly
+    deployment once PR #144 (free-provider priority) merges. Don't frame Claude as "the
+    default brain" to him again without immediately caveating that he's opted out of ever
+    using it for cost reasons.
+18. **Google Drive integration**: generate presentations, checklists, and to-do lists
+    directly in his Drive, on request.
+19. **Advanced proactive reminders/wake-up system** — a real upgrade over today's
+    reminders + wake-up-call scheduler:
+    - JARVIS should be able to *speak a reminder live* on a chosen device (or all of them)
+      without placing a phone call — e.g. "Hey David, sorry to interrupt, but you have X"
+      spoken directly through a device's speaker. Device must be powered on; closed/locked
+      app state handling still needs the same iOS background-limits honesty as wishlist #4.
+    - If he doesn't respond, JARVIS should follow up ("did you do it?") rather than firing
+      once and moving on.
+    - He can also set up his own "automations" where JARVIS proactively starts a
+      conversation at a specific time/date with a reminder, in a tone he can tune (more
+      casual vs. more professional/diplomatic).
+    - **Security concern he explicitly raised**: if a device "wakes up" and starts talking
+      on its own, there needs to be a way to make sure only HE can meaningfully respond to
+      it — not whoever happens to be standing nearby. His proposed mechanisms, in order of
+      sophistication he wants to grow toward: (a) start with some kind of shared
+      code/passphrase between him and JARVIS ("code confirmed" style exchange) before it
+      treats a reply as really being him; (b) longer-term, voice recognition (recognizing
+      his specific voice, not just any voice saying the right words); (c) longer-term
+      still, he wants to actually evolve a private "code language" between him and JARVIS
+      over time — this is explicitly a direction he wants to grow into, not a one-time
+      feature to build and forget.
+    Research needed before building the voice-recognition piece specifically: realistic
+    free/local speaker-identification options and their actual accuracy/privacy/cost
+    tradeoffs for a single-user case — don't assume a passphrase and real voice biometrics
+    are equally easy; they're different problems.
+20. **Explicit priority ranking he confirmed (2026-10-27)**, against the "what's left"
+    list given to him: context/natural conversation (#3 in that list), voice barge-in
+    (#2), Drive integration (#3 in the earlier numbering — presentations/checklists), and
+    real device validation of everything already built (#6, the Mac/iMac hardware test)
+    are all **urgent, must-do now**. Spotify was "should do" but not urgent. **App Store
+    Connect/TestFlight automation is explicitly LAST — only after everything else is built
+    and actually working**, not in parallel. Design/visual polish (he's separately been
+    sketching with ChatGPT — e.g. a live animated "core" that moves in sync with JARVIS's
+    voice) is confirmed **explicitly deferred until after the functional core is solid**,
+    then phone/desktop visual design, then TestFlight — he stated this exact ordering
+    himself, unprompted, so this isn't just our own earlier guess, it's confirmed.
+21. **Voice quality — he explicitly rejected building a custom voice clone**, reasoning
+    (his own, and correct) that recording/training a custom voice would cost real time and
+    money ("credits") for a bad tradeoff. He wants something that sounds genuinely human —
+    his reference point is talking to ChatGPT's voice mode — not a "voice of an AI
+    assistant" robotic feel, through a real, working TTS rather than a cloned voice. He
+    mentioned using "a voice box for certain [other] voices" — **unclear exactly what tool
+    this refers to** (possibly something used for his `videos-ai` narration work, or a
+    specific TTS/voice-changer product) — ask him directly before assuming or building
+    around it. Our own existing `agents/imac/JarvisAgent` currently just uses
+    `AVSpeechSynthesisVoice`'s best-available system voice with zero pitch/style tuning
+    (see `WakeWordListener.swift` `speak()`/`bestAvailableVoice()`) — macOS's own premium/
+    "Enhanced"-quality system voices are free, on-device, and genuinely natural-sounding;
+    picking a better one + light pitch tuning for a deeper tone is a cheap, real
+    improvement worth doing before reaching for any paid cloud TTS. Separately, Twilio
+    phone calls already have `TWILIO_VOICE_PITCH`/`TWILIO_VOICE_RATE` tuning — a different
+    code path from the Mac agent's speech, don't conflate the two when touching "the
+    voice."
+22. **"Open your chat" / chat-surface access**: he wants to be able to say something like
+    "open your chat" and have JARVIS actually open a real chat surface he can type/talk in
+    — e.g. opening the existing Telegram bot conversation with JARVIS — on whichever
+    device he's using, phone included. This is distinct from a one-off spoken reply; it's
+    "give me a persistent place to keep talking to you."
+23. **Deep, system-wide iPhone integration** — not just JARVIS's own reminders/calendar
+    features, but genuinely hooking into iOS's own Reminders app, Calendar, and other
+    system-level surfaces, plus general capabilities (weather, etc.) — his own framing:
+    "like Siri, but David Intelligence instead of Apple Intelligence." This is the iPhone
+    app phase (wishlist #8-11) at full scope, not a smaller subset.
 
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.

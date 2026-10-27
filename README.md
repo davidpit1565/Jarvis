@@ -1431,19 +1431,44 @@ verification, malformed JSON, disabled-gateway 404) against the actual
   the same way it would in claude.ai. An image-only message (no caption
   text) is a valid turn.
 - **`GENERATE_IMAGE`** (`SAFE_ACTION`, standing-granted, always
-  registered) — generates a real image from a text prompt via
-  [Pollinations.ai](https://pollinations.ai) (`image.pollinations.ai/prompt/...`),
-  which is free and requires no API key or signup — verified live during
-  development (fetched an actual generated JPEG with zero auth of any
-  kind). `src/images/PollinationsImageClient.ts` just builds the URL;
-  nothing is generated or fetched by Core itself. The tool result always
-  includes the URL, and when a Telegram owner chat is configured, also
-  pushes it there as a real inline photo via `TelegramGateway.sendPhoto` —
-  Telegram fetches the URL itself server-side, so the image bytes never
-  pass through Core's own process. The hologram chat panel also renders a
-  `generate_image` URL inline as an actual image in JARVIS's reply, not a
-  bare link, when it recognizes the Pollinations domain in the response
-  text.
+  registered) — generates a real image from a text prompt, from whichever
+  of two free providers is configured, preferring the better one:
+  - **Cloudflare Workers AI's `flux-1-schnell`** (`src/images/CloudflareImageClient.ts`)
+    when `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` are set (the same
+    credentials already used for `CloudflareWorkersAIBrain`'s text models,
+    no second key needed) — a real, modern diffusion model, covered by the
+    same free 10,000-Neurons/day allocation. It returns the image inline as
+    base64, not a hosted URL, so the tool result's `url` is a `data:` URI
+    in this case, and Telegram delivery uploads the bytes directly via
+    `TelegramGateway.sendPhotoBytes` rather than having Telegram fetch a
+    URL.
+  - **[Pollinations.ai](https://pollinations.ai)** (`image.pollinations.ai/prompt/...`,
+    `src/images/PollinationsImageClient.ts`) otherwise, or as an automatic
+    fallback if a configured Cloudflare call fails — free, no API key or
+    signup required, verified live during development (fetched an actual
+    generated JPEG with zero auth of any kind). Just builds the URL;
+    nothing is generated or fetched by Core itself. Telegram delivery here
+    uses `TelegramGateway.sendPhoto` with the URL — Telegram fetches it
+    itself server-side, so the bytes never pass through Core's own process.
+
+  Every result also carries `source` (`"cloudflare"` or `"pollinations"`),
+  and a Cloudflare-fallback result carries `cloudflareFallback` naming why
+  Cloudflare didn't serve that particular request. **Gemini's own native
+  image-generation models were investigated and deliberately NOT wired in
+  here**: as of 2026-10-26 (verified against Google's current pricing docs),
+  every current Gemini image model (`gemini-2.5-flash-image`,
+  `gemini-3.1-flash-image`, etc., "Nano Banana") lists its Free Tier price
+  as "Not available" — image generation is a paid-tier-only Gemini
+  capability, not something the existing free `GEMINI_API_KEY` setup can
+  call, so using it here would have silently required billing. The
+  hologram chat panel's own inline-image rendering and
+  `GET /image-proxy` download endpoint currently only recognize a
+  Pollinations URL in the response text/query — a Cloudflare-sourced
+  `data:` URI still comes back correctly in the tool result and works fine
+  in any consumer that just uses the URL directly (e.g. Telegram), but
+  doesn't yet get that same special-cased inline-render/download treatment
+  in the hologram UI specifically; nothing in this project's UI was
+  changed as part of this work.
 
 ## Weather
 

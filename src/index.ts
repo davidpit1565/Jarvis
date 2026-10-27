@@ -147,6 +147,7 @@ import { DeviceVoiceGateway, type DeviceVoiceSession } from "@/communication/voi
 import { createNotifyUserTool } from "@/tools/telegram/NotifyUserTool";
 import { createShareFileToPhoneTool } from "@/tools/telegram/ShareFileToPhoneTool";
 import { PollinationsImageClient } from "@/images/PollinationsImageClient";
+import { CloudflareImageClient } from "@/images/CloudflareImageClient";
 import { createGenerateImageTool } from "@/tools/images/GenerateImageTool";
 import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ActivityLog } from "@/core/activity/ActivityLog";
@@ -609,6 +610,7 @@ function main() {
     freeFirst: config.aiFreeFirst,
     explicitProvider: config.brainProviderExplicit ? config.brainProvider : undefined,
     fallbackProvider: config.aiFallbackProvider,
+    freeProviderPriority: config.aiFreeProviderPriority,
     maxDailyCostUsd: config.maxDailyCostUsd,
     maxMonthlyCostUsd: config.maxMonthlyCostUsd,
     maxCostPerRunUsd: config.maxCostPerRunUsd,
@@ -971,8 +973,23 @@ function main() {
   // itself always carries it); Telegram delivery on top is a bonus when
   // a owner chat happens to be configured, not a requirement.
   const pollinationsImageClient = new PollinationsImageClient();
+  // Optional, better-quality image generation: Cloudflare Workers AI's
+  // flux-1-schnell, reusing the exact same CLOUDFLARE_ACCOUNT_ID/
+  // CLOUDFLARE_API_TOKEN already required for CloudflareWorkersAIBrain —
+  // no separate credential to configure. Only the account id/token are
+  // required here (unlike CloudflareWorkersAIBrain, which also requires an
+  // explicit CLOUDFLARE_MODEL): CloudflareImageClient always targets
+  // flux-1-schnell, so there's no per-user model choice to make for images
+  // the way there is for 50+ general-purpose text models. See
+  // GenerateImageTool's own doc comment for why this — not Gemini's
+  // paid-tier-only image models — is the "better than Pollinations" option
+  // actually wired in here.
+  const cloudflareImageClient =
+    config.cloudflareAccountId && config.cloudflareApiToken
+      ? new CloudflareImageClient(config.cloudflareAccountId, config.cloudflareApiToken)
+      : undefined;
   toolRegistry.registerTool(
-    createGenerateImageTool(pollinationsImageClient, telegramGateway, config.telegramOwnerChatId)
+    createGenerateImageTool(pollinationsImageClient, telegramGateway, config.telegramOwnerChatId, cloudflareImageClient)
   );
   permissionService.grant(DEFAULT_USER_ID, "GENERATE_IMAGE");
 
