@@ -11,6 +11,16 @@ export interface ToolInputSchema {
 export interface ToolExecutionContext {
   userId: string;
   requestId: string;
+  /**
+   * Which channel this call originated on — the same value as the
+   * Orchestrator's own `liveStateChannel` ("chat" for the default
+   * terminal/web conversation, or "phone", "wakeup-call", "sms",
+   * "telegram", "device-voice" for the others; see `src/index.ts`'s
+   * per-channel Orchestrator construction). Optional because most tools
+   * don't care, but a tool whose honest behavior genuinely differs by
+   * channel (e.g. OPEN_CHAT) can read it instead of guessing from prose.
+   */
+  channel?: string;
 }
 
 export interface ToolResult {

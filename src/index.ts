@@ -165,6 +165,7 @@ import { PassphraseSpeakerAuthenticator } from "@/core/confirmation/SpeakerAuthe
 import { createSetConfirmationPassphraseTool } from "@/tools/security/SetConfirmationPassphraseTool";
 import { createNotifyUserTool } from "@/tools/telegram/NotifyUserTool";
 import { createShareFileToPhoneTool } from "@/tools/telegram/ShareFileToPhoneTool";
+import { createOpenChatTool } from "@/tools/telegram/OpenChatTool";
 import { PollinationsImageClient } from "@/images/PollinationsImageClient";
 import { CloudflareImageClient } from "@/images/CloudflareImageClient";
 import { createGenerateImageTool } from "@/tools/images/GenerateImageTool";
@@ -1063,6 +1064,15 @@ function main() {
     permissionService.grant(DEFAULT_USER_ID, "NOTIFY_USER");
     toolRegistry.registerTool(createShareFileToPhoneTool(telegramGateway, config.telegramOwnerChatId));
     permissionService.grant(DEFAULT_USER_ID, "SHARE_FILE_TO_PHONE");
+  }
+
+  // OPEN_CHAT only needs the bot's public username (to build the t.me
+  // link), but it's only actually useful once the Telegram gateway itself
+  // is live — otherwise the link it hands out leads to a bot that can't
+  // reply. Gated the same way as NOTIFY_USER/SHARE_FILE_TO_PHONE above.
+  if (telegramGateway && config.telegramBotUsername) {
+    toolRegistry.registerTool(createOpenChatTool(config.telegramBotUsername));
+    permissionService.grant(DEFAULT_USER_ID, "OPEN_CHAT");
   }
 
   // Staged cost alerts (75%/90%/100% of JARVIS_COST_ALERT_THRESHOLD_USD)
