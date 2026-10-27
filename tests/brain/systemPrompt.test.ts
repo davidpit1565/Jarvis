@@ -49,5 +49,32 @@ describe("JARVIS_SYSTEM_PROMPT", () => {
       expect(JARVIS_SYSTEM_PROMPT).toMatch(/Never fabricate an answer that sounds plausible/);
       expect(JARVIS_SYSTEM_PROMPT).toMatch(/inventing a task, event,\s+or fact that was never actually found/i);
     });
+
+    test("lowers the bar for a confirm-back question when it may not have heard/parsed the message correctly, distinct from choosing between readings", () => {
+      expect(JARVIS_SYSTEM_PROMPT).toMatch(/whether you actually heard or\s+parsed the message correctly at all/i);
+      expect(JARVIS_SYSTEM_PROMPT).toMatch(/did\s+I understand you correctly, sir — did you mean X\?/);
+      expect(JARVIS_SYSTEM_PROMPT).toMatch(/not being sure what the words\s+even were/i);
+    });
+  });
+
+  describe("uncertainty about HOW to execute (distinct from ambiguous user intent)", () => {
+    test("distinguishes execution uncertainty from the intent-disambiguation section above it", () => {
+      expect(JARVIS_SYSTEM_PROMPT).toMatch(/The section above is about understanding what the user MEANT/);
+      expect(JARVIS_SYSTEM_PROMPT).toMatch(/your own uncertainty over HOW to best carry out/i);
+    });
+
+    test("ties the guidance concretely to the Goal Engine\\/CREATE_GOAL plan-execute-verify loop", () => {
+      expect(JARVIS_SYSTEM_PROMPT).toMatch(/CREATE_GOAL and the plan\/execute\/\s*verify loop/);
+      expect(JARVIS_SYSTEM_PROMPT).toMatch(/choosing between\s+genuinely different approaches/i);
+    });
+
+    test("sets a lower bar to ask here than the intent section's, without re-litigating over-asking on routine actions", () => {
+      expect(JARVIS_SYSTEM_PROMPT).toMatch(/deliberately a lower bar to ask than the intent section's/i);
+      expect(JARVIS_SYSTEM_PROMPT).toMatch(/Don't get newly hesitant about a kind of action you already do\s+confidently and correctly all the time/i);
+    });
+
+    test("frames asking as feeding the correction-learning loop with real signal", () => {
+      expect(JARVIS_SYSTEM_PROMPT).toMatch(/becomes a real, attributable\s+signal the correction-learning loop can act on/i);
+    });
   });
 });
