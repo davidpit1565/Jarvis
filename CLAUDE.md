@@ -576,3 +576,23 @@ than crashing the poller. Note this only ever affected the proactive poller
 (`pollGitHubActivity.ts`) — the on-demand `GitHubClient` read/write tools (listing
 commits/issues/PRs, commenting, merging) were never limited to a "watched" list in the first
 place; they already work on any repo by name that `GITHUB_TOKEN` can access.
+
+## Google Workspace broadened + YouTube added (2026-10-27)
+
+Per David's request to connect his full Google Workspace "with all his files" and add
+YouTube awareness of his own channel:
+- Drive scope broadened: `drive.readonly` was added alongside the existing `drive.file`
+  scope (`GoogleCalendarClient.ts`'s `GOOGLE_SCOPES`), so JARVIS can now see/search ALL of
+  David's Drive files, not just ones it created itself. `drive.file` was kept, not
+  replaced — `drive.readonly` is read-only and doesn't grant the create/write access
+  `CreatePresentationTool`/`CreateChecklistTool` still need. A new `SEARCH_DRIVE_FILES`
+  tool (`GoogleDriveClient.searchFiles`) searches by name or file content across the whole
+  Drive; the existing `FIND_DRIVE_FILE` tool (title-only match) is unchanged.
+- YouTube added, read-only: new `src/youtube/YouTubeClient.ts` + three tools
+  (`GET_MY_YOUTUBE_CHANNEL`/`LIST_MY_YOUTUBE_VIDEOS`/`GET_YOUTUBE_VIDEO_STATS`), using the
+  same shared Google OAuth consent as Calendar/Gmail/Drive (`youtube.readonly` scope, no
+  separate credentials or env var). No publish/upload/comment capability.
+- Any Google account already linked before this change must re-link
+  (`GET /calendar/oauth/start`, choosing the same account again) to pick up the new scopes
+  — same re-link precedent as the earlier Canva `design:content:read` scope bump. Gmail's
+  own scopes were not touched — it already had full read + send access.

@@ -24,15 +24,27 @@ const GOOGLE_CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calen
 // modification — and was added on the user's own explicit request,
 // reversing this feature's original read-only-by-design boundary.
 //
-// Also requests drive.file + documents + presentations, for
-// GoogleDriveClient/GoogleSlidesClient/GoogleDocsClient (CREATE_PRESENTATION/
-// CREATE_CHECKLIST). drive.file is deliberately the narrow Drive scope, not
-// full `drive` — it only grants access to files JARVIS itself creates (or
-// that the user explicitly opens with it), which is exactly what listing
-// "the presentation I made yesterday" back out needs; it does not expose
-// the rest of the user's Drive. documents/presentations are each the full
-// (not read-only) variant since creating + batchUpdate-populating a new
-// Doc/Slide requires write access.
+// Also requests drive.readonly + drive.file + documents + presentations,
+// for GoogleDriveClient/GoogleSlidesClient/GoogleDocsClient
+// (CREATE_PRESENTATION/CREATE_CHECKLIST/SEARCH_DRIVE_FILES). drive.readonly
+// and drive.file are deliberately BOTH granted, for two different jobs that
+// neither one alone covers:
+//   - drive.readonly: see/search ALL of the user's existing Drive files
+//     (2026-10-27, on David's explicit request to connect "all his files",
+//     not just ones JARVIS made) — but it is read-only and grants no create
+//     or write access at all.
+//   - drive.file: lets JARVIS actually CREATE and later re-find files it
+//     makes itself (CREATE_PRESENTATION/CREATE_CHECKLIST) — drive.readonly
+//     does not grant write access, so this narrower scope still has to
+//     coexist with it rather than being replaced by it.
+// documents/presentations are each the full (not read-only) variant since
+// creating + batchUpdate-populating a new Doc/Slide requires write access.
+//
+// Also requests youtube.readonly, for YouTubeClient (GET_MY_YOUTUBE_CHANNEL/
+// LIST_MY_YOUTUBE_VIDEOS/GET_YOUTUBE_VIDEO_STATS, 2026-10-27) — David's own
+// YouTube channel, read-only (channel info, video list, per-video stats),
+// same shared OAuth consent as everything else Google rather than a
+// separate app/credentials or a second consent screen.
 //
 // Existing linked accounts need to re-run GET /calendar/oauth/start to
 // pick up any new scope added here; a stored refresh token minted under an
@@ -41,10 +53,13 @@ const GOOGLE_CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calen
 // will fail with an insufficient-scope error until the user re-links (one
 // more GET /calendar/oauth/start, choosing the SAME account again at
 // Google's consent screen — this is Google's own incremental-auth model,
-// not something JARVIS can skip).
+// not something JARVIS can skip). This is the same re-link precedent as the
+// Canva `design:content:read` scope bump — see CanvaClient.ts.
 const GOOGLE_SCOPES =
   "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send " +
-  "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/presentations";
+  "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file " +
+  "https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/presentations " +
+  "https://www.googleapis.com/auth/youtube.readonly";
 
 // Refresh a little before actual expiry, so a request never straddles the
 // exact expiry instant and gets rejected mid-flight by Google's clock

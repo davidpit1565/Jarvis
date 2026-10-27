@@ -122,6 +122,11 @@ import { GoogleDocsClient } from "@/drive/GoogleDocsClient";
 import { createCreatePresentationTool } from "@/tools/drive/CreatePresentationTool";
 import { createCreateChecklistTool } from "@/tools/drive/CreateChecklistTool";
 import { createFindDriveFileTool } from "@/tools/drive/FindDriveFileTool";
+import { createSearchDriveFilesTool } from "@/tools/drive/SearchDriveFilesTool";
+import { YouTubeClient } from "@/youtube/YouTubeClient";
+import { createGetMyYouTubeChannelTool } from "@/tools/youtube/GetMyYouTubeChannelTool";
+import { createListMyYouTubeVideosTool } from "@/tools/youtube/ListMyYouTubeVideosTool";
+import { createGetYouTubeVideoStatsTool } from "@/tools/youtube/GetYouTubeVideoStatsTool";
 import { SpotifyClient } from "@/spotify/SpotifyClient";
 import { StudioClient } from "@/studio/StudioClient";
 import { createListReelsTool } from "@/tools/studio/ListReelsTool";
@@ -368,10 +373,11 @@ function main() {
 
   // Shares the same Google account link as Calendar/Gmail (one OAuth
   // consent screen, more scopes) — see GoogleCalendarClient's GOOGLE_SCOPES
-  // for the drive.file/documents/presentations scopes this depends on, and
-  // its doc comment for why an already-linked account needs one re-consent
-  // (GET /calendar/oauth/start again) before CREATE_PRESENTATION/
-  // CREATE_CHECKLIST/FIND_DRIVE_FILE actually work.
+  // for the drive.readonly/drive.file/documents/presentations scopes this
+  // depends on, and its doc comment for why an already-linked account needs
+  // one re-consent (GET /calendar/oauth/start again) before
+  // CREATE_PRESENTATION/CREATE_CHECKLIST/FIND_DRIVE_FILE/SEARCH_DRIVE_FILES
+  // actually work.
   const driveClient = calendarEnabled ? new GoogleDriveClient(config.googleClientId!, config.googleClientSecret!, calendarTokenStore) : undefined;
   if (driveClient) {
     const slidesClient = new GoogleSlidesClient(driveClient);
@@ -379,6 +385,20 @@ function main() {
     toolRegistry.registerTool(createCreatePresentationTool(slidesClient));
     toolRegistry.registerTool(createCreateChecklistTool(docsClient));
     toolRegistry.registerTool(createFindDriveFileTool(driveClient));
+    toolRegistry.registerTool(createSearchDriveFilesTool(driveClient));
+  }
+
+  // YouTube (read-only): same shared Google account link as Calendar/Gmail/
+  // Drive — see GoogleCalendarClient's GOOGLE_SCOPES for the
+  // youtube.readonly scope this depends on. No separate env var for the
+  // credential itself since it reuses googleClientId/googleClientSecret;
+  // gated on the same calendarEnabled flag so it activates automatically
+  // once Google is linked.
+  const youtubeClient = calendarEnabled ? new YouTubeClient(config.googleClientId!, config.googleClientSecret!, calendarTokenStore) : undefined;
+  if (youtubeClient) {
+    toolRegistry.registerTool(createGetMyYouTubeChannelTool(youtubeClient));
+    toolRegistry.registerTool(createListMyYouTubeVideosTool(youtubeClient));
+    toolRegistry.registerTool(createGetYouTubeVideoStatsTool(youtubeClient));
   }
 
   // AgentMail — JARVIS's own independent email inbox, wholly separate
