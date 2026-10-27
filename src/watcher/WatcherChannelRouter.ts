@@ -27,6 +27,20 @@ export interface WatcherChannelConfig {
    * here.
    */
   phoneSourceIds: ReadonlySet<string>;
+  /**
+   * Source ids forced onto the quietest channel (Telegram) no matter what
+   * `highPrioritySourceIds`/`phoneSourceIds` say — for sources where
+   * escalation would never be appropriate regardless of configuration, e.g.
+   * JARVIS's own self-improvement suggestions
+   * (`selfImprovementWatchSource.ts`): per CLAUDE.md, these "should ALWAYS
+   * be the quietest channel," never device-announce/phone. Deliberately NOT
+   * derived from any env var the way `highPrioritySourceIds`/
+   * `phoneSourceIds` are — the whole point is that no future configuration
+   * mistake (e.g. someone accidentally including this source's id in
+   * `WATCHER_HIGH_PRIORITY_SOURCES`) can escalate it. Callers construct this
+   * set themselves from known, hardcoded source ids.
+   */
+  alwaysQuietSourceIds: ReadonlySet<string>;
 }
 
 export interface WatcherRoutingDecision {
@@ -45,6 +59,9 @@ export interface WatcherRoutingDecision {
  * source David has explicitly flagged ahead of time gets anything louder.
  */
 export function routeWatcherSource(sourceId: string, config: WatcherChannelConfig): WatcherRoutingDecision {
+  if (config.alwaysQuietSourceIds.has(sourceId)) {
+    return { channel: "telegram", reason: `source "${sourceId}" is pinned to the quietest channel always and never escalates` };
+  }
   if (config.phoneSourceIds.has(sourceId)) {
     return { channel: "phone", reason: `source "${sourceId}" is explicitly configured for the phone channel` };
   }
@@ -55,5 +72,5 @@ export function routeWatcherSource(sourceId: string, config: WatcherChannelConfi
 }
 
 export function emptyWatcherChannelConfig(): WatcherChannelConfig {
-  return { highPrioritySourceIds: new Set(), phoneSourceIds: new Set() };
+  return { highPrioritySourceIds: new Set(), phoneSourceIds: new Set(), alwaysQuietSourceIds: new Set() };
 }

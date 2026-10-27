@@ -21,10 +21,21 @@ describe("routeWatcherSource", () => {
 
   test("phone takes precedence over high-priority if a source is (unusually) configured for both", () => {
     const config = {
+      ...emptyWatcherChannelConfig(),
       highPrioritySourceIds: new Set(["s1"]),
       phoneSourceIds: new Set(["s1"]),
     };
     expect(routeWatcherSource("s1", config).channel).toBe("phone");
+  });
+
+  test("a source pinned to alwaysQuietSourceIds never escalates, even if also configured high-priority or phone", () => {
+    const config = {
+      ...emptyWatcherChannelConfig(),
+      highPrioritySourceIds: new Set(["self-improvement"]),
+      phoneSourceIds: new Set(["self-improvement"]),
+      alwaysQuietSourceIds: new Set(["self-improvement"]),
+    };
+    expect(routeWatcherSource("self-improvement", config).channel).toBe("telegram");
   });
 
   test("never escalates a source nobody configured, regardless of source id shape", () => {

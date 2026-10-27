@@ -16,6 +16,7 @@ import { goalProgressNote } from "@/agent/goalProgressNote";
 import { correctionNote } from "@/behavior/correctionNote";
 import { githubActivityNote } from "@/github/githubActivityNote";
 import { composeWatcherNote } from "@/watcher/watcherNote";
+import { selfImprovementNote } from "@/watcher/selfImprovementNote";
 
 /**
  * Combines every per-turn context note into the single string Orchestrator's
@@ -51,6 +52,13 @@ import { composeWatcherNote } from "@/watcher/watcherNote";
  * own separate parameter (not merged into `newsWatch`'s sources list)
  * because each uses its own dedicated `WatcherStore`/db file, the same
  * per-source-type-store convention GitHub/news already follow.
+ * `selfImprovementWatcherStore`, likewise optional, reads whatever the
+ * self-improvement watcher (`selfImprovementWatchSource.ts`) most recently
+ * surfaced — a dedicated note composer (`selfImprovementNote`), not
+ * `composeWatcherNote`, since this source's one item needs to carry a real
+ * what/how/why explanation rather than a short flat description. Omitted
+ * only when the feature itself is disabled (`SELF_IMPROVEMENT_WATCH_ENABLED=false`);
+ * it's on by default elsewhere, unlike every other optional note here.
  */
 export async function buildContextNote(
   config: Pick<JarvisConfig, "timezone">,
@@ -62,7 +70,8 @@ export async function buildContextNote(
   currentMessage?: string,
   githubActivityStore?: GitHubActivityStore,
   newsWatch?: { store: WatcherStore; sources: Array<WatchSource<unknown, unknown>> },
-  gmailWatch?: { store: WatcherStore; sources: Array<WatchSource<unknown, unknown>> }
+  gmailWatch?: { store: WatcherStore; sources: Array<WatchSource<unknown, unknown>> },
+  selfImprovementWatcherStore?: WatcherStore
 ): Promise<string> {
   const calendarNote = calendarClient ? await todayCalendarNote(calendarClient) : undefined;
   return [
@@ -87,6 +96,7 @@ export async function buildContextNote(
             `feel free to mention something relevant naturally if it fits, without being asked`,
         })
       : undefined,
+    selfImprovementWatcherStore ? selfImprovementNote(selfImprovementWatcherStore) : undefined,
   ]
     .filter(Boolean)
     .join("\n\n");
