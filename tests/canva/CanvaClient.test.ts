@@ -297,3 +297,123 @@ describe("CanvaClient.createDesignFromBrandTemplate", () => {
     await expect(client.createDesignFromBrandTemplate("BT1", { headline: "Hello" })).rejects.toThrow(/400/);
   });
 });
+
+describe("CanvaClient.exportDesign", () => {
+  test("defaults to pdf and returns the completed export's download urls", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    let capturedBody: Record<string, unknown> | undefined;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/exports")) {
+        capturedBody = JSON.parse(init?.body as string);
+        return new Response(JSON.stringify({ job: { id: "export-1", status: "in_progress" } }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ job: { id: "export-1", status: "success", urls: ["https://export-download.canva.com/file.pdf"] } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const result = await client.exportDesign("DAF123");
+
+    expect(capturedBody).toEqual({ design_id: "DAF123", format: { type: "pdf" } });
+    expect(result).toEqual({ id: "export-1", format: "pdf", urls: ["https://export-download.canva.com/file.pdf"] });
+  });
+
+  test("sends pages when provided", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    let capturedBody: Record<string, unknown> | undefined;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/exports")) {
+        capturedBody = JSON.parse(init?.body as string);
+        return new Response(JSON.stringify({ job: { id: "export-1", status: "success", urls: ["https://x/1.pdf"] } }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({ job: { id: "export-1", status: "success", urls: ["https://x/1.pdf"] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await client.exportDesign("DAF123", "pdf", { pages: [2, 3] });
+    expect(capturedBody).toEqual({ design_id: "DAF123", format: { type: "pdf", pages: [2, 3] } });
+  });
+
+  test("defaults jpg quality when not provided", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    let capturedBody: Record<string, unknown> | undefined;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/exports")) {
+        capturedBody = JSON.parse(init?.body as string);
+      }
+      return new Response(JSON.stringify({ job: { id: "export-1", status: "success", urls: ["https://x/1.jpg"] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await client.exportDesign("DAF123", "jpg");
+    expect(capturedBody).toEqual({ design_id: "DAF123", format: { type: "jpg", quality: 90 } });
+  });
+
+  test("respects an explicit jpg quality", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    let capturedBody: Record<string, unknown> | undefined;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/exports")) {
+        capturedBody = JSON.parse(init?.body as string);
+      }
+      return new Response(JSON.stringify({ job: { id: "export-1", status: "success", urls: ["https://x/1.jpg"] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await client.exportDesign("DAF123", "jpg", { jpgQuality: 50 });
+    expect(capturedBody).toEqual({ design_id: "DAF123", format: { type: "jpg", quality: 50 } });
+  });
+
+  test("polls until success across multiple in_progress responses", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    let pollCount = 0;
+    global.fetch = (async (url: string) => {
+      if (url.endsWith("/exports")) {
+        return new Response(JSON.stringify({ job: { id: "export-1", status: "in_progress" } }), { status: 200 });
+      }
+      pollCount++;
+      if (pollCount < 2) {
+        return new Response(JSON.stringify({ job: { id: "export-1", status: "in_progress" } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ job: { id: "export-1", status: "success", urls: ["https://x/1.pdf"] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const result = await client.exportDesign("DAF123");
+    expect(result.urls).toEqual(["https://x/1.pdf"]);
+    expect(pollCount).toBe(2);
+  });
+
+  test("throws with the job's own error message on a failed job", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    global.fetch = (async (url: string) => {
+      if (url.endsWith("/exports")) {
+        return new Response(JSON.stringify({ job: { id: "export-1", status: "in_progress" } }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ job: { id: "export-1", status: "failed", error: { code: "license_required", message: "Pro plan needed" } } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(client.exportDesign("DAF123")).rejects.toThrow(/pro plan needed/i);
+  });
+
+  test("throws a clear timeout error when the job never resolves within maxPollAttempts", async () => {
+    const { client } = makeClient(makeLinkedTokenStore(), { pollIntervalMs: 0, maxPollAttempts: 2 });
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ job: { id: "export-1", status: "in_progress" } }), { status: 200 })) as unknown as typeof fetch;
+
+    await expect(client.exportDesign("DAF123")).rejects.toThrow(/still in progress/i);
+  });
+
+  test("throws on a non-2xx create response", async () => {
+    const { client } = makeClient(makeLinkedTokenStore());
+    global.fetch = (async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch;
+    await expect(client.exportDesign("DAF123")).rejects.toThrow(/400/);
+  });
+
+  test("throws when no account is linked", async () => {
+    const { client } = makeClient();
+    await expect(client.exportDesign("DAF123")).rejects.toThrow(/no canva account linked/i);
+  });
+});

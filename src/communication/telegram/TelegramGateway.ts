@@ -223,6 +223,38 @@ export class TelegramGateway {
     }
   }
 
+  /**
+   * Sends a document given a public URL — the sibling of `sendPhoto` for
+   * non-image files, used by EXPORT_CANVA_DESIGN to deliver a Canva export
+   * (PDF/PPTX, or a PNG/JPG the caller wants delivered as a real file
+   * rather than an inline photo) without ever downloading the bytes into
+   * this process. Telegram fetches the URL itself server-side, the same
+   * "plain JSON POST, not multipart" shape as `sendPhoto` — deliberately
+   * not routed through `sendDocument`'s base64-upload path, since there
+   * are no bytes here to upload: a Canva export is already sitting at a
+   * URL, and downloading it just to re-upload it would burn this (small)
+   * process's memory for no benefit and risk the 24-hour-expiring URL
+   * lapsing mid-transfer for a large file.
+   */
+  async sendDocumentByUrl(chatId: string, documentUrl: string, caption?: string): Promise<void> {
+    const body: Record<string, string> = { chat_id: chatId, document: documentUrl };
+    if (caption) body.caption = caption.slice(0, 1024); // Telegram's own caption length limit
+
+    const response = await fetchWithRetry(
+      `${TELEGRAM_API_BASE_URL}${this.botToken}/sendDocument`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      SEND_RETRY_OPTIONS
+    );
+
+    if (!response.ok) {
+      throw await apiError("Telegram sendDocument (by URL) failed", response);
+    }
+  }
+
   // 50MB is Telegram's own bot-API document upload limit — this check is
   // defense in depth, not the real cap: ShareFileToPhoneTool's own
   // caller-provided base64Content is realistically already bounded by
