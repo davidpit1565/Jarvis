@@ -147,7 +147,7 @@ import { createCheckGitHubRepoActivityTool } from "@/tools/github/CheckGitHubRep
 import { createCommentOnGitHubIssueTool } from "@/tools/github/CommentOnGitHubIssueTool";
 import { createMergeGitHubPullRequestTool } from "@/tools/github/MergeGitHubPullRequestTool";
 import { GitHubActivityStore } from "@/github/GitHubActivityStore";
-import { pollGitHubActivity } from "@/github/pollGitHubActivity";
+import { pollGitHubActivity, resolveWatchedRepos } from "@/github/pollGitHubActivity";
 import { githubActivityNote } from "@/github/githubActivityNote";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
 import { createSendEmailTool } from "@/tools/gmail/SendEmailTool";
@@ -458,17 +458,20 @@ function main() {
 
   // Proactive GitHub activity surfacing (CLAUDE.md "continuous personal
   // profile" background: "continuously watch my repos... surface relevant
-  // things without being asked"). Gated on both githubClient AND at least
-  // one watched repo — someone could set GITHUB_TOKEN without ever
-  // configuring GITHUB_WATCHED_REPOS, in which case this whole feature
-  // stays inert (no polling, no note), which is the correct safe default
-  // rather than silently polling every repo the token can read.
+  // things without being asked"). Gated on githubClient AND (at least one
+  // explicitly watched repo OR auto-discovery of owned repos being on) —
+  // someone could set GITHUB_TOKEN without configuring either, in which case
+  // this whole feature stays inert (no polling, no note), which is the
+  // correct safe default rather than silently polling every repo the token
+  // can read.
   //
   // The store is always constructed (cheap — just opens/creates a small
   // SQLite file) so githubActivityNote always has something to read, but
   // it only ever contains anything once the poller below actually runs.
   const githubActivityStore = new GitHubActivityStore(config.githubActivityDbPath);
-  const githubActivityEnabled = Boolean(githubClient && config.githubWatchedRepos.length > 0);
+  const githubActivityEnabled = Boolean(
+    githubClient && (config.githubWatchedRepos.length > 0 || config.githubWatchAllOwnRepos)
+  );
   let githubActivityInterval: ReturnType<typeof setInterval> | undefined;
   if (githubActivityEnabled) {
     // Same in-flight-guard shape as weeklyDigestInterval above: a poll
@@ -483,19 +486,28 @@ function main() {
       schedulerHealthTracker.tick("githubActivity");
       if (pollInFlight) return;
       pollInFlight = true;
-      pollGitHubActivity(githubClient!, githubActivityStore, config.githubWatchedRepos)
+      // Re-resolved every tick (not once at boot) so a repo David creates
+      // after JARVIS starts, or deletes, is reflected on the very next
+      // cycle rather than requiring a restart — see resolveWatchedRepos's
+      // own doc comment.
+      resolveWatchedRepos(githubClient!, config.githubWatchedRepos, config.githubWatchAllOwnRepos)
+        .then((watchedRepos) => pollGitHubActivity(githubClient!, githubActivityStore, watchedRepos))
         .catch((error) => {
           // pollGitHubActivity already isolates per-repo failures and
-          // never throws in normal operation — this only catches a truly
-          // unexpected error (e.g. a bug), so the scheduler tick itself
-          // can never crash the process.
+          // resolveWatchedRepos already isolates auto-discovery failures —
+          // this only catches a truly unexpected error (e.g. a bug), so the
+          // scheduler tick itself can never crash the process.
           console.error("[jarvis] GitHub activity poll tick failed:", error instanceof Error ? error.message : String(error));
         })
         .finally(() => {
           pollInFlight = false;
         });
     }, config.githubActivityPollMs);
-    console.log(`[jarvis] GitHub activity watching ${config.githubWatchedRepos.length} repo(s), polling every ${config.githubActivityPollMs}ms`);
+    console.log(
+      `[jarvis] GitHub activity watching ${config.githubWatchedRepos.length} explicitly-listed repo(s)` +
+        (config.githubWatchAllOwnRepos ? " plus auto-discovery of every repo David owns" : "") +
+        `, polling every ${config.githubActivityPollMs}ms`
+    );
   }
 
   const studioClient =

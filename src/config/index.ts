@@ -508,6 +508,19 @@ export interface JarvisConfig {
    * default rather than polling every repo the token can see.
    */
   githubWatchedRepos: string[];
+  /**
+   * When true, the proactive GitHub poller auto-discovers and watches every
+   * repo David OWNS (`GitHubClient.listMyRepos`, `affiliation=owner` only —
+   * never a repo he merely collaborates on or an org repo he can just read),
+   * unioned with whatever `githubWatchedRepos` also lists — so he can keep
+   * adding collaborator repos explicitly while never having to list his own
+   * repos one by one. Re-resolved every poll cycle (not just at boot) so a
+   * repo created after startup is picked up automatically. Default false —
+   * same explicit opt-in posture as `githubWatchedRepos` itself (see
+   * CLAUDE.md's Proactive Watcher design intent: user-configurable watch
+   * targets, not JARVIS deciding on its own what to watch).
+   */
+  githubWatchAllOwnRepos: boolean;
   /** Path to the SQLite database caching each watched repo's poll cursor and most-recently-found new activity (GitHubActivityStore). */
   githubActivityDbPath: string;
   /** How often (ms) the background GitHub activity poller ticks — see `pollGitHubActivity`. Only relevant when `githubWatchedRepos` is non-empty. */
@@ -957,6 +970,11 @@ export function loadConfig(): JarvisConfig {
   }
   const githubWatchedRepos = githubWatchedReposRaw ?? [];
 
+  const githubWatchAllOwnRepos = process.env.GITHUB_WATCH_ALL_OWN_REPOS?.trim().toLowerCase() === "true";
+  if (githubWatchAllOwnRepos && !githubToken) {
+    throw new ConfigError("GITHUB_WATCH_ALL_OWN_REPOS requires GITHUB_TOKEN to be set — there's no account to auto-discover repos for otherwise");
+  }
+
   const githubActivityDbPath = process.env.JARVIS_GITHUB_ACTIVITY_DB_PATH ?? "./data/jarvis-github-activity.sqlite";
 
   const githubActivityPollMsRaw = process.env.JARVIS_GITHUB_ACTIVITY_POLL_MS?.trim();
@@ -1260,6 +1278,7 @@ export function loadConfig(): JarvisConfig {
     spotifyTokenDbPath,
     githubToken,
     githubWatchedRepos,
+    githubWatchAllOwnRepos,
     githubActivityDbPath,
     githubActivityPollMs,
     newsWatchTopics,

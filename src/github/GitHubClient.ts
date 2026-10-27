@@ -6,6 +6,7 @@ import type {
   GitHubMergeResult,
   GitHubPullRequest,
   GitHubRepoActivitySummary,
+  GitHubRepoSummary,
 } from "@/types/github";
 import { fetchWithRetry } from "@/core/net/fetchWithRetry";
 import { apiError } from "@/core/net/apiError";
@@ -23,6 +24,22 @@ const GITHUB_API_VERSION = "2022-11-28";
 // unbounded page of commits/issues/PRs (and their full field set) in one call.
 const MAX_RESULTS_CAP = 30;
 const DEFAULT_RESULTS = 10;
+
+// GitHub's own max page size for /user/repos. Requesting the max here isn't
+// "unbounded" in the MAX_RESULTS_CAP sense above — it's just the most
+// efficient page size; MAX_OWN_REPOS_CAP below is the actual bound on total
+// repos considered.
+const REPOS_PER_PAGE = 100;
+
+// Same "cap unbounded results" reasoning as MAX_RESULTS_CAP above, applied
+// to listMyRepos: a GitHub account with an unusually large number of owned
+// repos shouldn't make the auto-discovery watcher (GITHUB_WATCH_ALL_OWN_REPOS)
+// poll an unbounded, ever-growing list every cycle. 200 comfortably covers a
+// real personal account (deliberately set above REPOS_PER_PAGE so the
+// pagination loop can actually span more than one page before the cap ever
+// bites — a cap equal to the page size would make genuine pagination
+// unreachable); listMyRepos logs when this cap is actually hit.
+const MAX_OWN_REPOS_CAP = 200;
 
 interface RawGitHubCommit {
   sha: string;
@@ -71,6 +88,11 @@ interface RawGitHubMergeResult {
   sha: string;
   merged: boolean;
   message: string;
+}
+
+interface RawGitHubRepo {
+  full_name: string;
+  updated_at?: string | null;
 }
 
 function clampResults(maxResults: number | undefined): number {
@@ -216,6 +238,43 @@ export class GitHubClient {
       this.listOpenPullRequests(owner, repo, DEFAULT_RESULTS),
     ]);
     return { owner, repo, branch: branch ?? "default", recentCommits, openIssues, openPullRequests };
+  }
+
+  /**
+   * Lists every repo David actually OWNS (`affiliation=owner` — deliberately
+   * excludes repos he merely collaborates on or belongs to via an
+   * organization, so GITHUB_WATCH_ALL_OWN_REPOS never starts polling a repo
+   * he doesn't control). Paginates through GitHub's `/user/repos` endpoint
+   * (100 per page, GitHub's own max) up to `MAX_OWN_REPOS_CAP` total repos —
+   * if the account actually has more owned repos than that, the result is
+   * truncated and a warning is logged rather than looping unboundedly.
+   *
+   * Used by the proactive GitHub watcher's auto-discovery mode, not by any
+   * on-demand tool — on-demand repo reads/writes (listRecentCommits et al.)
+   * already work on any named repo the token can see and were never limited
+   * to an owned-repos list in the first place.
+   */
+  async listMyRepos(): Promise<GitHubRepoSummary[]> {
+    const repos: GitHubRepoSummary[] = [];
+    let page = 1;
+    while (repos.length < MAX_OWN_REPOS_CAP) {
+      const raw = await this.get<RawGitHubRepo[]>(
+        "/user/repos",
+        { affiliation: "owner", per_page: REPOS_PER_PAGE, page, sort: "updated" },
+        "GitHub list my repos failed"
+      );
+      if (raw.length === 0) break;
+      for (const r of raw) {
+        if (repos.length >= MAX_OWN_REPOS_CAP) break;
+        repos.push({ fullName: r.full_name, updatedAt: r.updated_at ?? null });
+      }
+      if (raw.length < REPOS_PER_PAGE) break;
+      page++;
+    }
+    if (repos.length >= MAX_OWN_REPOS_CAP) {
+      console.error(`[jarvis] GitHub listMyRepos: hit the ${MAX_OWN_REPOS_CAP}-repo cap — some owned repos may be missing from auto-discovery`);
+    }
+    return repos;
   }
 
   /**

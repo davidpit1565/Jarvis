@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { GitHubActivityStore } from "@/github/GitHubActivityStore";
-import { pollGitHubActivity, parseWatchedRepo } from "@/github/pollGitHubActivity";
+import { pollGitHubActivity, parseWatchedRepo, resolveWatchedRepos } from "@/github/pollGitHubActivity";
 import type { GitHubClient } from "@/github/GitHubClient";
-import type { GitHubRepoActivitySummary } from "@/types/github";
+import type { GitHubRepoActivitySummary, GitHubRepoSummary } from "@/types/github";
 
 function makeSummary(overrides: Partial<GitHubRepoActivitySummary> = {}): GitHubRepoActivitySummary {
   return {
@@ -50,6 +50,70 @@ describe("parseWatchedRepo", () => {
     expect(parseWatchedRepo("too/many/slashes")).toBeUndefined();
     expect(parseWatchedRepo("/missing-owner")).toBeUndefined();
     expect(parseWatchedRepo("missing-repo/")).toBeUndefined();
+  });
+});
+
+/** A minimal stub satisfying the one GitHubClient method resolveWatchedRepos uses. */
+function stubListMyRepos(result: GitHubRepoSummary[] | (() => Promise<GitHubRepoSummary[]>)): GitHubClient {
+  return {
+    listMyRepos: async () => (typeof result === "function" ? result() : result),
+  } as unknown as GitHubClient;
+}
+
+describe("resolveWatchedRepos", () => {
+  test("returns the explicit list unchanged when auto-discovery is off, without calling listMyRepos", async () => {
+    let called = false;
+    const client = {
+      listMyRepos: async () => {
+        called = true;
+        return [];
+      },
+    } as unknown as GitHubClient;
+
+    const result = await resolveWatchedRepos(client, ["a/b", "c/d"], false);
+
+    expect(result).toEqual(["a/b", "c/d"]);
+    expect(called).toBe(false);
+  });
+
+  test("unions explicit repos with auto-discovered owned repos, deduped", async () => {
+    const client = stubListMyRepos([
+      { fullName: "davidpit1565/Jarvis", updatedAt: null },
+      { fullName: "davidpit1565/Rudder", updatedAt: null },
+    ]);
+
+    // "davidpit1565/Jarvis" appears in both the explicit list and the
+    // auto-discovered list — must appear only once in the result.
+    const result = await resolveWatchedRepos(client, ["davidpit1565/Jarvis", "someone-else/collab-repo"], true);
+
+    expect(new Set(result)).toEqual(new Set(["davidpit1565/Jarvis", "davidpit1565/Rudder", "someone-else/collab-repo"]));
+    expect(result).toHaveLength(3);
+  });
+
+  test("works with an empty explicit list, auto-discovery only", async () => {
+    const client = stubListMyRepos([{ fullName: "davidpit1565/Jarvis", updatedAt: null }]);
+    const result = await resolveWatchedRepos(client, [], true);
+    expect(result).toEqual(["davidpit1565/Jarvis"]);
+  });
+
+  test("falls back to the explicit list, not crashing, when auto-discovery fails", async () => {
+    const client = stubListMyRepos(() => {
+      throw new Error("GitHub rate limited");
+    });
+
+    const errors: unknown[] = [];
+    const result = await resolveWatchedRepos(client, ["a/b"], true, (error) => errors.push(error));
+
+    expect(result).toEqual(["a/b"]);
+    expect(errors).toHaveLength(1);
+  });
+
+  test("falling back when auto-discovery fails and the explicit list is also empty yields an empty list, not a crash", async () => {
+    const client = stubListMyRepos(() => {
+      throw new Error("GitHub down");
+    });
+
+    await expect(resolveWatchedRepos(client, [], true, () => {})).resolves.toEqual([]);
   });
 });
 

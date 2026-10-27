@@ -560,3 +560,19 @@ interval, cache what's new, decide if it's worth surfacing, surface it via the r
   `src/studio/StudioClient.ts` integration** (seen in earlier work on this project,
   browser bookmarks named "Actually Works Studio") — worth checking whether that's the
   same underlying system before building anything new for Instagram publishing.
+
+## GitHub auto-discovery for the proactive watcher (2026-10-27)
+
+Added `GITHUB_WATCH_ALL_OWN_REPOS` (boolean, default false) so JARVIS can proactively watch
+every repo David owns automatically instead of him listing each one in `GITHUB_WATCHED_REPOS`
+by hand. `GitHubClient.listMyRepos()` calls `GET /user/repos` with `affiliation=owner` (never
+every repo his token can merely read — org repos and repos he collaborates on but doesn't own
+are excluded), paginated and capped at 200 total. When the flag is on, the poller re-resolves
+the watch list fresh every poll cycle (not once at boot) and unions auto-discovered repos with
+`GITHUB_WATCHED_REPOS`, deduped — so he can still layer on repos he doesn't own but wants
+watched (e.g. ones he collaborates on) alongside auto-discovery of his own. If auto-discovery
+itself fails for a cycle (rate limit, token issue), it falls back to the explicit list rather
+than crashing the poller. Note this only ever affected the proactive poller
+(`pollGitHubActivity.ts`) — the on-demand `GitHubClient` read/write tools (listing
+commits/issues/PRs, commenting, merging) were never limited to a "watched" list in the first
+place; they already work on any repo by name that `GITHUB_TOKEN` can access.
