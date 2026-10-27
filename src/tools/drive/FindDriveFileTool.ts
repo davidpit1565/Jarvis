@@ -12,9 +12,11 @@ export interface FindDriveFileInput extends Record<string, unknown> {
  * yesterday" or "find that checklist" back to a real file — without this,
  * CREATE_PRESENTATION/CREATE_CHECKLIST's own result (returned once, in that
  * turn) would be the only way to ever get a file's link again. READ-only:
- * this only looks files up, never creates/moves/deletes anything. Scoped by
- * the drive.file OAuth scope to files JARVIS itself created (or the user
- * explicitly opened with it) — never the rest of the user's Drive.
+ * this only looks files up, never creates/moves/deletes anything. A title
+ * (name) match only — use SEARCH_DRIVE_FILES instead for a broader search
+ * across the user's whole Drive, including file content, now that
+ * drive.readonly is also granted (see GoogleDriveClient.findFilesByName's
+ * doc comment).
  */
 export function createFindDriveFileTool(driveClient: GoogleDriveClient): LocalTool<FindDriveFileInput> {
   return {
