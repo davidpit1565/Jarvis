@@ -38,6 +38,7 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_PREVIEWS: true
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon # Sources/JarvisApp/Resources/Assets.xcassets/AppIcon.appiconset
     capabilities:
       # App Intents/App Shortcuts need no explicit capability here — see
       # JarvisApp.entitlements' own comment. Nothing else in this first
