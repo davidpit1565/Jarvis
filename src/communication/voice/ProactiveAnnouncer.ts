@@ -29,8 +29,14 @@ export interface ProactiveAnnounceResult {
  * their bounded follow-ups (see getAnnounceFollowUps) — never for a normal
  * device-voice conversational turn.
  */
+interface PendingAnnouncement {
+  /** The device this specific announcement was actually sent to — see `handleReply`'s own comment on why this is checked. */
+  deviceId: string;
+  resolve: (result: ProactiveAnnounceResult) => void;
+}
+
 export class ProactiveAnnouncer {
-  private pending: Map<string, (result: ProactiveAnnounceResult) => void> = new Map();
+  private pending: Map<string, PendingAnnouncement> = new Map();
 
   constructor(
     private readonly deviceConnectionManager: DeviceConnectionManager,
@@ -63,7 +69,7 @@ export class ProactiveAnnouncer {
         settle({ responded: false, authenticated: false, replyText: null });
       }, replyWindowMs + REPLY_GRACE_MS);
 
-      this.pending.set(announcementId, (result) => settle(result));
+      this.pending.set(announcementId, { deviceId, resolve: (result) => settle(result) });
 
       try {
         this.deviceConnectionManager.send(deviceId, JSON.stringify(envelope));
@@ -78,10 +84,24 @@ export class ProactiveAnnouncer {
    * `announce()` call. An `announcementId` with no pending entry (stale,
    * duplicate, or already timed out) is ignored rather than throwing —
    * same posture as `DeviceConnectionManager.handleToolResult`.
+   *
+   * Also checks that `deviceId` is the SAME device this specific
+   * announcement was actually sent to (see `PendingAnnouncement.deviceId`)
+   * — defense in depth alongside `JarvisWebSocketServer`'s own
+   * deviceId-matches-the-authenticated-connection check (the fix behind
+   * PRs #139/#141 for device.status/capabilities/voice.transcript):
+   * `announcementId` is an unguessable random UUID generated fresh per
+   * target device, so this is not reachable by a normal connected device
+   * today, but a reply naming a different (even if itself legitimately
+   * authenticated) deviceId than the one actually addressed must never be
+   * allowed to resolve another device's pending announcement — treated the
+   * same as "no matching pending entry," never as a thrown error.
    */
   handleReply(deviceId: string, payload: ProactiveReplyPayload): void {
-    const resolve = this.pending.get(payload.announcementId);
-    if (!resolve) return;
+    const pending = this.pending.get(payload.announcementId);
+    if (!pending) return;
+    if (pending.deviceId !== deviceId) return;
+    const { resolve } = pending;
 
     if (payload.text === null) {
       resolve({ responded: false, authenticated: false, replyText: null });

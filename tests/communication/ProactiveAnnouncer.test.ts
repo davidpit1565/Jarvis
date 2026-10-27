@@ -104,4 +104,28 @@ describe("ProactiveAnnouncer", () => {
     },
     10_000
   );
+
+  test(
+    "ignores a proactive.reply whose deviceId doesn't match the device the announcement was actually sent to " +
+      "(device-identity defense in depth, same bug shape as the deviceId-spoofing fixes elsewhere in the websocket layer)",
+    async () => {
+      const { manager, sent } = stubDeviceConnectionManager();
+      const announcer = new ProactiveAnnouncer(manager, alwaysAuthenticator(true));
+
+      // Announcement actually sent to "mac-1".
+      const resultPromise = announcer.announce("mac-1", "You have a reminder.", 20);
+      const { announcementId } = sent[0]!.payload;
+
+      // A different, even if itself legitimately-authenticated, device
+      // somehow replying with mac-1's announcementId must never resolve
+      // mac-1's pending announcement as if it had replied.
+      announcer.handleReply("phone-1", { announcementId, text: "open sesame" });
+
+      // mac-1's own announcement should still be unresolved — it only
+      // times out, it is never satisfied by another device's reply.
+      const result = await resultPromise;
+      expect(result).toEqual({ responded: false, authenticated: false, replyText: null });
+    },
+    10_000
+  );
 });
