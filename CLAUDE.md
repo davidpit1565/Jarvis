@@ -949,3 +949,56 @@ noting: rigorous research on "what makes an assistant feel personal" barely exis
   addition to the system prompt rather than relying on it falling out correctly from several
   separate, narrower rules — low-risk, high-leverage if David wants a concrete next small
   improvement rather than a new feature.
+
+## Built (2026-10-27): interim narration on Telegram, casual-confirmation understanding, translation
+
+David asked for three related conversational UX fixes (Hebrew, paraphrased): (1) understand
+casual/slang confirmations ("אני זורם," "אמן," "I'm in") as agreement, not literally; (2) translate
+words/phrases on the spot and be able to say "send that to my Telegram"; (3) stop feeling slow/silent
+during tool calls, especially on Telegram.
+
+**Root cause of (3), confirmed in code**: `Orchestrator.handleUserMessage`'s tool loop
+(`src/core/orchestrator/Orchestrator.ts`) records any text the model produces alongside a tool call
+(e.g. "checking now") into conversation history via `addAssistantMessage`, but never delivered it to
+the user until the whole loop finished — only the final reply ever reached the caller.
+`TelegramGateway.ts`'s call site passed no callback at all, so a Telegram user saw nothing until every
+tool iteration (potentially several, with real network calls) completed. **Fix**: a new optional
+`onInterimMessage?: (text: string) => void` parameter on `handleUserMessage`, fired once per iteration
+with non-empty pre-tool-call text, right when that iteration's response arrives and before its tools
+run. `TelegramGateway.ts`'s call site now passes this, sending each interim narration as its own real
+Telegram message immediately (fire-and-forget; a failed interim send is logged, never blocks the real
+reply). Backward compatible — every other caller (web chat's `onTextDelta`, voice, AgentCore, tests)
+is unaffected since the parameter is optional and additive. A new `systemPrompt.ts` addition tells the
+model to say a short, natural acknowledgment before a tool call that will take real time, without
+forcing one before trivial/instant actions. Tests: `tests/integration/orchestrator.test.ts` (interim
+callback fires once, before tool execution, final return value unaffected) and
+`tests/telegram/TelegramGateway.test.ts` (interim message sent as its own message, followed by the
+final reply).
+
+**Casual-confirmation understanding (1)**: added directly to `systemPrompt.ts` next to the existing
+confirm-back section — concrete Hebrew/English examples ("אני זורם" = I'm in, "אמן" = enthusiastic
+agreement, "I'm in"/"got you"/"on it" = confirmation), explicitly framed as examples of a pattern, not
+an exhaustive list, falling back to the existing confirm-back behavior for genuine ambiguity.
+**`BehaviorCorrectionStore` was checked and is NOT a clean fit for this**, so no code change was made
+there: `MemoryExtractor.ts`'s correction-detection pass only ever looks for a correction when a
+`priorAction` (a specific prior tool call) exists — it's scoped to "the user is correcting HOW I just
+acted," not general terminology/phrase interpretation that can come up with no tool call involved at
+all (e.g. JARVIS just misreading a casual reply in plain conversation). Forcing a terminology mapping
+into that shape would mean it only ever gets learned in the narrow case where a tool call happened to
+precede it. The general systemPrompt guidance above is the real fix; in the (overlapping but
+different) case where a misread casual confirmation actually did follow a tool call and the user then
+corrects the resulting action, the existing correction-learning pipeline already covers it with no
+further code changes needed.
+
+**Translation (4)**: no new tool/client — `systemPrompt.ts` now says explicitly to answer translation
+requests directly in conversation rather than deflecting to an external translator.
+
+**Send-to-Telegram (part of 2 and 3)**: the task spec called for a new `SEND_TELEGRAM_MESSAGE` tool,
+but `src/tools/telegram/NotifyUserTool.ts` (`NOTIFY_USER`, already registered in `src/index.ts`,
+SAFE_ACTION) turned out to already do exactly this — "sends a text notification to the user's phone
+via Telegram, regardless of which channel this conversation is happening on," using the same
+`telegramOwnerChatId` and `TelegramGateway.sendMessage` the spec described building. **No new tool was
+added** to avoid a near-duplicate; `systemPrompt.ts`'s new translation note tells the model to use
+`NOTIFY_USER` when asked to send a translation (or anything else) to Telegram. If a future need
+genuinely diverges from `NOTIFY_USER`'s shape, build on top of it rather than starting a third
+telegram-send path.
