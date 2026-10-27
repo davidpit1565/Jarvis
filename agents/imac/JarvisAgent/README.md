@@ -48,7 +48,21 @@ Hybrid menu bar app + `launchd` user agent, sharing one executable:
   wake phrase required and reports whatever (if anything) it heard back as
   `proactive.reply` — Core's `SpeakerAuthenticator` (a shared passphrase
   today), not this Agent, decides whether that reply is really the owner.
-  See "Microphone and Speech Recognition permissions" below.
+  See "Microphone and Speech Recognition permissions" below. Also tracks
+  whatever text it is currently speaking and, if the recognizer picks up
+  speech while `AVSpeechSynthesizer` is still talking, classifies it via
+  `SpeechEchoClassifier` as either JARVIS hearing its own voice (ignored)
+  or genuine new user speech (a real barge-in: JARVIS stops talking via
+  `stopSpeaking(at:)` and the heard text falls through to whatever
+  listening mode is active). See `Voice/SpeechEchoClassifier.swift`'s own
+  doc comment for the heuristic and its honest limitations.
+- `Voice/SpeechEchoClassifier.swift` — pure, AVFoundation-free token-
+  overlap/stem-matching heuristic (plus a short-cancel-word fast path for
+  things like "stop") that `WakeWordListener` uses to tell its own speech
+  apart from real user speech. Kept separate from the audio-engine wiring
+  so the classification logic itself is a plain, pattern-matchable concern
+  (same split as `ClapDetector` keeping its own detection logic apart from
+  the tap callback that feeds it).
 
 ## What has been validated on a real iMac
 
@@ -94,6 +108,18 @@ test.
   no equivalent anywhere else in this file to have already exercised it —
   treat it as no more trustworthy than brand-new code until it's actually
   heard and replied to on a real Mac.
+- Self-echo rejection and barge-in (`SpeechEchoClassifier`,
+  `isSpeaking`/`currentlySpokenText` tracking, `stopSpeakingForBargeIn`):
+  entirely unvalidated. The token-overlap/stem-matching heuristic and its
+  `echoOverlapThreshold` were picked by reasoning about the problem, not by
+  testing against a real Mac's actual speaker-to-mic bleed, room
+  acoustics, or mic gain — all of which materially change how much of
+  JARVIS's own voice the recognizer actually picks up and how garbled it
+  comes back. Expect to need real tuning of the threshold (and possibly
+  the cancel-word list) once this is actually heard and barged in on.
+  `AVSpeechSynthesizer.stopSpeaking(at:)` itself has also never been
+  exercised here — confirm it actually halts audio promptly on a real
+  device rather than finishing the current word/sentence.
 
 ## Building and installing
 
