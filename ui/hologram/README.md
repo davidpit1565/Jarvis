@@ -233,6 +233,84 @@ idle "breathing" (a frequency-modulated double sine, so it never
 obviously loops) are tuned by hand against real screenshots, not derived
 from a formula.
 
+**Motion speed, reworked 2026-10-27, round 3** (David's reaction to round 2's
+material rework: *"closer, but still not alive"*). The material itself
+wasn't touched this round — the diagnosis, done by actually rendering and
+comparing frame SEQUENCES rather than single screenshots, pointed squarely
+at motion speed, not material:
+
+- **Method**: captured 10 real headless-Chromium screenshots of true IDLE
+  state, 300ms apart (`.verification-screenshots/desktop-1600x1000-core-
+  material-v2-seq-{1..6}.png`, the pre-fix baseline), and separately
+  extracted frames from the reference video at 0.5s intervals. Compared
+  both visually and with `imagemagick compare -metric RMSE` on the
+  core-only crop. Result: the reference video's swirl/wave pattern
+  changes shape *substantially* within 0.5-1s; the pre-fix build's swirl
+  eyes, base surface grain, and specular highlight were all still in
+  essentially the same position after a full 2.7s (frame 1 vs frame 10
+  were visually near-identical — same highlight blob, same ring curl).
+  This confirmed hypothesis 1-3 from the task brief (swirl/base/specular
+  all too slow) rather than geometry rigidity or mechanical periodicity
+  being the dominant problem — the existing motion just wasn't fast enough
+  to read as anything within a normal few-second glance, regardless of
+  how organic its underlying curve was.
+- **Fix, three independent layers, same root cause**: the swirl-eyes'
+  `spiralSpeed` (base rate 0.3 → 0.9, nearly 3x), the fragment shader's
+  shared `slowFlow` driving both the metal-grain ridges and the swirl
+  coordinate warp (0.05 → ~0.2, ~4x), and the vertex shader's displacement
+  `flow` (0.12 → ~0.3, ~2.5x) were all sped up. Displacement **amplitude**
+  (`uAmpBase`) was deliberately left untouched — round 2's own fix for the
+  "cratered rock" look was about amplitude, not speed, and this round's
+  diagnosis is specifically that speed, not amplitude, was the gap.
+- **Avoiding the "fast spinning rings" trap** (a look David has already
+  rejected elsewhere in this project's history, see the git log for the
+  old build's own rejected-techniques notes): none of the three speed-ups
+  above is a flat multiplier. Each is run through a shared `flowRate()`
+  helper — `base * (1 + modDepth * sin(uTime * modFreq + phase))` — that
+  frequency-modulates the rate itself over a slow (tens-of-seconds), each-
+  layer-different period, the same non-harmonic-layering principle this
+  Core's own prior build's README already documented under its
+  "heartbeat" idle-breathing lesson (see git history — `core.js`'s own
+  current JS-side idle breathing already applied this; the shader's
+  flow/spiral rates hadn't). This keeps the increase reading as organic
+  churn that never lands on an obviously constant RPM, rather than a
+  faster version of the same clean, literal spin.
+- **The specular highlight now drifts independently of full-sphere
+  rotation**: previously a single `sin(uTime * 0.15)` orbit (a ~76s period
+  at idle tempo — effectively motionless over a few seconds of real
+  observation). Now a faster orbit (`uTime * 0.5`) plus its own
+  independent, non-harmonic wobble on both orbit radius and elevation, so
+  the highlight visibly breathes/relocates within a normal glance instead
+  of looking fixed.
+- **Verified, not just asserted**: a fresh 10-frame, 300ms-interval IDLE
+  sequence after the change
+  (`.verification-screenshots/desktop-1600x1000-core-material-v3-
+  seq-{1..6}.png`) shows the swirl-eye shapes, the specular highlight's
+  position/size, and the surrounding grain pattern all visibly different
+  frame-to-frame within the same 2.7s window that previously looked
+  frozen — e.g. the specular highlight visibly relocates and changes size
+  between frame 1 and frame 10, and the two camera-facing swirl eyes'
+  curl shape visibly changes, where the pre-fix sequence showed both
+  essentially static. `desktop-1600x1000-core-material-v3-executing.png`
+  confirms the EXECUTING (high-energy) state still reads as a clean,
+  coherent churn, not jittery chaos, at the new higher base speed.
+  `desktop-1600x1000-core-material-v3-reduced-motion.png` plus a
+  2-second-apart RMSE check (0.039, versus ~0.08 for two *same-build*
+  frames only 300ms apart at normal idle) confirms `prefers-reduced-motion`
+  still suppresses the continuous idle flow as before — this round didn't
+  touch that gate.
+- **Honest remaining gap**: this is a speed/timing fix, verified by
+  comparing real rendered sequences, not a numerically-matched reproduction
+  of the reference video's own flow rate — the reference's material (a
+  thick, confined wave band) and this build's (textured chrome with
+  distributed point-like eyes) move differently by construction, so "how
+  fast is fast enough" was judged by eye against the reference's general
+  sense of continuous change, not derived from a formula. If a future
+  look still reads as insufficiently alive, the next lever to check first
+  is base-state geometry displacement amplitude at true idle (hypothesis 4
+  from the task brief) — this round deliberately left it alone since the
+  motion-speed gap alone was already a large, clearly measurable effect.
+
 ## Reused from the previous build, deliberately
 
 - `icons/icon-192.png` / `icons/icon-512.png` — an abstract teal-to-amber

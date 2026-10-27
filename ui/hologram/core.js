@@ -128,6 +128,21 @@
       return n * (uAmpBase + 0.028 * uEnergy) + uAudio * 0.012;
     }
 
+    // Idle "liveliness" lesson re-applied from this project's OWN prior Core
+    // build (see README's "heartbeat" note): a single clean-sine rate reads
+    // as mechanical once you actually watch it for a few seconds, and a rate
+    // too slow reads as outright static — a real measured gap found by
+    // comparing rendered frame sequences against reference footage, not a
+    // guess. flowRate() layers a faster, non-harmonic secondary sine onto a
+    // base rate (frequency modulation, not a second fixed term just added
+    // on top) so continuous surface flow never settles into an obviously
+    // looping beat, reused by both the vertex displacement's flow and the
+    // fragment shader's grain/warp flow below so they read as one coherent
+    // liquid rather than two independently-timed layers.
+    float flowRate(float base, float modFreq, float modDepth, float modPhase) {
+      return base * (1.0 + modDepth * sin(uTime * modFreq + modPhase));
+    }
+
     void main() {
       vec3 dir = normalize(normal);
       // Stable, undisplaced object-space direction — passed through so the
@@ -135,7 +150,14 @@
       // coordinate that only moves with the mesh's own rotation, not with
       // the (much smaller) per-vertex bump displacement below.
       vDir = dir;
-      vec3 flow = vec3(0.0, 0.0, uTime * 0.12);
+      // Measured against a reference video's own frame-to-frame change rate
+      // (see README): the previous flat uTime*0.12 made the already-subtle
+      // idle bump pattern drift so slowly it read as a static sphere with a
+      // texture painted on, not a liquid surface. Faster + frequency-
+      // modulated, amplitude (uAmpBase) is untouched on purpose — this is a
+      // motion-speed fix, not a return to the earlier "cratered rock"
+      // over-displacement.
+      vec3 flow = vec3(0.0, 0.0, uTime * flowRate(0.3, 0.07, 0.3, 0.6));
 
       float dC = dispAt(dir, flow);
       vec3 tangent = normalize(cross(dir, abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
@@ -175,6 +197,10 @@
 
     ${NOISE_GLSL}
 
+    float flowRate(float base, float modFreq, float modDepth, float modPhase) {
+      return base * (1.0 + modDepth * sin(uTime * modFreq + modPhase));
+    }
+
     // One glowing "vortex eye": a slow spiral/ring pattern around a fixed
     // point on the sphere, masked to a roughly circular patch so it reads
     // as a distinct whirlpool rather than all-over noise. Six of these
@@ -210,7 +236,16 @@
       float fresnel = pow(1.0 - ndotv, 2.6);
 
       vec3 d0 = normalize(vDir);
-      vec3 slowFlow = vec3(0.0, 0.0, uTime * 0.05);
+      // Drives both the swirl-eye warp coordinate and the metal grain below.
+      // Measured finding (see README): at the old flat 0.05 rate, consecutive
+      // real-rendered frames a few hundred ms apart were visually near-
+      // identical even over a ~3s idle window — a reference video's own
+      // frame-to-frame change over the same span was dramatically larger.
+      // ~4x faster, frequency-modulated so the flow speed itself breathes
+      // rather than holding one constant rate (same FM principle as the
+      // vertex shader's flowRate and this project's own prior "heartbeat"
+      // lesson for idle motion).
+      vec3 slowFlow = vec3(0.0, 0.0, uTime * flowRate(0.2, 0.09, 0.35, 2.4));
 
       // Organic liquid distortion of the pattern coordinate itself — the
       // swirl eyes and the metal grain both read as flowing liquid rather
@@ -232,7 +267,15 @@
       // so the eyes visibly churn faster during real thinking/execution
       // and flicker a little with real speech audio — reusing the
       // existing reactivity variables, not new ones.
-      float spiralSpeed = 0.3 + uEnergy * 0.8 + uAudio * 0.4;
+      // Base rate raised from 0.3 to 0.9 (measured: 0.3 produced almost no
+      // visible ring movement across a ~3s idle sequence, see README) and
+      // frequency-modulated rather than a flat multiplier — an unmodulated
+      // rate this much faster risks reading as the "fast spinning rings"
+      // look David has already rejected elsewhere; modulating it slower/
+      // faster over a long, slow cycle keeps it reading as organic churn,
+      // not a motor running at a constant RPM.
+      float spiralSpeedMod = flowRate(1.0, 0.07, 0.4, 2.1);
+      float spiralSpeed = (0.9 + uEnergy * 1.1 + uAudio * 0.5) * spiralSpeedMod;
       float e = 0.0;
       e = max(e, vortexEye(dWarp, vec3(0.4581, 0.8889, 0.0),       2.0, spiralSpeed * 1.00, 0.0, 0.55));
       e = max(e, vortexEye(dWarp, vec3(-0.5497, 0.6667, 0.5036),   3.0, spiralSpeed * 0.86, 1.3, 0.48));
@@ -254,11 +297,21 @@
       float marble = fbm(dWarp * 3.2 + slowFlow * 0.6) * 26.0 + marblePhase;
       float ridge = pow(0.5 + 0.5 * sin(marble), 7.0);
 
-      // Key light sits mostly overhead (with a slow slight orbit) so the
-      // specular highlight consistently reads near the TOP of the sphere
-      // as it slowly rotates — the single cue that sells "polished metal"
-      // more than anything else, per the reference.
-      vec3 lightDir = normalize(vec3(sin(uTime * 0.15) * 0.4, 0.92, cos(uTime * 0.15) * 0.4));
+      // Key light sits mostly overhead, with its own continuous drift
+      // independent of the mesh's own (separate, much slower) full-sphere
+      // rotation — a real living liquid-metal surface has light constantly
+      // catching and releasing across it, not one highlight riding along
+      // with the object's rotation. Previously a single 0.15-rate sine (a
+      // ~76s period at idle tempo — effectively motionless over a few
+      // seconds of real observation, confirmed by comparing rendered
+      // frames). Now a faster orbit plus a second, non-harmonic wobble on
+      // both the orbit radius and the elevation, so the highlight visibly
+      // breathes/shifts within a normal few-second glance instead of
+      // sitting fixed.
+      float lightOrbit = uTime * 0.5;
+      float lightRadius = 0.42 + 0.12 * sin(uTime * 0.23 + 1.1);
+      float lightElev = 0.88 + 0.07 * sin(uTime * 0.31 + 3.0);
+      vec3 lightDir = normalize(vec3(sin(lightOrbit) * lightRadius, lightElev, cos(lightOrbit) * lightRadius));
       float ndotl = max(dot(n, lightDir), 0.0);
       float ambient = 0.22;
       float diffuse = ambient + ndotl * (1.0 - ambient);
