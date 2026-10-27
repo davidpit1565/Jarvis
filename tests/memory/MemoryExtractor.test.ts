@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { MemoryExtractor } from "@/memory/MemoryExtractor";
 import { MemoryStore } from "@/memory/MemoryStore";
+import { BehaviorCorrectionStore } from "@/behavior/BehaviorCorrectionStore";
 import { EventBus } from "@/core/events/EventBus";
 import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 
@@ -201,6 +202,170 @@ describe("MemoryExtractor", () => {
 
     expect(events).toHaveLength(1);
     store.close();
+  });
+
+  describe("Correction Learning (behavioral corrections)", () => {
+    test("detects a behavioral correction and files it under the prior action's tool name, not when no priorAction is given", async () => {
+      const store = new MemoryStore(":memory:");
+      const corrections = new BehaviorCorrectionStore(":memory:");
+      const brain = new ScriptedBrain([
+        jsonResponse(
+          '[{"type":"correction","correction":"ask for a specific time instead of assuming morning","confidence":0.85,"conflictsWithStandingPreference":false}]'
+        ),
+      ]);
+      const extractor = new MemoryExtractor(brain, store, undefined, corrections);
+
+      extractor.extractAndStore("user-1", "no, I meant 6pm, not 6am", "Got it, sir — rescheduled for 6pm.", {
+        toolName: "CREATE_REMINDER",
+        triggeringMessage: "remind me tomorrow",
+      });
+      await flush();
+
+      const filed = corrections.listForContext("CREATE_REMINDER");
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.correction).toBe("ask for a specific time instead of assuming morning");
+      expect(filed[0]?.source).toBe("BACKGROUND_INFERRED");
+      expect(filed[0]?.confidence).toBe(0.85);
+      expect(filed[0]?.flaggedPreferenceConflict).toBe(false);
+      store.close();
+      corrections.close();
+    });
+
+    test("the extraction prompt includes the prior action only when priorAction is supplied", async () => {
+      const store = new MemoryStore(":memory:");
+      const brain = new ScriptedBrain([jsonResponse("[]"), jsonResponse("[]")]);
+      const extractor = new MemoryExtractor(brain, store);
+
+      extractor.extractAndStore("user-1", "hello", "hi there");
+      await flush();
+      extractor.extractAndStore("user-1", "no, not like that", "Understood, sir.", {
+        toolName: "SEND_EMAIL",
+        triggeringMessage: "email the team",
+      });
+      await flush();
+
+      expect(brain.requests[0]?.context).not.toContain("SEND_EMAIL");
+      expect(brain.requests[1]?.context).toContain("SEND_EMAIL");
+      store.close();
+    });
+
+    test("does NOT fire a correction for a plain fact statement with no bearing on the prior action", async () => {
+      const store = new MemoryStore(":memory:");
+      const corrections = new BehaviorCorrectionStore(":memory:");
+      const brain = new ScriptedBrain([
+        jsonResponse('[{"key":"user.hobby.piano","value":"plays piano","category":"fact","confidence":0.9}]'),
+      ]);
+      const extractor = new MemoryExtractor(brain, store, undefined, corrections);
+
+      extractor.extractAndStore("user-1", "by the way, I play piano", "Nice, sir.", {
+        toolName: "CREATE_REMINDER",
+        triggeringMessage: "remind me tomorrow",
+      });
+      await flush();
+
+      expect(corrections.listForContext("CREATE_REMINDER")).toHaveLength(0);
+      expect(store.getByKey("user.hobby.piano")).not.toBeNull();
+      store.close();
+      corrections.close();
+    });
+
+    test("does NOT fire a correction for a simple factual correction (the fact-extraction path's job, not this one's)", async () => {
+      const store = new MemoryStore(":memory:");
+      const corrections = new BehaviorCorrectionStore(":memory:");
+      // A plain factual correction is expected to come back as a fact entry
+      // (the corrected value), never a "correction"-type entry — this
+      // scripted response models exactly that expected, correct behavior.
+      const brain = new ScriptedBrain([
+        jsonResponse('[{"key":"user.timezone","value":"America/New_York","category":"fact","confidence":0.9}]'),
+      ]);
+      const extractor = new MemoryExtractor(brain, store, undefined, corrections);
+
+      extractor.extractAndStore("user-1", "actually my timezone is New York, not LA", "Updated, sir.", {
+        toolName: "CREATE_CALENDAR_EVENT",
+        triggeringMessage: "schedule my meeting",
+      });
+      await flush();
+
+      expect(corrections.listForContext("CREATE_CALENDAR_EVENT")).toHaveLength(0);
+      expect(store.getByKey("user.timezone")?.value).toBe("America/New_York");
+      store.close();
+      corrections.close();
+    });
+
+    test("a correction is simply not written when no correctionStore was configured, even if detected", async () => {
+      const store = new MemoryStore(":memory:");
+      const brain = new ScriptedBrain([jsonResponse('[{"type":"correction","correction":"do X differently"}]')]);
+      const extractor = new MemoryExtractor(brain, store); // no correctionStore
+
+      expect(() =>
+        extractor.extractAndStore("user-1", "no, not like that", "Noted, sir.", {
+          toolName: "CREATE_REMINDER",
+          triggeringMessage: "remind me",
+        })
+      ).not.toThrow();
+      await flush();
+
+      store.close();
+    });
+
+    test("guardrail: a correction flagged by the model as conflicting with a standing preference is stored but marked, not silently applied", async () => {
+      const store = new MemoryStore(":memory:");
+      store.save({
+        key: "user.email.cc_policy",
+        value: "never cc anyone on my emails without asking first",
+        category: "preference",
+        source: "USER_STATED",
+      });
+      const corrections = new BehaviorCorrectionStore(":memory:");
+      const brain = new ScriptedBrain([
+        jsonResponse(
+          '[{"type":"correction","correction":"always cc my assistant on outgoing emails","confidence":0.7,"conflictsWithStandingPreference":true,"conflictingPreferenceText":"never cc anyone on my emails without asking first"}]'
+        ),
+      ]);
+      const extractor = new MemoryExtractor(brain, store, undefined, corrections);
+
+      extractor.extractAndStore("user-1", "cc my assistant on that from now on", "Okay, sir.", {
+        toolName: "SEND_EMAIL",
+        triggeringMessage: "send that email",
+      });
+      await flush();
+
+      // The preference list was actually fed into the prompt, so the model
+      // call had what it needed to make this judgment.
+      expect(brain.requests[0]?.context).toContain("never cc anyone on my emails without asking first");
+
+      const filed = corrections.listForContext("SEND_EMAIL");
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.flaggedPreferenceConflict).toBe(true);
+      expect(filed[0]?.conflictingPreference).toBe("never cc anyone on my emails without asking first");
+
+      // The standing preference itself is untouched — never overwritten by the correction.
+      expect(store.getByKey("user.email.cc_policy")?.value).toBe("never cc anyone on my emails without asking first");
+      store.close();
+      corrections.close();
+    });
+
+    test("emits a behaviorCorrection.stored event with the flagged-conflict state", async () => {
+      const store = new MemoryStore(":memory:");
+      const corrections = new BehaviorCorrectionStore(":memory:");
+      const eventBus = new EventBus();
+      const events: unknown[] = [];
+      eventBus.on("behaviorCorrection.stored", (payload) => events.push(payload));
+      const brain = new ScriptedBrain([
+        jsonResponse('[{"type":"correction","correction":"do X differently","confidence":0.6}]'),
+      ]);
+      const extractor = new MemoryExtractor(brain, store, eventBus, corrections);
+
+      extractor.extractAndStore("user-1", "no, not like that", "Noted, sir.", {
+        toolName: "CREATE_REMINDER",
+        triggeringMessage: "remind me",
+      });
+      await flush();
+
+      expect(events).toEqual([{ contextKey: "CREATE_REMINDER", flaggedPreferenceConflict: false }]);
+      store.close();
+      corrections.close();
+    });
   });
 
   test("respects ZERO_COST_MODE / budget enforcement by going through the same Brain the caller supplies", async () => {

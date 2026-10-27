@@ -26,7 +26,12 @@ const CORE_TOOL_IDS: readonly string[] = [
  * `scopeToolsForMessage` — see its own doc comment for why that's the
  * conservative choice.
  */
-const TOPIC_TOOL_IDS: Record<MessageTopic, readonly string[]> = {
+// Exported for `correctionNote.ts`: it needs the exact same "which tools
+// belong to which topic" mapping to decide which behavior-correction
+// context keys (tool ids) are relevant to the current message — reusing
+// this table rather than inventing a parallel one keeps the two concepts
+// (which tools to expose, which corrections to surface) from drifting apart.
+export const TOPIC_TOOL_IDS: Record<MessageTopic, readonly string[]> = {
   weather: ["GET_WEATHER", "GET_WEATHER_FORECAST"],
   calendar: [
     "LIST_CALENDAR_EVENTS",

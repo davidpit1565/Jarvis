@@ -503,6 +503,8 @@ export interface JarvisConfig {
   commitmentsDbPath: string;
   /** Path to the SQLite database storing Goal Engine goal records (GoalStore) — roadmap items 26-27. */
   goalsDbPath: string;
+  /** Path to the SQLite database storing behavioral corrections (BehaviorCorrectionStore) — Correction Learning, see src/behavior/BehaviorCorrectionStore.ts. */
+  behaviorCorrectionsDbPath: string;
   /**
    * How many days an open commitment can go without being fulfilled
    * before the follow-up engine marks it "stale" (see getStaleCommitments/
@@ -1009,6 +1011,8 @@ export function loadConfig(): JarvisConfig {
 
   const commitmentsDbPath = process.env.JARVIS_COMMITMENTS_DB_PATH ?? "./data/jarvis-commitments.sqlite";
   const goalsDbPath = process.env.JARVIS_GOALS_DB_PATH ?? "./data/jarvis-goals.sqlite";
+  const behaviorCorrectionsDbPath =
+    process.env.JARVIS_BEHAVIOR_CORRECTIONS_DB_PATH ?? "./data/jarvis-behavior-corrections.sqlite";
 
   const staleCommitmentDaysRaw = process.env.JARVIS_STALE_COMMITMENT_DAYS?.trim();
   const staleCommitmentDays = staleCommitmentDaysRaw ? Number(staleCommitmentDaysRaw) : 3;
@@ -1144,6 +1148,7 @@ export function loadConfig(): JarvisConfig {
     studioSecret,
     commitmentsDbPath,
     goalsDbPath,
+    behaviorCorrectionsDbPath,
     staleCommitmentDays,
     quietHoursStart,
     quietHoursEnd,

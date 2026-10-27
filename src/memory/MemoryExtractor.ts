@@ -2,6 +2,7 @@ import type { Brain, BrainRequest, BrainResponse } from "@/types/brain";
 import type { MemoryStore } from "@/memory/MemoryStore";
 import type { MemoryCategory, MemoryImportance } from "@/types/memory";
 import type { EventBus } from "@/core/events/EventBus";
+import type { BehaviorCorrectionStore } from "@/behavior/BehaviorCorrectionStore";
 
 /**
  * Continuous Memory/Profile (JARVIS_MASTER_PLAN.md Phase 1, "the top
@@ -28,6 +29,16 @@ import type { EventBus } from "@/core/events/EventBus";
  *     here just means this one turn didn't get backfilled — the next
  *     turn's extraction pass (or an explicit SAVE_MEMORY) can still catch
  *     the same fact.
+ *
+ * Correction Learning (same PR that added `priorAction`/`correctionStore`
+ * below): this same background pass is also where behavioral corrections
+ * are detected — see `types/behaviorCorrections.ts`'s doc comment for why
+ * that's a conceptually distinct thing from a fact, and
+ * `BehaviorCorrectionStore`'s doc comment for why it's stored separately
+ * from `MemoryStore`. It shares THIS extraction call (one brain call, one
+ * array response) rather than doubling the per-turn cost with a second
+ * call — see EXTRACTION_SYSTEM_PROMPT's own comment on why that's safe to
+ * do without confusing the two concepts.
  */
 
 /** One fact the extraction prompt asked the brain to identify — see EXTRACTION_SYSTEM_PROMPT for the exact contract. */
@@ -38,6 +49,34 @@ interface ExtractedFact {
   importance?: MemoryImportance;
   /** 0 (weak guess) .. 1 (near-certain), self-reported by the extraction call. */
   confidence?: number;
+}
+
+/**
+ * Correction Learning: the most recent tool call JARVIS made before this
+ * exchange, if any — supplied by the caller (`Orchestrator`, via
+ * `findLastToolCall`) from real, already-known conversation history, never
+ * guessed. Required for a correction to be detected at all (see
+ * `storeCorrection`'s doc comment): without a known prior action to anchor
+ * it to, there is no honest `contextKey` to file a correction under, so
+ * this pass deliberately only ever looks for a BEHAVIORAL correction when
+ * this is present — a general tone/preference statement with no specific
+ * prior action to react to is exactly what the existing "preference"
+ * fact-category already covers, not this feature's job.
+ */
+export interface PriorAction {
+  toolName: string;
+  /** The user message that triggered that tool call, for the extraction prompt's own context — not re-parsed. */
+  triggeringMessage: string;
+}
+
+/** One behavioral-correction entry the extraction prompt may emit alongside (or instead of) facts — see EXTRACTION_SYSTEM_PROMPT. */
+interface ExtractedCorrection {
+  type: "correction";
+  correction: string;
+  confidence?: number;
+  /** Self-reported by the extraction call when `priorAction` + a short list of standing preferences were given — see the guardrail in `storeCorrection`. */
+  conflictsWithStandingPreference?: boolean;
+  conflictingPreferenceText?: string;
 }
 
 const MEMORY_CATEGORIES: MemoryCategory[] = [
@@ -58,8 +97,18 @@ const MEMORY_CATEGORIES: MemoryCategory[] = [
  * persona/tone instructions, and the call it drives passes no tools at
  * all. The whole point is a cheap, focused call: one exchange in, one
  * small JSON array out.
+ *
+ * The base prompt (facts only) is always used. When `priorAction` is
+ * known, `buildExtractionSystemPrompt` appends a second section asking the
+ * SAME call to also look for a behavioral correction about that specific
+ * action — one more array-entry shape, not a second LLM call. This is
+ * deliberately NOT folded into the base prompt unconditionally: without a
+ * known prior action there is no honest `contextKey` to file a correction
+ * under (see `PriorAction`'s doc comment), so asking the model to guess at
+ * one anyway would just invite exactly the kind of fabricated-key noise
+ * `MemoryExtractor` elsewhere goes out of its way to avoid.
  */
-const EXTRACTION_SYSTEM_PROMPT = `You extract durable facts worth remembering from one exchange of a conversation between a
+const BASE_EXTRACTION_PROMPT = `You extract durable facts worth remembering from one exchange of a conversation between a
 user and an AI assistant called JARVIS. You are a background process, not the assistant itself — the user never
 sees your output directly.
 
@@ -83,11 +132,51 @@ Rules (follow strictly):
 - Set "confidence" (0 to 1) honestly — use a low value (below 0.5) for something implied rather than stated
   outright, and reserve above 0.8 for something the user stated plainly and unambiguously.
 - If the user corrects, retracts, or asks to forget something, do NOT extract the old, now-superseded version of
-  it as a fact — if anything, extract only the corrected value.
+  it as a fact — if anything, extract only the corrected value. A plain factual correction like this ("actually my
+  timezone is X, not Y") is ALWAYS a fact entry (the corrected value), never a "correction"-type entry below —
+  "correction"-type entries are ONLY for complaints about HOW the assistant acted, never for the user simply
+  restating or fixing a piece of information about themselves or the world.
 - If nothing is worth remembering, respond with exactly: []
 
-Respond with ONLY a JSON array (no prose, no markdown fences), each entry shaped exactly like:
+Respond with ONLY a JSON array (no prose, no markdown fences), each fact entry shaped exactly like:
 {"key": "...", "value": "...", "category": "fact|preference|project|decision|action|task|temporary|uncertain", "importance": 1-5, "confidence": 0-1}`;
+
+/**
+ * Appended only when a `PriorAction` is known — see this module's doc
+ * comment on why. `preferenceList` is a short, already-fetched slice of the
+ * user's standing MemoryStore preferences (see `storeCorrection`'s
+ * guardrail) so the SAME call can also flag a conflict, instead of a
+ * second lookup/call after the fact.
+ */
+function buildCorrectionSection(priorAction: PriorAction, preferenceList: string[]): string {
+  const preferencesBlock =
+    preferenceList.length > 0
+      ? `\n\nStanding preferences already on record for this user (for the conflict check below only — do not re-extract these as facts):\n${preferenceList.map((p) => `- ${p}`).join("\n")}`
+      : "";
+
+  return `
+
+You are also checking for exactly one more thing: a BEHAVIORAL correction — the user complaining about, correcting,
+or redirecting HOW the assistant just acted, not correcting a fact about themselves or the world.
+
+The assistant's most recent action, right before this exchange, was: used the "${priorAction.toolName}" tool,
+triggered by the user asking: "${priorAction.triggeringMessage}".
+
+If — and only if — the user's message in THIS exchange reads as a correction specifically about that action (e.g.
+"no, not like that", "that's not what I meant", "next time do X instead", "don't do that again", "that's wrong, it
+should have been Y") — as opposed to a plain factual statement/correction, a new unrelated request, or simple
+acknowledgment/thanks — include ONE additional array entry shaped exactly like:
+{"type": "correction", "correction": "<a short, concrete, reusable instruction for what the assistant should do
+differently next time in this situation — written as an instruction to the assistant, not a quote of the user>",
+"confidence": 0-1, "conflictsWithStandingPreference": true|false, "conflictingPreferenceText": "<the exact standing
+preference text it conflicts with, only if true>"}
+
+Set "conflictsWithStandingPreference" to true only if this correction would contradict one of the standing
+preferences listed above (if none are listed, this must always be false) — a single correction should never be
+treated as silently overriding an explicit standing preference, so flag it instead of picking a side.${preferencesBlock}
+
+If this exchange contains no such behavioral correction, do not include a "correction"-type entry at all.`;
+}
 
 /** Parses `text` as JSON, tolerating a markdown-fenced or prose-wrapped array the model produced despite instructions not to. */
 function extractJsonArray(text: string): unknown[] | undefined {
@@ -118,6 +207,13 @@ function isValidFactShape(value: unknown): value is ExtractedFact {
     typeof candidate.category === "string" &&
     MEMORY_CATEGORIES.includes(candidate.category as MemoryCategory)
   );
+}
+
+/** Correction entries are distinguished from fact entries purely by `"type": "correction"` — a fact entry never has a `type` field at all. */
+function isValidCorrectionShape(value: unknown): value is ExtractedCorrection {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return candidate.type === "correction" && typeof candidate.correction === "string" && candidate.correction.trim() !== "";
 }
 
 function clampImportance(value: unknown): MemoryImportance | undefined {
@@ -208,23 +304,31 @@ export interface MemoryExtractorLike {
    * internally — see the class doc comment for why this must never affect
    * the user-facing reply.
    */
-  extractAndStore(userId: string, userMessage: string, assistantReply: string): void;
+  extractAndStore(userId: string, userMessage: string, assistantReply: string, priorAction?: PriorAction): void;
 }
+
+/** How many standing preferences are ever fed into the correction conflict-check — see `buildCorrectionSection`. Small and bounded, same reasoning as `goalProgressNote`'s MAX_GOALS_IN_NOTE: this is prompt content, not a data query. */
+const MAX_PREFERENCES_FOR_CONFLICT_CHECK = 15;
 
 /**
  * Real, Brain-backed implementation of `MemoryExtractorLike`. Constructed
  * once in `src/index.ts` and shared across every channel's Orchestrator
  * (terminal/web chat, phone, SMS, Telegram, voice) the same way `brain`
- * and `memoryStore` themselves are shared.
+ * and `memoryStore` themselves are shared. `correctionStore` is optional
+ * purely so existing callers/tests that only care about fact extraction
+ * don't need to construct one — when omitted, a detected correction is
+ * simply never written (the fact-extraction half of this class is
+ * completely unaffected either way).
  */
 export class MemoryExtractor implements MemoryExtractorLike {
   constructor(
     private readonly brain: Brain,
     private readonly memoryStore: MemoryStore,
-    private readonly eventBus?: EventBus
+    private readonly eventBus?: EventBus,
+    private readonly correctionStore?: BehaviorCorrectionStore
   ) {}
 
-  extractAndStore(userId: string, userMessage: string, assistantReply: string): void {
+  extractAndStore(userId: string, userMessage: string, assistantReply: string, priorAction?: PriorAction): void {
     // Genuinely nothing to extract from (e.g. a Fast Path tool-only reply
     // with empty text) — skip the brain call entirely rather than spend a
     // call on an exchange with no user content at all.
@@ -233,7 +337,7 @@ export class MemoryExtractor implements MemoryExtractorLike {
     // Fire-and-forget: intentionally not awaited by the caller. Every
     // failure path below resolves (never rejects past this point) so there
     // is no unhandled rejection either.
-    void this.run(userId, userMessage, assistantReply).catch((error: unknown) => {
+    void this.run(userId, userMessage, assistantReply, priorAction).catch((error: unknown) => {
       this.eventBus?.emit("memory.extraction.failed", {
         userId,
         error: error instanceof Error ? error.message : String(error),
@@ -241,13 +345,27 @@ export class MemoryExtractor implements MemoryExtractorLike {
     });
   }
 
-  private async run(userId: string, userMessage: string, assistantReply: string): Promise<void> {
+  private async run(userId: string, userMessage: string, assistantReply: string, priorAction?: PriorAction): Promise<void> {
     const exchange = `User: ${userMessage}\n\nJARVIS: ${assistantReply}`;
+
+    // Only fetched/built when there's a prior action to possibly correct —
+    // see `buildCorrectionSection`'s doc comment for why this whole section
+    // is conditional rather than always appended.
+    const preferenceList = priorAction
+      ? this.memoryStore
+          .getActive()
+          .filter((record) => record.category === "preference")
+          .slice(0, MAX_PREFERENCES_FOR_CONFLICT_CHECK)
+          .map((record) => record.value)
+      : [];
+    const systemPrompt = priorAction
+      ? `${BASE_EXTRACTION_PROMPT}${buildCorrectionSection(priorAction, preferenceList)}`
+      : BASE_EXTRACTION_PROMPT;
 
     const request: BrainRequest = {
       messages: [{ role: "user", content: exchange }],
       tools: [],
-      context: EXTRACTION_SYSTEM_PROMPT,
+      context: systemPrompt,
       // Deliberately no `runId`: this is a background, best-effort pass
       // outside any one user-facing turn's per-run cost ceiling, but it
       // still goes through the exact same Brain (AIRouter) instance as
@@ -281,7 +399,51 @@ export class MemoryExtractor implements MemoryExtractorLike {
       this.storeFact(fact);
     }
 
-    this.eventBus?.emit("memory.extraction.completed", { userId, factsConsidered: parsed.length, factsStored: facts.length });
+    const corrections = priorAction ? parsed.filter(isValidCorrectionShape) : [];
+    for (const correction of corrections) {
+      this.storeCorrection(correction, priorAction!, userMessage);
+    }
+
+    this.eventBus?.emit("memory.extraction.completed", {
+      userId,
+      factsConsidered: parsed.length,
+      factsStored: facts.length,
+      correctionsStored: corrections.length,
+    });
+  }
+
+  /**
+   * Writes a detected behavioral correction to `BehaviorCorrectionStore`,
+   * keyed by `priorAction.toolName` (a real, already-known fact — never
+   * something the extraction model invented, see `PriorAction`'s doc
+   * comment). Guardrail: a correction the model flagged as conflicting with
+   * a standing preference is still stored (so it isn't lost — see this
+   * module's class doc comment on the general "best-effort, don't drop
+   * silently" philosophy), but marked `flaggedPreferenceConflict` so
+   * `correctionNote.ts` always surfaces it with an explicit caveat instead
+   * of presenting it as settled guidance that could silently override an
+   * explicit standing preference.
+   */
+  private storeCorrection(correction: ExtractedCorrection, priorAction: PriorAction, userMessage: string): void {
+    if (!this.correctionStore) return;
+
+    this.correctionStore.add({
+      contextKey: priorAction.toolName,
+      correction: correction.correction,
+      originalAction: priorAction.toolName,
+      triggeringMessage: userMessage,
+      confidence: clampConfidence(correction.confidence) ?? null,
+      flaggedPreferenceConflict: correction.conflictsWithStandingPreference === true,
+      conflictingPreference:
+        correction.conflictsWithStandingPreference === true && typeof correction.conflictingPreferenceText === "string"
+          ? correction.conflictingPreferenceText
+          : null,
+    });
+
+    this.eventBus?.emit("behaviorCorrection.stored", {
+      contextKey: priorAction.toolName,
+      flaggedPreferenceConflict: correction.conflictsWithStandingPreference === true,
+    });
   }
 
   private storeFact(fact: ExtractedFact): void {

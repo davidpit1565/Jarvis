@@ -21,7 +21,7 @@ import { isLikelyStatusQuery, formatLiveStatus } from "@/core/state/liveStatusFo
 import { isLikelyWhyQuery, explainAction, findLastToolCall, noActionToExplain } from "@/core/state/actionExplainer";
 import type { LiveState, LiveStateSnapshot, LiveStateTransitionOptions } from "@/core/state/JarvisLiveState";
 import { scopeToolsForMessage } from "@/core/intent/ToolScoping";
-import type { MemoryExtractorLike } from "@/memory/MemoryExtractor";
+import type { MemoryExtractorLike, PriorAction } from "@/memory/MemoryExtractor";
 
 export interface OrchestratorDependencies {
   brain: Brain;
@@ -51,7 +51,17 @@ export interface OrchestratorDependencies {
    * due" without the user having to ask, instead of only ever answering
    * exactly what was asked.
    */
-  contextProvider?: () => string | undefined | Promise<string | undefined>;
+  /**
+   * `message` (the current turn's raw user text, before any tool call runs)
+   * is passed through so a context note can gate what it surfaces by
+   * relevance to this specific turn — see `correctionNote.ts`'s doc comment
+   * for the one consumer that actually uses it today. Every existing
+   * `buildContextNote`-based provider accepts (and currently ignores, save
+   * for that one consumer) this parameter; it's optional on the type only
+   * so a hand-rolled test provider with no use for it can keep its
+   * zero-arg signature.
+   */
+  contextProvider?: (message?: string) => string | undefined | Promise<string | undefined>;
   /**
    * Optional break-glass kill switch. When active, every tool above READ
    * is refused before it reaches a permission check or confirmation
@@ -290,7 +300,7 @@ export class Orchestrator {
     onTextDelta?: (text: string) => void
   ): Promise<string> {
     const { brain, conversation, toolRegistry, eventBus, channelContext, contextProvider, liveState } = this.deps;
-    const extraContext = [channelContext, await contextProvider?.()].filter(Boolean).join("\n\n");
+    const extraContext = [channelContext, await contextProvider?.(content)].filter(Boolean).join("\n\n");
     const systemPrompt = extraContext ? `${JARVIS_SYSTEM_PROMPT}\n\n${extraContext}` : JARVIS_SYSTEM_PROMPT;
     const sessionId = this.liveSessionId(userId);
 
@@ -365,6 +375,20 @@ export class Orchestrator {
     // doc comment.
     const recentContext = this.lastUserMessageText(conversation);
 
+    // Correction Learning: the most recent tool call this conversation made
+    // before THIS message, if any — captured here (same "before this turn's
+    // own message is added" timing as `recentContext`/the "why" fast path
+    // above, and the exact same `findLastToolCall` helper) so
+    // `fireMemoryExtraction` below can tell the extraction pass what action
+    // this exchange might be correcting. `undefined` (no tool call anywhere
+    // in this conversation yet) just means there's nothing to anchor a
+    // correction to — see `PriorAction`'s own doc comment for why that's a
+    // hard requirement, not a soft hint.
+    const lastToolCall = findLastToolCall(conversation.getMessages());
+    const priorAction: PriorAction | undefined = lastToolCall
+      ? { toolName: lastToolCall.toolName, triggeringMessage: lastToolCall.triggeringMessage }
+      : undefined;
+
     conversation.addUserMessage(content, images);
 
     // Denial-of-wallet protection: one runId per turn (this one call to
@@ -392,7 +416,7 @@ export class Orchestrator {
 
       if (fastPathMatch && fastPathTool) {
         eventBus.emit("fastPath.hit", { userId, toolName: fastPathTool.name, shape: fastPathMatch.shape });
-        return await this.runFastPath(userId, sessionId, fastPathTool.name, fastPathMatch.input, systemPrompt, runId, content);
+        return await this.runFastPath(userId, sessionId, fastPathTool.name, fastPathMatch.input, systemPrompt, runId, content, priorAction);
       }
 
       // Either nothing matched, or a recognized shape's tool isn't
@@ -457,7 +481,7 @@ export class Orchestrator {
           conversation.addAssistantMessage(response.text);
           this.transitionLiveState(sessionId, userId, "SPEAKING", { reason: "formatting final reply" });
           liveState?.reset(sessionId, userId, "turn complete");
-          this.fireMemoryExtraction(userId, content, response.text);
+          this.fireMemoryExtraction(userId, content, response.text, priorAction);
           return response.text;
         }
 
@@ -582,7 +606,8 @@ export class Orchestrator {
     input: Record<string, unknown>,
     systemPrompt: string,
     runId: string,
-    userMessage: string
+    userMessage: string,
+    priorAction?: PriorAction
   ): Promise<string> {
     const { eventBus, brain, conversation, liveState, toolRegistry } = this.deps;
 
@@ -638,7 +663,7 @@ export class Orchestrator {
     conversation.addAssistantMessage(response.text);
     this.transitionLiveState(sessionId, userId, "SPEAKING", { reason: "formatting final reply" });
     liveState?.reset(sessionId, userId, "turn complete (fast path)");
-    this.fireMemoryExtraction(userId, userMessage, response.text);
+    this.fireMemoryExtraction(userId, userMessage, response.text, priorAction);
     return response.text;
   }
 
@@ -649,9 +674,9 @@ export class Orchestrator {
    * synchronously, but a turn's real, already-computed reply must never be
    * put at risk by a bug in a best-effort background pass regardless.
    */
-  private fireMemoryExtraction(userId: string, userMessage: string, assistantReply: string): void {
+  private fireMemoryExtraction(userId: string, userMessage: string, assistantReply: string, priorAction?: PriorAction): void {
     try {
-      this.deps.memoryExtractor?.extractAndStore(userId, userMessage, assistantReply);
+      this.deps.memoryExtractor?.extractAndStore(userId, userMessage, assistantReply, priorAction);
     } catch (error) {
       console.warn(
         "[jarvis] memory extraction trigger failed (harmless, best-effort):",
