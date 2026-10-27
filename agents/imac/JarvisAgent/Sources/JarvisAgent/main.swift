@@ -15,6 +15,36 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
     private let globalHotkeyListener = GlobalHotkeyListener()
     private var connection: CoreConnection!
 
+    /// Reliability fix (2026-10-27) — see CLAUDE.md's same-dated section.
+    /// David's real-world symptom tonight: "Hey JARVIS, how are you" produced
+    /// total silence on at least one occasion — no error, no spoken reply,
+    /// nothing. The real root cause (fixed directly, see `AIRouter.ts`'s new
+    /// `providerCallTimeoutMs`) was a backend provider call that could hang
+    /// forever with no timeout of its own, so `DeviceVoiceGateway`'s existing
+    /// `try`/`catch` around the brain call never ran — a hang is neither a
+    /// resolution nor a rejection. This client-side watchdog is deliberately
+    /// kept as defense in depth on top of that backend fix, not instead of
+    /// it (the task's own instruction: fix the root cause when it's
+    /// findable, which it was) — it also covers failure modes the backend
+    /// fix can't reach at all, such as the WebSocket message itself being
+    /// dropped in transit or Core crashing mid-request, where no amount of
+    /// backend timeout logic would ever produce a reply to not receive.
+    private var pendingVoiceReplyTimer: Timer?
+    /// 40s: comfortably longer than AIRouter's own 25s per-provider call
+    /// timeout (even with one fallback attempt at ~25s + a few seconds for a
+    /// healthy second provider to actually answer, the real-world total
+    /// stays well under this), so a normal fallback round trip never
+    /// triggers a false "something's wrong" apology — but still a bounded,
+    /// human-reasonable wait rather than silence with no end in sight.
+    /// Known rare edge case, accepted rather than engineered around for this
+    /// fix's minimal scope: if BOTH the primary and fallback provider hang
+    /// at once (25s + 25s = 50s), this watchdog fires at 40s with its own
+    /// apology, and the backend's own `ERROR_MESSAGE` reply can still arrive
+    /// ~10s after that — a second, redundant spoken message, not a silent
+    /// failure. Worth tightening only if that double-hang scenario is ever
+    /// actually observed in practice.
+    private static let voiceReplyTimeoutSeconds: TimeInterval = 40.0
+
     // JARVIS Core (Bun.serve) speaks plain WebSocket, not TLS, so this
     // defaults to ws:// — wss:// would fail to connect. Override with
     // JARVIS_CORE_URL for a non-default host/port.
@@ -269,15 +299,38 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             return
         }
         connection.send(data: data)
+
+        // Start (or restart, if a prior one is somehow still pending) the
+        // silent-failure watchdog the moment a command is actually sent —
+        // see `pendingVoiceReplyTimer`'s own doc comment for why this
+        // exists alongside the real backend fix, not instead of it.
+        pendingVoiceReplyTimer?.invalidate()
+        pendingVoiceReplyTimer = Timer.scheduledTimer(withTimeInterval: Self.voiceReplyTimeoutSeconds, repeats: false) { [weak self] _ in
+            self?.handleVoiceReplyTimeout()
+        }
+    }
+
+    /// Fires when `voiceReplyTimeoutSeconds` elapses with no `voice.reply`
+    /// at all for the last command sent — see `pendingVoiceReplyTimer`'s own
+    /// doc comment. Uses `speakReply` (not the plain `speak`) deliberately:
+    /// the user most likely just wants to try again, and continuous-
+    /// conversation mode opening right after this apology means they can do
+    /// that without needing to re-say "Hey JARVIS".
+    private func handleVoiceReplyTimeout() {
+        pendingVoiceReplyTimer = nil
+        Logger.shared.log("No voice.reply received within \(Int(Self.voiceReplyTimeoutSeconds))s — speaking a fallback apology instead of leaving the user in silence.")
+        wakeWordListener.speakReply("Sorry, I didn't get a response there — something may be wrong. Please try again.")
     }
 
     /// Speaks a reply from Core back to the user — the other half of a "Hey JARVIS" round trip.
     private func handleVoiceReply(data: Data) {
+        pendingVoiceReplyTimer?.invalidate()
+        pendingVoiceReplyTimer = nil
         guard let envelope = try? JSONDecoder().decode(Envelope<VoiceReplyPayload>.self, from: data) else {
             Logger.shared.log("Failed to decode voice.reply payload")
             return
         }
-        wakeWordListener.speak(envelope.payload.text)
+        wakeWordListener.speakReply(envelope.payload.text)
     }
 
     /// Speaks an unprompted, JARVIS-initiated announcement (e.g. a

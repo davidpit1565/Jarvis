@@ -48,6 +48,25 @@ export class ZeroCostModeError extends Error {}
  */
 export class CircuitOpenError extends Error {}
 
+/**
+ * Reliability fix (2026-10-27, see CLAUDE.md's same-dated "silent failure"
+ * section): thrown when a provider's `chat()`/`chatStream()` call neither
+ * resolves nor rejects within `providerCallTimeoutMs`. Found as the real
+ * root cause of David's "Hey JARVIS, how are you" producing total silence
+ * on the Mac agent — `GeminiBrain`/`GroqBrain`/`OpenRouterBrain` all call
+ * plain `fetch()` with no `AbortController`/timeout of their own, so a
+ * stalled connection to any of them previously left the underlying promise
+ * pending forever. Nothing downstream (`Orchestrator`, `DeviceVoiceGateway`)
+ * was wrong — their `try`/`catch` around `handleUserMessage` already sends a
+ * spoken error reply on a genuine rejection; the bug was that a hang is
+ * neither a resolution nor a rejection, so that `catch` never ran at all.
+ * Racing every provider call against this timeout turns a silent hang into
+ * an ordinary call failure, which `timedCall`'s existing `catch` already
+ * feeds into the normal fallback/circuit-breaker path — no new error
+ * handling needed beyond making sure a timeout actually happens.
+ */
+export class ProviderTimeoutError extends Error {}
+
 /** One provider's point-in-time operational status, as exposed by `AIRouter.getProviderStatus()`. */
 export interface ProviderStatus {
   configured: true;
@@ -142,12 +161,26 @@ export interface AIRouterOptions {
    */
   freeProviderPriority?: ProviderName[];
   eventBus?: EventBus;
+  /**
+   * Reliability fix (2026-10-27): hard ceiling (ms) on how long a single
+   * provider `chat()`/`chatStream()` call is allowed to hang before it's
+   * treated as a failure — see `ProviderTimeoutError`'s own doc comment for
+   * the real incident this closes. Defaults to 25_000 (25s): long enough
+   * for a normal multi-tool-call reasoning turn (`ClaudeBrain` itself
+   * already sets a 30s SDK timeout, so this doesn't cut a healthy Claude
+   * call short), short enough that a voice conversation on the Mac agent
+   * isn't left in dead air for an unbounded amount of time waiting on a
+   * provider that will never answer.
+   */
+  providerCallTimeoutMs?: number;
 }
 
 /** How many recent calls' outcome/latency each provider's rolling stats are computed over. */
 const PROVIDER_STATS_WINDOW = 20;
 const DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+/** See `AIRouterOptions.providerCallTimeoutMs`'s own doc comment. */
+const DEFAULT_PROVIDER_CALL_TIMEOUT_MS = 25_000;
 /** Default fraction of a configured daily/monthly cap at which budget-constrained degradation starts biasing toward free providers. See `AIRouterOptions.softBudgetCapRatio`. */
 const DEFAULT_SOFT_BUDGET_CAP_RATIO = 0.8;
 
@@ -322,6 +355,7 @@ export class AIRouter implements Brain {
   private readonly circuitBreakerThreshold: number;
   private readonly circuitBreakerCooldownMs: number;
   private readonly freeProviderPriority: ProviderName[];
+  private readonly providerCallTimeoutMs: number;
   private readonly runtime = new Map<ProviderName, ProviderRuntime>();
 
   constructor(
@@ -338,6 +372,32 @@ export class AIRouter implements Brain {
     this.circuitBreakerThreshold = options.circuitBreakerThreshold ?? DEFAULT_CIRCUIT_BREAKER_THRESHOLD;
     this.circuitBreakerCooldownMs = options.circuitBreakerCooldownMs ?? DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS;
     this.freeProviderPriority = options.freeProviderPriority ?? DEFAULT_FREE_PROVIDER_PRIORITY;
+    this.providerCallTimeoutMs = options.providerCallTimeoutMs ?? DEFAULT_PROVIDER_CALL_TIMEOUT_MS;
+  }
+
+  /**
+   * Races a provider call against `providerCallTimeoutMs`, rejecting with
+   * `ProviderTimeoutError` if the call hasn't settled in time. The timer is
+   * always cleared, whichever side wins the race — a provider that
+   * eventually does respond after a timeout has already been reported as a
+   * failure must not leave a dangling timer or an unhandled resolution.
+   */
+  private async withTimeout(provider: ProviderName, call: Promise<BrainResponse>): Promise<BrainResponse> {
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new ProviderTimeoutError(
+            `Provider "${provider}" did not respond within ${Math.round(this.providerCallTimeoutMs / 1000)}s — treating as a failed call.`
+          )
+        );
+      }, this.providerCallTimeoutMs);
+    });
+    try {
+      return await Promise.race([call, timeout]);
+    } finally {
+      clearTimeout(timer!);
+    }
   }
 
   /** Configured free-tier providers, ordered by `freeProviderPriority` rather than plain registration order. See `DEFAULT_FREE_PROVIDER_PRIORITY`'s doc comment. */
@@ -426,10 +486,13 @@ export class AIRouter implements Brain {
     try {
       const response = brain.chatStream
         ? await brain.chatStream(request, trackDelta)
-        : await brain.chat(request).then((full) => {
-            if (full.text) trackDelta(full.text);
-            return full;
-          });
+        : await this.withTimeout(
+            provider,
+            brain.chat(request).then((full) => {
+              if (full.text) trackDelta(full.text);
+              return full;
+            })
+          );
       const latencyMs = performance.now() - start;
       this.recordOutcome(provider, true, latencyMs, wasHalfOpenTrial);
       this.recordCost(provider, response, request, latencyMs, false, decisionRef.value);
@@ -590,7 +653,7 @@ export class AIRouter implements Brain {
     const wasHalfOpenTrial = this.effectiveCircuitState(provider) === "half-open";
     const start = performance.now();
     try {
-      const response = await this.registry.get(provider)!.chat(request);
+      const response = await this.withTimeout(provider, this.registry.get(provider)!.chat(request));
       const latencyMs = performance.now() - start;
       this.recordOutcome(provider, true, latencyMs, wasHalfOpenTrial);
       this.recordCost(provider, response, request, latencyMs, isFallback, decisionRef?.value ?? "primary-default");

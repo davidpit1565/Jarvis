@@ -172,6 +172,54 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate, AVSpeechSynt
     /// owner — see `ProactiveReplyPayload`'s own doc comment.
     private var proactiveReplyCallback: ((String?) -> Void)?
 
+    /// Continuous conversation mode (2026-10-27) — see CLAUDE.md's same-dated
+    /// section for the full research writeup this is based on. David's
+    /// explicit, repeated complaint tonight: he had to say "Hey JARVIS"
+    /// before every single turn, making a real back-and-forth conversation
+    /// impossible. This opens a short follow-up listening window, with no
+    /// wake phrase required, right after JARVIS finishes speaking a REAL
+    /// reply from Core (see `speakReply`, used only for actual `voice.reply`
+    /// messages — never for the wake-only greeting, the clap greeting, or a
+    /// proactive announcement, each of which has its own, already-correct
+    /// listening behavior that must not be double-triggered by this).
+    ///
+    /// Window length: real documented precedent, not invented from nothing.
+    /// Amazon's Alexa "Follow-Up Mode" (shipped 2018) listens for 5 seconds
+    /// after a response before requiring the wake word again — consistently
+    /// reported across its own contemporary tech-press coverage (e.g.
+    /// TechRadar, How-To Geek). Google's "Continued Conversation" (also
+    /// 2018) uses a published ~6-8 second window per Google's own
+    /// spokesperson statements (Voicebot.ai, 9to5Google). Both are real,
+    /// shipped, widely-used features, not just blog opinion — confidence:
+    /// documented via contemporary primary tech coverage, though neither
+    /// company has republished an updated number since 2018-2019, so an
+    /// unverified assumption that this hasn't changed since is baked in.
+    /// `conversationFollowUpTimeoutSeconds` is set to 6 seconds — squarely
+    /// inside that well-precedented 5-8s range, not a number invented for
+    /// this codebase.
+    ///
+    /// Distinct from `silenceThresholdSeconds`: that governs how long to
+    /// wait *after speech has started* before treating it as a complete
+    /// utterance (same role Alexa/Google's own end-of-utterance detection
+    /// plays). This window instead bounds how long to wait, with *nothing
+    /// said yet*, before giving up and requiring the wake phrase again —
+    /// exactly the same two-timer shape `speakProactiveAnnouncement`
+    /// already uses for its own reply-capture window, reused here rather
+    /// than inventing a third pattern.
+    private var conversationFollowUpModeActive = false
+    private var conversationFollowUpStartedAt = Date.distantPast
+    private static let conversationFollowUpTimeoutSeconds: TimeInterval = 6.0
+    /// Set by `speakReply` right before `speak()` is called, and consumed
+    /// (cleared) the moment that utterance either finishes normally
+    /// (`speechSynthesizer(_:didFinish:)`, which then opens the follow-up
+    /// window) or is cut short by a barge-in (`stopSpeakingForBargeIn`,
+    /// which must NOT open it — see that method's own note). Without this
+    /// flag, `didFinish` would have no way to tell "a real Core reply just
+    /// finished speaking" apart from every other kind of utterance this
+    /// listener speaks (greetings, clap ack, proactive announcements), each
+    /// of which already has its own correct post-speech behavior.
+    private var pendingConversationFollowUpAfterSpeech = false
+
     /// True from the moment `speak()` hands an utterance to
     /// `AVSpeechSynthesizer` until it finishes, is cancelled, or is
     /// stopped by a barge-in — see `speak()`, the
@@ -295,11 +343,48 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate, AVSpeechSynt
         synthesizer.stopSpeaking(at: .immediate)
         isSpeaking = false
         currentlySpokenText = nil
+        // A barge-in means the user already started talking over JARVIS —
+        // that speech is handled by the normal fall-through in
+        // `handleTranscriptUpdate` right after this call returns, so there
+        // is nothing left to "follow up" on: opening the follow-up window
+        // here as well would just be a second, redundant listening mode
+        // layered on top of speech that's already mid-capture.
+        pendingConversationFollowUpAfterSpeech = false
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         isSpeaking = false
         currentlySpokenText = nil
+        if pendingConversationFollowUpAfterSpeech {
+            pendingConversationFollowUpAfterSpeech = false
+            beginConversationFollowUp()
+        }
+    }
+
+    /// Speaks a REAL reply from Core (a `voice.reply`, i.e. an actual
+    /// answer to something the user asked) — as opposed to this listener's
+    /// own internal greetings/acknowledgements, which keep calling `speak`
+    /// directly. Opens the continuous-conversation follow-up window once
+    /// this finishes speaking normally; see `conversationFollowUpModeActive`'s
+    /// own doc comment for the full reasoning and the window length's
+    /// sourcing.
+    func speakReply(_ text: String) {
+        pendingConversationFollowUpAfterSpeech = true
+        speak(text)
+    }
+
+    /// Opens the no-wake-phrase follow-up window after a real reply has
+    /// finished playing. Mirrors `speakProactiveAnnouncement`'s own
+    /// fresh-buffer/fresh-clock pattern exactly, rather than inventing a
+    /// different shape for what is functionally the same kind of window.
+    private func beginConversationFollowUp() {
+        conversationFollowUpModeActive = true
+        conversationFollowUpStartedAt = Date()
+        pendingCommandText = nil
+        lastTranscriptUpdate = Date()
+        // Fresh transcript buffer so nothing said before/during the reply
+        // itself lingers into the follow-up capture.
+        beginRecognitionTask()
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
@@ -490,6 +575,25 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate, AVSpeechSynt
             return
         }
 
+        if conversationFollowUpModeActive {
+            // A wake phrase said during the follow-up window should still
+            // work exactly like an ordinary wake-triggered turn, not get
+            // folded verbatim into the follow-up capture (which would send
+            // Core a transcript still containing the literal words "hey
+            // jarvis"). Close out follow-up mode here and fall through to
+            // the normal wake-phrase handling below, rather than returning —
+            // this is the one case in this method that intentionally
+            // doesn't return early from its own branch.
+            let lowered = transcript.lowercased()
+            if Self.wakePhrasePatterns.contains(where: { lowered.contains($0) }) {
+                conversationFollowUpModeActive = false
+            } else {
+                let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                pendingCommandText = trimmed.isEmpty ? nil : trimmed
+                return
+            }
+        }
+
         if clapCommandModeActive {
             let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             pendingCommandText = trimmed.isEmpty ? nil : trimmed
@@ -540,6 +644,37 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate, AVSpeechSynt
                 proactiveReplyCallback = nil
                 print("[JarvisAgent] Proactive reply window elapsed with nothing heard.")
                 callback?(nil)
+                beginRecognitionTask()
+                return
+            }
+            return
+        }
+
+        // Handled next, same two-part shape as the proactive-reply block
+        // above (a bounded "did anything start" window, then the normal
+        // silence-after-speech capture once something has): a continuous-
+        // conversation follow-up command is sent straight to Core via
+        // `onTranscriptReady`, exactly like any other transcript — unlike
+        // the proactive-reply path, there's no separate authentication
+        // decision to make here, so no dedicated callback is needed.
+        if conversationFollowUpModeActive {
+            if let pendingCommandText, !pendingCommandText.isEmpty,
+               Date().timeIntervalSince(lastTranscriptUpdate) >= Self.silenceThresholdSeconds {
+                let captured = pendingCommandText
+                self.pendingCommandText = nil
+                conversationFollowUpModeActive = false
+                print("[JarvisAgent] Conversation follow-up command captured (no wake phrase needed): \"\(captured)\"")
+                // No wake phrase said this turn, so there's no forced-
+                // language signal to carry — same "" auto-detect choice
+                // already made for clap-triggered commands.
+                onTranscriptReady?(captured, "")
+                beginRecognitionTask()
+                return
+            }
+            if Date().timeIntervalSince(conversationFollowUpStartedAt) >= Self.conversationFollowUpTimeoutSeconds {
+                conversationFollowUpModeActive = false
+                pendingCommandText = nil
+                print("[JarvisAgent] Conversation follow-up window elapsed with nothing heard — \"Hey JARVIS\" required again.")
                 beginRecognitionTask()
                 return
             }

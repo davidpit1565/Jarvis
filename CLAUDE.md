@@ -1398,3 +1398,127 @@ has been compiled, run, or seen a simulator/device. Real Xcode + a real device v
 the necessary next step, same posture as `agents/imac/JarvisAgent`'s own standing status — and,
 per David's own decision recorded above (under "David's decisions on 'what's missing' items"),
 that kind of hands-on hardware validation happens together with him, not unsupervised beforehand.
+
+## Continuous conversation + silent-failure fix (2026-10-27, live voice-testing session)
+
+David was live, hands-on, testing real voice round-trips on the Mac agent against the real
+deployed Fly Core for the first time, and raised two urgent complaints: (1) no continuous
+conversation — "Hey JARVIS" had to be repeated before every single turn, and (2) at least one
+real occurrence of total silence after a spoken command ("Hey JARVIS, how are you"), no error, no
+spoken reply, nothing. His own framing, direct quote (translated): "communication and how I
+manage a conversation with him is the most important thing — more important than any of the
+features/skills, which can always be added later."
+
+### Research (WebSearch + a real clone of `ethanplusai/jarvis`, not invented)
+
+- **Amazon Alexa's "Follow-Up Mode"** (shipped 2018): listens for **5 seconds** with no wake
+  word after a response before going back to sleep. Confirmed via consistent contemporary
+  tech-press coverage (TechRadar, How-To Geek, Digital Trends, Trusted Reviews) — confidence:
+  documented via multiple independent contemporary primary sources, though none have republished
+  an updated number since 2018.
+- **Google Assistant's "Continued Conversation"** (shipped 2018): a **~6-8 second** no-wake-word
+  window, sourced to an actual Google spokesperson statement (Voicebot.ai, 9to5Google) — one
+  independent tester reported experiencing closer to 6s in practice. Confidence: documented via
+  a named company spokesperson quote in contemporary tech press, same 2018-2019 vintage caveat
+  as Alexa's number above.
+- **`ethanplusai/jarvis` (cloned and actually read — `speech.py`, 1219 lines — not just
+  README-skimmed, per the task's own instruction)**: does **not** have an equivalent "follow-up
+  listening window after a response" feature at all, and the reason is architectural, not an
+  oversight worth copying around — its frontend keeps the browser's Web Speech API microphone
+  continuously open the whole time the tab is open, so there's no wake-word-gated mic to reopen
+  after a reply in the first place. What it *does* have, and what's actually relevant: a short,
+  deliberate **2-second "steer cancel window"** (`open_cancel_window`, `STEER_CANCEL_WINDOW` in
+  its own comments) opened only right after a read-back finishes playing, during which a small
+  fixed set of cancel words are recognized — i.e. the same underlying philosophy applied here
+  (a short, bounded, purpose-specific listening window tied to a real signal, not an open-ended
+  "just keep listening" mode) even though its own concrete number (2s, for word-cancellation,
+  not general follow-up commands) doesn't directly transfer to this codebase's different,
+  wake-word-gated architecture.
+- Net design choice: **`conversationFollowUpTimeoutSeconds = 6.0`** — squarely inside the
+  well-precedented 5-8s Alexa/Google range, not invented from nothing, and distinct in kind from
+  the existing `silenceThresholdSeconds` (2.5s) constant: that one bounds how long to wait
+  *after speech has started* before treating it as complete; the new one bounds how long to wait,
+  with *nothing said yet*, before giving up and requiring "Hey JARVIS" again.
+
+### Part 2: continuous conversation mode (`agents/imac/JarvisAgent/Sources/JarvisAgent/Voice/WakeWordListener.swift`)
+
+New state (`conversationFollowUpModeActive`/`conversationFollowUpStartedAt`/
+`pendingConversationFollowUpAfterSpeech`), following the exact shape of the file's own existing
+`awaitingCommandAfterWake`/`clapCommandModeActive`/`proactiveReplyModeActive` patterns rather than
+inventing a fourth structure. A new `speakReply(_:)` method — used only by `main.swift`'s
+`handleVoiceReply` for an actual `voice.reply` from Core — opens the follow-up window once that
+utterance finishes playing *normally* (`speechSynthesizer(_:didFinish:)`); it is never opened by
+the wake-only greeting, the clap greeting, or a proactive announcement, each of which keeps its
+own already-correct behavior untouched, and it is explicitly *not* opened when the reply is cut
+short by a barge-in (`stopSpeakingForBargeIn` clears the pending flag) since the user's own
+real speech in that case is already being handled by the normal fall-through in
+`handleTranscriptUpdate` right after. A wake phrase said *during* the follow-up window is
+recognized and handled as an ordinary fresh wake-triggered turn (closes follow-up mode, falls
+through to the existing wake-phrase block) rather than being captured verbatim as a follow-up
+command — without this, Core would receive a transcript that still literally contained "hey
+jarvis". `checkForSilence` grew a matching capture/timeout block, same two-part shape
+(`speakProactiveAnnouncement`'s own pattern: a bounded "did anything start" window, then the
+normal silence-after-speech capture once something has) reused rather than copied differently.
+A captured follow-up command is sent to Core via the same `onTranscriptReady` callback as every
+other transcript, with `forcedLanguage: ""` (auto-detect) — there's no wake phrase on a follow-up
+turn to read a forced language from, same choice already made for clap-triggered commands.
+Barge-in/echo-rejection (`SpeechEchoClassifier`) is untouched and still runs first in
+`handleTranscriptUpdate` for every mode, follow-up included — nothing here bypasses it.
+
+### Part 3: the silent-failure bug — real root cause found and fixed, plus client-side defense in depth
+
+**Root cause, found in `src/core/brain/AIRouter.ts` and `src/core/brain/GeminiBrain.ts`/
+`GroqBrain.ts`/`OpenRouterBrain.ts`**: `DeviceVoiceGateway.handleTranscript` already wraps
+`Orchestrator.handleUserMessage` in a `try`/`catch` that sends a spoken `ERROR_MESSAGE` reply on
+any thrown error — that part was already correct, not the bug. The actual gap: `GeminiBrain`
+(the free-tier priority provider per wishlist #1/PR #143/#144), `GroqBrain`, and `OpenRouterBrain`
+all call plain `fetch()` with **no `AbortController`, no timeout of any kind** — confirmed by
+reading each file directly, not assumed. `AIRouter`'s own `timedCall`/`chatStream` call sites had
+nothing wrapping those calls with a timeout either (only `ClaudeBrain` sets its own 30s SDK
+timeout, and `OllamaBrain` has its own `fetchWithRetry` timeout — both already safe). A stalled
+connection to Gemini/Groq/OpenRouter therefore left that provider's promise **pending forever** —
+neither resolving nor rejecting — so `DeviceVoiceGateway`'s `await session.orchestrator.
+handleUserMessage(...)` never returned and its `catch` never ran. This is exactly David's
+symptom: not an error, a true hang, with no code path left to say anything at all.
+
+**Fix (backend, root cause — preferred over a client-side workaround per the task's own
+instruction, since this was findable and fixable)**: `AIRouter` gained a new
+`providerCallTimeoutMs` option (default 25_000ms) and a `withTimeout()` helper that races every
+provider `chat()`/non-streaming `chatStream()` call against it, rejecting with a new
+`ProviderTimeoutError` on expiry. This plugs directly into `timedCall`'s existing `catch` →
+`routeToFallback` path — a hang now becomes an ordinary call failure that the existing
+circuit-breaker/fallback machinery already knows how to handle, so no new error-handling
+architecture was needed, just making sure a timeout actually happens at all. 25s was chosen to
+sit comfortably above `ClaudeBrain`'s own existing 30s-capped-but-usually-much-faster SDK
+behavior's typical latency without being so long it defeats the point. Tests added:
+`tests/brain/AIRouter.test.ts`'s new "provider call timeout" describe block (a `hangingBrain()`
+helper whose `chat()` returns a promise that never settles — the real shape of the bug — proves
+`chat()`, `chatStream()`, and the "every provider hangs" case all now fail/fall back instead of
+hanging forever). `bun run typecheck`: 0 errors. `bun test`: 2823 pass, 0 fail (full suite).
+
+**Fix (client, defense in depth, not instead of the backend fix)**: `main.swift` gained a
+`pendingVoiceReplyTimer` watchdog (40s — comfortably above the backend's 25s-per-provider timeout
+even accounting for one fallback round trip) started the moment a `voice.transcript` is actually
+sent and cleared the moment any `voice.reply` arrives. If it fires, the Mac agent speaks "Sorry, I
+didn't get a response there — something may be wrong. Please try again." via the new
+`speakReply(_:)` (so continuous-conversation mode opens right after, letting the user just retry
+without re-saying "Hey JARVIS") rather than staying silent. This exists specifically because a
+client-side timeout is the only thing that can ever catch failure modes the backend fix
+structurally cannot reach — the WebSocket message itself getting dropped in transit, or Core
+crashing mid-request — not as a substitute for the real backend fix, which was applied directly
+because the root cause was genuinely findable. Known, accepted rare edge case: if *both* the
+primary and fallback provider hang at once (25s + 25s = 50s backend-side), this 40s client
+watchdog fires first with its own apology, and the backend's `ERROR_MESSAGE` can still arrive
+~10s later as a second, redundant spoken message — not a silent failure, just a minor doubled
+reply in an already-rare double-hang scenario; not engineered around further to keep this fix
+minimal, per the task's own "don't rewrite the whole error-handling architecture" instruction.
+
+**Standing caveat, same as every other Swift change in this repo**: `WakeWordListener.swift` and
+`main.swift`'s changes have never been compiled or run against a real macOS runtime — no
+Xcode/macOS toolchain exists in this sandbox. Correctness was reasoned through by hand against
+the file's existing, already-field-tested patterns (the proactive-reply window's exact two-timer
+shape, the clap-mode precedent for raw-transcript capture) rather than invented fresh, but real
+on-device testing is the only thing that can actually confirm the 6s/40s numbers feel right and
+that the wake-phrase-during-follow-up fallthrough behaves as reasoned. The TypeScript side
+(`AIRouter.ts`'s timeout fix) is real, typechecked, and tested — only the Swift half carries this
+caveat.
