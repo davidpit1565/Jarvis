@@ -483,6 +483,11 @@ export interface JarvisConfig {
   spotifyClientSecret?: string;
   /** Path to the SQLite database storing the linked Spotify account's OAuth tokens. */
   spotifyTokenDbPath: string;
+  /** Canva Connect API OAuth client credentials — both required together to enable Canva integration. */
+  canvaClientId?: string;
+  canvaClientSecret?: string;
+  /** Path to the SQLite database storing the linked Canva account's OAuth tokens. */
+  canvaTokenDbPath: string;
   /**
    * A GitHub fine-grained personal access token (read-only scopes: repo
    * contents, issues, pull requests — see the GitHub integration PR
@@ -853,6 +858,26 @@ export function loadConfig(): JarvisConfig {
     );
   }
 
+  const canvaClientId = process.env.CANVA_CLIENT_ID?.trim() || undefined;
+  const canvaClientSecret = process.env.CANVA_CLIENT_SECRET?.trim() || undefined;
+  const canvaTokenDbPath = process.env.JARVIS_CANVA_TOKEN_DB_PATH ?? "./data/jarvis-canva-tokens.sqlite";
+
+  if (Boolean(canvaClientId) !== Boolean(canvaClientSecret)) {
+    throw new ConfigError("CANVA_CLIENT_ID and CANVA_CLIENT_SECRET must be set together (or neither) to enable Canva integration");
+  }
+  if (canvaClientId && canvaClientSecret && !publicBaseUrl) {
+    throw new ConfigError(
+      "JARVIS_PUBLIC_BASE_URL is required once Canva integration is configured (CANVA_CLIENT_ID/CANVA_CLIENT_SECRET) — " +
+        "Canva needs a real, fixed redirect URI for the OAuth flow."
+    );
+  }
+  if (canvaClientId && canvaClientSecret && !adminToken) {
+    throw new ConfigError(
+      "JARVIS_ADMIN_TOKEN is required once Canva integration is configured — GET /canva/oauth/start starts " +
+        "an OAuth flow linking a real Canva account and must not be triggerable by an unauthenticated request."
+    );
+  }
+
   const githubToken = process.env.GITHUB_TOKEN?.trim() || undefined;
 
   const studioBaseUrl = process.env.JARVIS_STUDIO_BASE_URL?.trim() || undefined;
@@ -1142,6 +1167,9 @@ export function loadConfig(): JarvisConfig {
     agentMailInboxId,
     agentMailMaxSendsPerDay,
     ollamaEmbeddingModel,
+    canvaClientId,
+    canvaClientSecret,
+    canvaTokenDbPath,
   };
 }
 
@@ -1167,6 +1195,7 @@ const KNOWN_SECRET_CONFIG_FIELDS: ReadonlySet<keyof JarvisConfig> = new Set([
   "adminToken",
   "googleClientSecret",
   "spotifyClientSecret",
+  "canvaClientSecret",
   "githubToken",
   "studioSecret",
   "agentMailApiKey",

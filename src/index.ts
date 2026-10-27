@@ -131,6 +131,11 @@ import { createPlayMusicTool } from "@/tools/spotify/PlayMusicTool";
 import { createPauseMusicTool } from "@/tools/spotify/PauseMusicTool";
 import { createSkipTrackTool } from "@/tools/spotify/SkipTrackTool";
 import { createUnlinkSpotifyTool } from "@/tools/spotify/UnlinkSpotifyTool";
+import { CanvaClient } from "@/canva/CanvaClient";
+import { CanvaTokenStore } from "@/canva/CanvaTokenStore";
+import { createListCanvaDesignsTool } from "@/tools/canva/ListCanvaDesignsTool";
+import { createListCanvaBrandTemplatesTool } from "@/tools/canva/ListCanvaBrandTemplatesTool";
+import { createCreateCanvaDesignTool } from "@/tools/canva/CreateCanvaDesignTool";
 import { GitHubClient } from "@/github/GitHubClient";
 import { createListGitHubCommitsTool } from "@/tools/github/ListGitHubCommitsTool";
 import { createListGitHubIssuesTool } from "@/tools/github/ListGitHubIssuesTool";
@@ -390,6 +395,22 @@ function main() {
     toolRegistry.registerTool(createUnlinkSpotifyTool(spotifyTokenStore));
   }
 
+  const canvaEnabled = Boolean(config.canvaClientId && config.canvaClientSecret && config.publicBaseUrl);
+  const canvaTokenStore = new CanvaTokenStore(config.canvaTokenDbPath);
+  const canvaClient = canvaEnabled
+    ? new CanvaClient(
+        config.canvaClientId!,
+        config.canvaClientSecret!,
+        new URL("/canva/oauth/callback", config.publicBaseUrl).toString(),
+        canvaTokenStore
+      )
+    : undefined;
+  if (canvaClient) {
+    toolRegistry.registerTool(createListCanvaDesignsTool(canvaClient));
+    toolRegistry.registerTool(createListCanvaBrandTemplatesTool(canvaClient));
+    toolRegistry.registerTool(createCreateCanvaDesignTool(canvaClient));
+  }
+
   // GitHub integration: a single static fine-grained PAT (no OAuth flow,
   // no per-account linking — see GitHubClient's own doc comment and the
   // introducing PR for why) — gated on GITHUB_TOKEN alone, unlike
@@ -520,6 +541,12 @@ function main() {
     permissionService.grant(DEFAULT_USER_ID, "SKIP_TRACK");
     // Same DANGEROUS reasoning as CLEAR_CONVERSATION_HISTORY/UNLINK_CALENDAR above.
     permissionService.grant(DEFAULT_USER_ID, "UNLINK_SPOTIFY");
+  }
+  if (canvaClient) {
+    // CONFIRM (see CreateCanvaDesignTool's own doc comment): the grant only
+    // makes it askable at all — PermissionService still forces a fresh
+    // per-invocation confirmation regardless, same as SEND_EMAIL/REPLY_EMAIL.
+    permissionService.grant(DEFAULT_USER_ID, "CREATE_CANVA_DESIGN");
   }
   if (studioClient) {
     // DANGEROUS: granted so the tool is askable at all, but PermissionService
@@ -1863,6 +1890,7 @@ function main() {
     conversationHistoryStore,
     calendarClient,
     spotifyClient,
+    canvaClient,
     wakeUpCallStore,
     aiRouter,
     schedulerHealthTracker,
@@ -2067,6 +2095,7 @@ function main() {
     goalStore.close();
     calendarTokenStore.close();
     spotifyTokenStore.close();
+    canvaTokenStore.close();
     rl.close();
     process.exit(0);
   }
