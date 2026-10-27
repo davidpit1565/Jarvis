@@ -1,4 +1,34 @@
-export type MemoryCategory = "fact" | "preference" | "commitment" | "temporary";
+/**
+ * Continuous Memory/Profile (Phase 1 of JARVIS_MASTER_PLAN.md): extends the
+ * original "fact" | "preference" | "commitment" | "temporary" set with the
+ * remaining categories from David's 8-category spec (see CLAUDE.md /
+ * JARVIS_MASTER_PLAN.md Phase 1) that had no home in the original set:
+ *
+ *   1. standing preferences/instructions -> "preference" (existing)
+ *   2. facts about him and how he works  -> "fact" (existing)
+ *   3. active projects and their history -> "project" (new)
+ *   4. decisions already made and why    -> "decision" (new)
+ *   5. actions already taken + results   -> "action" (new)
+ *   6. open tasks/problems/next steps    -> "task" (new)
+ *   7. temporary/perishable information  -> "temporary" (existing)
+ *   8. uncertain or conflicting facts    -> "uncertain" (new)
+ *
+ * "commitment" (a promise/follow-up) is kept as-is for backward
+ * compatibility with existing rows/tools, even though JARVIS also has a
+ * separate, purpose-built `CommitmentStore` for actual tracked promises —
+ * this category predates that store and nothing currently migrates old
+ * rows off it, so removing it would silently reclassify existing data.
+ */
+export type MemoryCategory =
+  | "fact"
+  | "preference"
+  | "commitment"
+  | "temporary"
+  | "project"
+  | "decision"
+  | "action"
+  | "task"
+  | "uncertain";
 
 /** 1 (trivial) .. 5 (critical) — coarse enough to be useful without pretending to be a real ranking model. */
 export type MemoryImportance = 1 | 2 | 3 | 4 | 5;
@@ -22,12 +52,31 @@ export type MemoryImportance = 1 | 2 | 3 | 4 | 5;
  *     JARVIS was asked to read, not text the user said to JARVIS directly.
  *   - TEMPORARY: a short-lived, session-scoped note, not meant to carry
  *     the weight of a durable fact at all.
+ *   - BACKGROUND_INFERRED: extracted automatically by the Continuous
+ *     Memory background pass (see `src/memory/MemoryExtractor.ts`) after a
+ *     conversation turn, with no explicit SAVE_MEMORY tool call behind it
+ *     at all — the model never decided "this is worth remembering" in the
+ *     moment, a separate, cheap, best-effort pass guessed it from the raw
+ *     exchange afterward. Ranked below MODEL_INFERRED (a live SAVE_MEMORY
+ *     call Claude actively chose to make, mid-conversation, with full
+ *     context) precisely because it's a step further removed from the
+ *     user's own words and from the model's in-context judgment — the
+ *     Memory Poisoning Defense below means a background-inferred guess can
+ *     never silently overwrite ANY of the other four more-trusted sources
+ *     for the same key, only ever a prior BACKGROUND_INFERRED value (or an
+ *     empty key).
  *
  * See MemoryStore's Memory Poisoning Defense: a write whose trust rank is
  * lower than an existing memory's for the same key is never allowed to
  * silently overwrite it.
  */
-export type MemoryTrust = "USER_STATED" | "SYSTEM_DERIVED" | "MODEL_INFERRED" | "EXTERNAL_CONTENT" | "TEMPORARY";
+export type MemoryTrust =
+  | "USER_STATED"
+  | "SYSTEM_DERIVED"
+  | "MODEL_INFERRED"
+  | "BACKGROUND_INFERRED"
+  | "EXTERNAL_CONTENT"
+  | "TEMPORARY";
 
 export interface MemoryRecord {
   id: string;
@@ -42,6 +91,18 @@ export interface MemoryRecord {
   expiresAt: string | null;
   /** Provenance of this memory's value. Defaults to "USER_STATED" for both new saves that don't specify one and pre-existing rows saved before this field existed. */
   source: MemoryTrust;
+  /**
+   * How sure the writer was that this value is correct, 0 (a weak guess)
+   * to 1 (certain), or null when no confidence was ever recorded (every
+   * row written before this field existed, and every explicit
+   * SAVE_MEMORY/DELETE_MEMORY-adjacent save that doesn't pass one — an
+   * explicit, user-facing save has no need to self-rate its own
+   * confidence). Only `MemoryExtractor`'s background pass currently sets
+   * this; nothing else requires it or reads it as a hard gate, it's
+   * informational metadata for a future quality/scoring layer
+   * (JARVIS_ROADMAP_AUDIT.md #14) to build on.
+   */
+  confidence: number | null;
 }
 
 export interface SaveMemoryInput {
@@ -57,6 +118,8 @@ export interface SaveMemoryInput {
   expiresAt?: string | null;
   /** Provenance of this value — see MemoryTrust. Defaults to "USER_STATED" when omitted, matching SAVE_MEMORY's default (an explicit user-facing tool call). */
   source?: MemoryTrust;
+  /** See `MemoryRecord.confidence`'s doc comment. Omitted means "not recorded" (stored as null), not "zero confidence". */
+  confidence?: number | null;
   /**
    * Optional embedding vector for `value` (and/or `key`), computed by the
    * caller (SaveMemoryTool, when OLLAMA_EMBEDDING_MODEL is configured) —

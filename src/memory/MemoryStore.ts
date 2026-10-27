@@ -79,9 +79,13 @@ const SEMANTIC_MEMORY_SIMILARITY_THRESHOLD = 0.5;
  * in a row) always overwrites, exactly as MemoryStore has always behaved.
  */
 const TRUST_RANK: Record<MemoryTrust, number> = {
-  USER_STATED: 4,
-  SYSTEM_DERIVED: 3,
-  MODEL_INFERRED: 2,
+  USER_STATED: 5,
+  SYSTEM_DERIVED: 4,
+  MODEL_INFERRED: 3,
+  // See MemoryTrust's own doc comment for why this sits below
+  // MODEL_INFERRED (a live, in-context SAVE_MEMORY decision) but above
+  // EXTERNAL_CONTENT (untrusted ingested text) and TEMPORARY.
+  BACKGROUND_INFERRED: 2,
   EXTERNAL_CONTENT: 1,
   TEMPORARY: 0,
 };
@@ -94,13 +98,14 @@ const SELECT_COLUMNS = `
   COALESCE(category, 'fact') as category,
   COALESCE(importance, 3) as importance,
   expires_at as expiresAt,
-  COALESCE(source, 'USER_STATED') as source
+  COALESCE(source, 'USER_STATED') as source,
+  confidence
 `;
 
-type MemoryRow = Omit<MemoryRecord, "importance"> & { importance: number };
+type MemoryRow = Omit<MemoryRecord, "importance" | "confidence"> & { importance: number; confidence: number | null };
 
 function rowToRecord(row: MemoryRow): MemoryRecord {
-  return { ...row, importance: row.importance as MemoryImportance };
+  return { ...row, importance: row.importance as MemoryImportance, confidence: row.confidence };
 }
 
 /** JSON-encodes an embedding for storage in the `embedding` TEXT column, or null for "no embedding"/"clear it". */
@@ -175,6 +180,13 @@ export class MemoryStore {
       // Same best-effort "ignore if already there" migration pattern as
       // every column above.
       `ALTER TABLE memory_records ADD COLUMN embedding TEXT`,
+      // Continuous Memory/Profile (JARVIS_MASTER_PLAN.md Phase 1): how sure
+      // the writer was this value is correct — see MemoryRecord.confidence's
+      // doc comment. NULL (every pre-existing row, and every explicit
+      // SAVE_MEMORY call that doesn't pass one) reads back as "not
+      // recorded," not "zero confidence." Same additive, best-effort
+      // "ignore if already there" migration pattern as every column above.
+      `ALTER TABLE memory_records ADD COLUMN confidence REAL`,
     ]) {
       try {
         this.db.run(ddl);
@@ -182,6 +194,27 @@ export class MemoryStore {
         // already exists
       }
     }
+
+    // Continuous Memory/Profile: one tombstone row per deleted key, so the
+    // background extraction pass (MemoryExtractor) can tell "the user just
+    // asked to forget this" apart from "this key was simply never saved" —
+    // without it, re-running extraction over conversation text that still
+    // mentions the now-deleted fact would silently resurrect it the very
+    // next turn, exactly the "don't resurrect a fact the user just asked to
+    // delete" failure mode this exists to prevent. Deliberately NOT a
+    // general-purpose audit log (ToolAuditLog already covers that) — this
+    // only ever needs "was this exact key deleted, and when," so one row
+    // per key (latest delete wins) is enough. Only ever consulted by
+    // background-sourced writes (see `save()`'s BACKGROUND_INFERRED check
+    // below and `wasDeleted()`); a normal explicit save (any other source)
+    // clears a key's tombstone, since the user/model explicitly re-asserting
+    // the key is exactly the override this mechanism is meant to allow.
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS memory_deletions (
+        key TEXT PRIMARY KEY COLLATE NOCASE,
+        deleted_at TEXT NOT NULL
+      )
+    `);
 
     this.db.run(`
       CREATE TABLE IF NOT EXISTS memory_history (
@@ -249,13 +282,34 @@ export class MemoryStore {
     // case-insensitively, so this makes exact-key lookups agree with it.
     const existing = this.db
       .query(
-        `SELECT id, value, category, importance, expires_at as expiresAt, COALESCE(source, 'USER_STATED') as source FROM memory_records WHERE key = ? COLLATE NOCASE`
+        `SELECT id, value, category, importance, expires_at as expiresAt, COALESCE(source, 'USER_STATED') as source, confidence FROM memory_records WHERE key = ? COLLATE NOCASE`
       )
       .get(input.key) as
-      | { id: string; value: string; category: MemoryCategory; importance: MemoryImportance; expiresAt: string | null; source: MemoryTrust }
+      | {
+          id: string;
+          value: string;
+          category: MemoryCategory;
+          importance: MemoryImportance;
+          expiresAt: string | null;
+          source: MemoryTrust;
+          confidence: number | null;
+        }
       | null;
     const createdAt = new Date().toISOString();
     const source = input.source ?? DEFAULT_TRUST;
+
+    // Continuous Memory/Profile: any save that ISN'T the background
+    // extraction pass is an explicit, in-the-moment decision (the user said
+    // it, the model actively chose to call SAVE_MEMORY, or JARVIS's own
+    // code derived it from a reliable source) — exactly the kind of
+    // override that should be allowed to re-establish a key the user had
+    // previously asked to forget. Clearing the tombstone here, unconditionally
+    // and before the upsert logic below, means every one of those paths
+    // "just works" with no special-casing; only a BACKGROUND_INFERRED write
+    // ever needs to consult `wasDeleted()` first (see MemoryExtractor).
+    if (source !== "BACKGROUND_INFERRED") {
+      this.db.query(`DELETE FROM memory_deletions WHERE key = ? COLLATE NOCASE`).run(input.key);
+    }
 
     // A caller updating one field (e.g. just correcting `value`) doesn't
     // repeat category/importance/expiresAt on every call — SaveMemoryTool's
@@ -268,6 +322,11 @@ export class MemoryStore {
     // only applies when there's no existing record to fall back to.
     const category = input.category ?? existing?.category ?? DEFAULT_CATEGORY;
     const importance = input.importance ?? existing?.importance ?? DEFAULT_IMPORTANCE;
+    // Same partial-update reasoning as category/importance above: a caller
+    // not passing confidence on a resave shouldn't silently erase a
+    // previously-recorded one. A brand-new record with none given stores
+    // null ("not recorded"), never a fabricated default.
+    const confidence = input.confidence !== undefined ? input.confidence : (existing?.confidence ?? null);
     // A category change needs its expiry recomputed from scratch (via
     // resolveExpiresAt, same as a brand-new record) rather than reusing
     // the old category's expiresAt as-is — otherwise resaving an
@@ -326,17 +385,27 @@ export class MemoryStore {
       if (input.embedding !== undefined) {
         this.db
           .query(
-            `UPDATE memory_records SET value = ?, created_at = ?, category = ?, importance = ?, expires_at = ?, source = ?, embedding = ? WHERE id = ?`
+            `UPDATE memory_records SET value = ?, created_at = ?, category = ?, importance = ?, expires_at = ?, source = ?, embedding = ?, confidence = ? WHERE id = ?`
           )
-          .run(input.value, createdAt, category, importance, expiresAt, source, serializeEmbedding(input.embedding), existing.id);
+          .run(
+            input.value,
+            createdAt,
+            category,
+            importance,
+            expiresAt,
+            source,
+            serializeEmbedding(input.embedding),
+            confidence,
+            existing.id
+          );
       } else {
         this.db
           .query(
-            `UPDATE memory_records SET value = ?, created_at = ?, category = ?, importance = ?, expires_at = ?, source = ? WHERE id = ?`
+            `UPDATE memory_records SET value = ?, created_at = ?, category = ?, importance = ?, expires_at = ?, source = ?, confidence = ? WHERE id = ?`
           )
-          .run(input.value, createdAt, category, importance, expiresAt, source, existing.id);
+          .run(input.value, createdAt, category, importance, expiresAt, source, confidence, existing.id);
       }
-      return { id: existing.id, key: input.key, value: input.value, createdAt, category, importance, expiresAt, source };
+      return { id: existing.id, key: input.key, value: input.value, createdAt, category, importance, expiresAt, source, confidence };
     }
 
     const record: MemoryRecord = {
@@ -348,10 +417,11 @@ export class MemoryStore {
       importance,
       expiresAt,
       source,
+      confidence,
     };
     this.db
       .query(
-        `INSERT INTO memory_records (id, key, value, created_at, category, importance, expires_at, source, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO memory_records (id, key, value, created_at, category, importance, expires_at, source, embedding, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         record.id,
@@ -362,7 +432,8 @@ export class MemoryStore {
         record.importance,
         record.expiresAt,
         record.source,
-        serializeEmbedding(input.embedding)
+        serializeEmbedding(input.embedding),
+        record.confidence
       );
 
     return record;
@@ -533,7 +604,9 @@ export class MemoryStore {
   }
 
   delete(id: string): boolean {
+    const record = this.get(id);
     const result = this.db.query(`DELETE FROM memory_records WHERE id = ?`).run(id);
+    if (result.changes > 0 && record) this.tombstone(record.key);
     return result.changes > 0;
   }
 
@@ -542,7 +615,32 @@ export class MemoryStore {
     // COLLATE NOCASE — see save()'s comment; a delete-by-key call using
     // different casing than the record was saved under must still find it.
     const result = this.db.query(`DELETE FROM memory_records WHERE key = ? COLLATE NOCASE`).run(key);
+    if (result.changes > 0) this.tombstone(key);
     return result.changes > 0;
+  }
+
+  /**
+   * Records that `key` was just explicitly deleted — see `memory_deletions`'
+   * own doc comment on the CREATE TABLE above. "INSERT OR REPLACE" so only
+   * the latest delete time for a key is ever kept; there's nothing useful
+   * about preserving older tombstones for the same key.
+   */
+  private tombstone(key: string): void {
+    this.db.query(`INSERT OR REPLACE INTO memory_deletions (key, deleted_at) VALUES (?, ?)`).run(key, new Date().toISOString());
+  }
+
+  /**
+   * True if `key` was explicitly deleted and hasn't been explicitly
+   * re-saved since (any non-BACKGROUND_INFERRED `save()` call clears the
+   * tombstone — see `save()`'s own comment). Consulted only by the
+   * Continuous Memory background extraction pass (`MemoryExtractor`)
+   * before it writes a BACKGROUND_INFERRED fact, so an explicit user
+   * deletion always wins over the background pass still seeing the old
+   * fact mentioned in raw conversation text.
+   */
+  wasDeleted(key: string): boolean {
+    const row = this.db.query(`SELECT 1 FROM memory_deletions WHERE key = ? COLLATE NOCASE`).get(key);
+    return row !== null;
   }
 
   close(): void {

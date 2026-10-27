@@ -14,6 +14,7 @@ import { LockdownService } from "@/core/lockdown/LockdownService";
 import { ToolResultCache } from "@/core/cache/ToolResultCache";
 import { parseQuarantinedToolResult } from "@/core/orchestrator/toolResultQuarantine";
 import { ConfirmationService } from "@/core/confirmation/ConfirmationService";
+import type { MemoryExtractorLike } from "@/memory/MemoryExtractor";
 
 /** Scripted mock brain: returns queued responses in order, one per call. */
 class ScriptedBrain implements Brain {
@@ -67,6 +68,7 @@ function setup(
     toolResultCache?: ToolResultCache;
     confirmationService?: ConfirmationService;
     embeddingsClient?: { embed(text: string): Promise<number[]> };
+    memoryExtractor?: MemoryExtractorLike;
   } = {}
 ) {
   const eventBus = new EventBus();
@@ -87,6 +89,7 @@ function setup(
     toolResultCache: options.toolResultCache,
     confirmationService: options.confirmationService,
     embeddingsClient: options.embeddingsClient,
+    memoryExtractor: options.memoryExtractor,
   });
   return { orchestrator, conversation, eventBus, toolRegistry, permissionService };
 }
@@ -1432,6 +1435,69 @@ describe("Orchestrator READ-tool result caching", () => {
       await orchestrator.handleUserMessage("user-1", "do both");
 
       expect(maxConcurrent).toBe(1);
+    });
+  });
+
+  describe("Continuous Memory/Profile: background extraction hook", () => {
+    test("fires the memory extractor with the user message and final reply after a plain (no-tool-call) turn", async () => {
+      const brain = new ScriptedBrain([{ text: "Hello, sir.", toolCalls: [], stopReason: "end_turn" }]);
+      const calls: Array<{ userId: string; userMessage: string; assistantReply: string }> = [];
+      const memoryExtractor: MemoryExtractorLike = {
+        extractAndStore: (userId, userMessage, assistantReply) => {
+          calls.push({ userId, userMessage, assistantReply });
+        },
+      };
+      const { orchestrator } = setup(brain, [], { memoryExtractor });
+
+      const reply = await orchestrator.handleUserMessage("user-1", "hi there", undefined);
+
+      expect(reply).toBe("Hello, sir.");
+      expect(calls).toEqual([{ userId: "user-1", userMessage: "hi there", assistantReply: "Hello, sir." }]);
+    });
+
+    test("fires the memory extractor after a Fast Path turn too", async () => {
+      const readTool = makeEchoTool("GET_TIME");
+      const brain = new ScriptedBrain([{ text: "It's 3pm, sir.", toolCalls: [], stopReason: "end_turn" }]);
+      const calls: Array<{ userId: string; userMessage: string; assistantReply: string }> = [];
+      const memoryExtractor: MemoryExtractorLike = {
+        extractAndStore: (userId, userMessage, assistantReply) => {
+          calls.push({ userId, userMessage, assistantReply });
+        },
+      };
+      const { orchestrator } = setup(brain, [readTool], { memoryExtractor });
+
+      const reply = await orchestrator.handleUserMessage("user-1", "what time is it", undefined);
+
+      expect(reply).toBe("It's 3pm, sir.");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.userMessage).toBe("what time is it");
+      expect(calls[0]?.assistantReply).toBe("It's 3pm, sir.");
+    });
+
+    test("extraction failure never breaks or delays the user-facing reply", async () => {
+      const brain = new ScriptedBrain([{ text: "Hello, sir.", toolCalls: [], stopReason: "end_turn" }]);
+      const memoryExtractor: MemoryExtractorLike = {
+        extractAndStore: () => {
+          throw new Error("extraction blew up");
+        },
+      };
+      const { orchestrator } = setup(brain, [], { memoryExtractor });
+
+      // handleUserMessage must still resolve normally, synchronously-thrown
+      // extractor error and all — a background best-effort pass can never
+      // take down (or even be allowed to delay) the real reply.
+      const reply = await orchestrator.handleUserMessage("user-1", "hi there", undefined);
+
+      expect(reply).toBe("Hello, sir.");
+    });
+
+    test("omitting memoryExtractor behaves exactly as before (no background extraction at all)", async () => {
+      const brain = new ScriptedBrain([{ text: "Hello, sir.", toolCalls: [], stopReason: "end_turn" }]);
+      const { orchestrator } = setup(brain); // no memoryExtractor passed
+
+      const reply = await orchestrator.handleUserMessage("user-1", "hi there", undefined);
+
+      expect(reply).toBe("Hello, sir.");
     });
   });
 });

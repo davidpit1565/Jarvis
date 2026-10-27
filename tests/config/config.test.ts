@@ -227,6 +227,23 @@ describe("loadConfig", () => {
     expect(config.promptCachingEnabled).toBe(false);
   });
 
+  test("memoryExtractionEnabled defaults to true", () => {
+    const config = loadConfig();
+    expect(config.memoryExtractionEnabled).toBe(true);
+  });
+
+  test("JARVIS_MEMORY_EXTRACTION_ENABLED=false disables background memory extraction", () => {
+    process.env.JARVIS_MEMORY_EXTRACTION_ENABLED = "false";
+    const config = loadConfig();
+    expect(config.memoryExtractionEnabled).toBe(false);
+  });
+
+  test("an unrecognized JARVIS_MEMORY_EXTRACTION_ENABLED value is treated as enabled (fails safe to the default)", () => {
+    process.env.JARVIS_MEMORY_EXTRACTION_ENABLED = "nope";
+    const config = loadConfig();
+    expect(config.memoryExtractionEnabled).toBe(true);
+  });
+
   test("toolResultCacheTtlMs defaults to 60000", () => {
     const config = loadConfig();
     expect(config.toolResultCacheTtlMs).toBe(60_000);

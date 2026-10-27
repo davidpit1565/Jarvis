@@ -199,6 +199,17 @@ export interface JarvisConfig {
    * conversation, short enough that stale data is never surfaced for long.
    */
   toolResultCacheTtlMs: number;
+  /**
+   * Continuous Memory/Profile (JARVIS_MASTER_PLAN.md Phase 1): whether the
+   * background memory-extraction pass runs after each conversation turn.
+   * Defaults to true — on by default since it's fire-and-forget, best-
+   * effort, and already respects ZERO_COST_MODE/budget caps the same way
+   * every other Brain call does (see `MemoryExtractor`'s own doc comment).
+   * Set `JARVIS_MEMORY_EXTRACTION_ENABLED=false` to turn it off entirely
+   * (e.g. to eliminate the extra per-turn Brain call altogether, not just
+   * cap its cost).
+   */
+  memoryExtractionEnabled: boolean;
   port: number;
   memoryDbPath: string;
   /** Path to the SQLite database storing registered Face ID/Touch ID (WebAuthn) credentials. */
@@ -663,6 +674,8 @@ export function loadConfig(): JarvisConfig {
   if (toolResultCacheTtlMsRaw && (!Number.isInteger(toolResultCacheTtlMs) || toolResultCacheTtlMs < 0)) {
     throw new ConfigError("Invalid JARVIS_TOOL_RESULT_CACHE_TTL_MS: must be a non-negative integer");
   }
+  const memoryExtractionEnabledRaw = process.env.JARVIS_MEMORY_EXTRACTION_ENABLED?.trim().toLowerCase();
+  const memoryExtractionEnabled = memoryExtractionEnabledRaw !== "false";
   const port = Number(process.env.JARVIS_PORT ?? "4770");
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
   const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
@@ -983,6 +996,7 @@ export function loadConfig(): JarvisConfig {
     aiCircuitBreakerCooldownMs,
     aiCostDbPath,
     toolResultCacheTtlMs,
+    memoryExtractionEnabled,
     port,
     memoryDbPath,
     webauthnDbPath,
