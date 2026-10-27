@@ -885,7 +885,11 @@ export class Orchestrator {
     const timeoutMs = tool.timeoutMs ?? this.deps.localToolTimeoutMs ?? DEFAULT_LOCAL_TOOL_TIMEOUT_MS;
     let result: ToolResult;
     try {
-      result = await withLocalToolTimeout(tool.execute(toolCall.input, { userId, requestId }), tool.name, timeoutMs);
+      result = await withLocalToolTimeout(
+        tool.execute(toolCall.input, { userId, requestId, channel: this.deps.liveStateChannel ?? "chat" }),
+        tool.name,
+        timeoutMs
+      );
     } catch (error) {
       if (error instanceof LocalToolTimeoutError) {
         eventBus.emit("tool.timedOut", { toolName: tool.name, userId, timeoutMs });

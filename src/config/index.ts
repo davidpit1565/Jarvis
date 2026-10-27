@@ -365,6 +365,15 @@ export interface JarvisConfig {
    */
   telegramOwnerChatId?: string;
   /**
+   * The bot's own public @username (no leading @), used only to build a
+   * `https://t.me/<username>` deep link for OPEN_CHAT — lets a user on a
+   * different channel (SMS, a live call, the Mac voice agent) get a
+   * tappable/speakable link straight to this same bot's chat. Telegram
+   * doesn't expose this via the Bot API token itself, so it's a separate
+   * setting; unset simply means OPEN_CHAT can't produce a link yet.
+   */
+  telegramBotUsername?: string;
+  /**
    * Both required together to enable GET_WEATHER — a real, free (Open-Meteo,
    * no API key) current-weather lookup for one fixed location, since a
    * personal assistant only ever needs to know the weather where its one
@@ -883,6 +892,9 @@ export function loadConfig(): JarvisConfig {
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
   const telegramOwnerChatId = process.env.TELEGRAM_OWNER_CHAT_ID?.trim() || undefined;
+  // Accepts "@jarvis_bot" or "jarvis_bot" — strip a leading "@" so the
+  // t.me link built from it is never malformed (https://t.me/@name is wrong).
+  const telegramBotUsername = process.env.TELEGRAM_BOT_USERNAME?.trim().replace(/^@/, "") || undefined;
   // Same reasoning as twilioAllowOpenAccess above — an empty
   // TELEGRAM_ALLOWED_CHAT_IDS used to silently leave the bot open to
   // anyone who found and messaged it.
@@ -1104,6 +1116,7 @@ export function loadConfig(): JarvisConfig {
     telegramAllowedChatIds,
     telegramAllowOpenAccess,
     telegramOwnerChatId,
+    telegramBotUsername,
     weatherLatitude,
     weatherLongitude,
     newsRssUrl,
