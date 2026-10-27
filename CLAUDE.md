@@ -191,6 +191,30 @@ sessions/compaction. None of this is built yet unless a specific PR/commit is no
     system-level surfaces, plus general capabilities (weather, etc.) — his own framing:
     "like Siri, but David Intelligence instead of Apple Intelligence." This is the iPhone
     app phase (wishlist #8-11) at full scope, not a smaller subset.
+24. **Specific, concrete example of the humor/tone he wants** (2026-10-27, from a demo
+    video he watched): JARVIS reading his calendar should editorialize lightly on vague
+    entries — e.g. an event just labeled "Busy" deserves a dry remark ("whoever titled
+    that slot 'Busy' deserves a medal for descriptive precision"), not a flat readout.
+    This is a specific instance of the general personality/tone work (`systemPrompt.ts`,
+    see PR #148) — worth checking in real use whether the existing tone guidance already
+    produces this kind of remark, or whether the system prompt needs a more concrete nudge
+    toward noticing and commenting on oddities in retrieved data, not just answering it.
+25. **Voice should adapt to match his own speaking style over time, respectfully** — not
+    a fixed personality, but JARVIS "training itself" on his tone/vocabulary/speaking
+    style through ordinary conversation (the continuous-memory extraction pipeline,
+    `MemoryExtractor`, is the natural mechanism — a standing "communication style" memory
+    category/preference, not a new subsystem). He was explicit that this must stay
+    respectful/assistant-appropriate — mirroring his style, not literally imitating him
+    or losing the "sir"/"אדוני" formality.
+26. **Found a real, relevant product while browsing** (2026-10-27): **Dessa**, by Block
+    (Jack Dorsey's company) — `block.xyz/dessa`, "the most authentic full-duplex speech
+    model ever built," trained on real two-person human conversation audio specifically
+    for sarcasm, natural pausing, breathing, and accents (shown handling an "AI
+    receptionist"/"AI sales calls" use case). **This is directly relevant to his explicit
+    "sound genuinely human, like ChatGPT voice mode" goal (wishlist #21)** — but it's
+    waitlist-only, not a released/accessible API as of this writing. Worth periodically
+    checking if it opens up, but not something to integrate today; flagging so it isn't
+    forgotten, not as an action item yet.
 
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
