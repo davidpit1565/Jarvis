@@ -316,6 +316,32 @@ if this is ever revisited — just a one-line discipline (keep model files off t
 Worth a quick re-check only if BitNet (or something similar) ships a materially larger context
 window in a future release — not something to schedule as a project today.
 
+## Added: global keyboard shortcut for "look at my screen" (2026-10-27, not yet built on a real Mac)
+
+David wanted a keyboard trigger, in addition to saying "Hey Jarvis," for the screen-vision
+feature being built concurrently (the `LOOK_AT_SCREEN` device tool + orchestrator vision wiring
+— a separate piece of work, not touched here). Added `agents/imac/JarvisAgent/Sources/
+JarvisAgent/Voice/GlobalHotkeyListener.swift`, registered alongside `WakeWordListener` in
+`main.swift`. **Chosen shortcut: Control+Option+J** ("J" for JARVIS) — picked for being a
+rare chord nothing in stock macOS or common apps binds globally (unlike Cmd-based combos,
+where most real collisions live) and for using a mnemonic letter key rather than an
+unmemorable function key. It's a single named constant
+(`GlobalHotkeyListener.modifierFlags`/`keyCodeJ`) specifically so it's a one-line change once
+David tries it for real. On trigger, it sends the exact same `voice.transcript` message
+`WakeWordListener` already sends for a spoken command (via the existing
+`JarvisAgentApp.sendVoiceTranscript`, reused rather than duplicated), with a fixed stand-in
+phrase ("Look at my screen and tell me what you think.") in place of a live transcription —
+functionally identical to speaking "Hey Jarvis, look at my screen." Uses
+`NSEvent.addGlobalMonitorForEvents(matching: .keyDown)`, which needs the same Accessibility
+trust this Agent already requests at launch for `ClickElementTool`/`TypeText` — no new
+permission to explain to David.
+
+**Same standing caveat as every other Swift Mac-agent feature so far: never compiled or run
+on a real Mac** — no Xcode/macOS toolchain in this sandbox. Written and reviewed by hand
+against `WakeWordListener.swift`'s existing conventions, not verified end to end. Revisit the
+exact chord once David actually tries it on his real keyboard and can say whether Control+
+Option+J collides with something else he uses.
+
 ## Architecture decision (2026-10-27): hybrid Fly + Mac split, and Claude Code via subscription not API
 
 David proposed, and this is now the target architecture: **Fly.io stays the light, always-on
@@ -645,3 +671,383 @@ YouTube awareness of his own channel:
   (`GET /calendar/oauth/start`, choosing the same account again) to pick up the new scopes
   — same re-link precedent as the earlier Canva `design:content:read` scope bump. Gmail's
   own scopes were not touched — it already had full read + send access.
+
+## Real formatted documents, not just checklists (2026-10-27)
+
+Per David asking for "real documents like you prepare for me," JARVIS can now produce an
+actual formatted Google Doc — a title plus one or more sections, each with an optional real
+heading (`HEADING_1` named style), optional prose paragraphs, and an optional real bullet
+list (`BULLET_DISC_CIRCLE_SQUARE`, not the checkbox preset `createChecklist` uses) — not just
+`createChecklist`'s narrow flat checkbox list. New `GoogleDocsClient.createDocument(title,
+sections, account?)` (same file/class as `createChecklist`, same shared OAuth plumbing) and a
+new `CREATE_DOCUMENT` tool (`src/tools/drive/CreateDocumentTool.ts`), registered in
+`src/index.ts` alongside `CREATE_CHECKLIST`/`CREATE_PRESENTATION` under the same
+`calendarEnabled`-gated Drive client. Capped at 50 sections / 300 headings+paragraphs+bullets
+combined (mirrors `createChecklist`'s own `MAX_ITEMS` reasoning). Implementation note: the
+whole document's text is built as one concatenated string and sent as a single `insertText`,
+with per-block `updateParagraphStyle`/`createParagraphBullets` style requests computed from
+precomputed offsets into that one string — all in one `batchUpdate` call — rather than
+inserting block-by-block, which avoids having to re-derive later blocks' indices as earlier
+inserts shift the document.
+
+## Second research pass: implementation nuances that make an agent "feel alive," not just featureful (2026-10-27)
+
+Follow-up to `JARVIS_COMPETITIVE_RESEARCH.md` (which covered big architectural patterns). This
+pass went narrower: the small, easy-to-miss behavioral/implementation details that separate an
+agent that *feels* like a real personal assistant from one that technically has similar features
+but reads as shallow or robotic. Scope: `WebSearch` only, multiple angles per topic, primary
+sources preferred where they exist. Each finding below is checked against JARVIS's actual code
+(not assumed) and marked accordingly. Confidence is stated per finding — most of this space is
+practitioner blogs and vendor write-ups, not controlled studies, which is itself a finding worth
+noting: rigorous research on "what makes an assistant feel personal" barely exists yet.
+
+### 1. Memory nuances
+
+- **Plain lexical/token-overlap duplicate detection is a known weak point, not just a JARVIS
+  shortcut.** Independent benchmark work (a May-2026 arXiv paper on memory conflict resolution,
+  tested against MemoryAgentBench's FactConsolidation task) found Mem0 itself — a well-funded,
+  purpose-built memory product — scores only 18% on single-hop fact consolidation, and the
+  temporal-knowledge-graph approach (Zep/Graphiti) scores just 7%; a much simpler
+  BM25-lexical-overlap baseline actually beats both at 48%. The paper's own proposed fix is
+  deterministic, timestamp-based aggregation rather than leaving conflict resolution to an LLM
+  mid-retrieval. **Confidence: documented/verified** (arXiv 2606.01435, alphaxiv.org/abs/2606.01435).
+  **JARVIS has it, partially**: `MemoryExtractor.findNearDuplicateKey` already does exactly this
+  kind of token-overlap near-duplicate detection (threshold 0.7) before writing a background
+  fact, and `MemoryStore`'s trust-rank system (`TRUST_RANK`, `getConflicts()`) already refuses a
+  lower-trust write that would downgrade a higher-trust existing fact, logging the rejection
+  rather than silently applying or silently dropping it. What's genuinely missing against the
+  state of the art above: no timestamp-aware "this value is more recent, not just different"
+  reasoning — a same-trust-rank fact overwrites unconditionally on `valueChanged`, with no check
+  for whether the new statement is actually describing a *later* state of the world (e.g. "I
+  moved to Berlin" after "I live in Tel Aviv" should supersede, but a contradiction from an older
+  message replayed out of order could wrongly overwrite the newer truth). Worth flagging, not
+  worth rebuilding now — this is a genuinely open research problem per the same paper, not a
+  solved pattern JARVIS is simply missing.
+
+- **Zep/Graphiti's "mark superseded, don't delete" pattern is the more honest middle ground
+  between silent overwrite and silent data loss.** Rather than replacing a fact outright, the
+  system keeps the old fact in the graph but flags it invalid/superseded, preserving history for
+  audit or for cases where the "update" turns out to be wrong. **Confidence: one third-party
+  write-up's description of Zep's behavior, not read from Zep's own docs — treat as likely-true,
+  not verified firsthand.** **JARVIS already has the substance of this, independently arrived
+  at**: `MemoryStore.memory_history` logs every old→new change (including rejected/flagged ones)
+  before the upsert happens, and `getHistory(key)` / `getConflicts(key)` expose it — so nothing
+  is silently lost even though the live row is overwritten. The one gap: `memory_history` entries
+  aren't themselves ever surfaced back to the model in normal conversation (e.g. "you told me X
+  before, now you're saying Y — which is current?") — today a contradiction is adjudicated
+  entirely by trust rank with no in-conversation flag to the user when it's genuinely ambiguous
+  (same trust rank, both plausible). Partially has it.
+
+- **A real failure mode specifically in short-utterance/no-negation updates ("STALE" problem):**
+  a later statement that implicitly invalidates an earlier one without using negation words (no
+  "actually," no "not anymore") is measurably harder for both deterministic and LLM-based
+  resolvers to catch than an explicit correction. **Confidence: documented** (same May-2026 paper
+  introduces a benchmark named STALE specifically for this). **JARVIS**: lacks this entirely —
+  `MemoryExtractor`'s extraction prompt instructs the model to treat an explicit, stated
+  correction correctly, but has no special handling for an implicit supersession stated as a
+  plain new fact with no correction language at all (e.g. user mentions a new job in passing
+  without saying "I used to work at X"). Reasonable to leave as-is for now; flagging because it's
+  a real, named, current research gap rather than something anyone has actually solved.
+
+- **The episodic/semantic/procedural distinction is real but the boundary is genuinely blurry in
+  practice, not just a JARVIS implementation gap.** Even Endel Tulving, who originated the
+  split, argued the two systems (episodic: what happened; semantic: durable facts) are
+  interdependent — practitioners report the same thing operationally: deciding whether "the user
+  prefers Python" should be stored as a semantic fact or as a dated episodic log entry ("on March
+  4 the user said they prefer Python") is a real design choice with no clean answer, not an
+  oversight. **Confidence: the Tulving point is a verifiable academic claim; the "practitioners
+  report this operationally" framing is an inference from how several memory-vendor write-ups
+  describe their own extraction logic, not a direct quote from any one source.**
+  **JARVIS honestly only builds semantic memory today** (`MemoryStore`'s categories — fact,
+  preference, project, decision, action, task, temporary, uncertain — are all "durable
+  fact/state about the user," not a timestamped experience log) plus a *separate*, narrow slice
+  of procedural memory (`BehaviorCorrectionStore` — "how JARVIS should act in a given tool
+  context," which is precisely the procedural-memory definition multiple sources used). There is
+  no true episodic memory (a chronological "what happened and when" log distinct from the
+  fact store) — `search_conversation_history` searches raw conversation transcripts, which is
+  closer to a flat log than a scored, reflectable episodic memory (no recency/importance/
+  relevance scoring, no periodic "reflection" pass synthesizing episodes into higher-level
+  insights the way Stanford's Generative Agents pattern does). This is a real, honestly-missing
+  category, not partially built — worth naming explicitly since "has memory" claims can otherwise
+  paper over this gap.
+
+- **Importance/significance scoring for background-extracted facts is usually self-reported by
+  the same LLM call that extracts the fact (not a separate rule-based score), and this is widely
+  considered to work reasonably well** — Stanford's Generative Agents work (the most-cited
+  reference point across every source checked) has the model itself rate each candidate memory's
+  "poignancy" 1-10 in the same call, reasoning that language models already encode an implicit
+  sense of what's mundane versus significant from training data. **Confidence: documented**
+  (Generative Agents paper, widely cited secondarily). **JARVIS already does exactly this** —
+  `MemoryExtractor`'s `BASE_EXTRACTION_PROMPT` asks the same extraction call to self-report both
+  `importance` (1-5) and `confidence` (0-1) per fact, not a separate scoring pass. Has it.
+
+- **Without active filtering, a persona/memory store "balloons with noise," actively hurting
+  retrieval quality and cost** — one persona-memory paper's explicit framing is that users
+  expect an assistant to retain career, relationships, values, and major life events, not casual
+  asides, and that failing to filter those out measurably degrades retrieval. **Confidence: one
+  paper's stated framing, not independently cross-verified.** **JARVIS has real filtering
+  already**: the extraction prompt explicitly instructs "skip small talk, pleasantries, and
+  anything with no lasting value," and `DEFAULT_QUERY_LIMIT` bounds every read path. What's
+  *not* present is any measurement of whether this filtering is actually working in practice
+  (no logged false-positive/noise rate) — impossible to verify without real usage data, so
+  flagging as "mechanism exists, effectiveness unverified" rather than a gap to fix.
+
+### 2. Conversational nuances
+
+- **"One good clarifying question beats three mediocre ones," and the sharpest, most concrete
+  evidence is about a very specific failure shape: a loop where the assistant asks about a new
+  ambiguity every turn and the user ends up re-explaining their original intent multiple times**
+  — one practitioner's claim (uncorroborated elsewhere) is that this repeated-restatement pattern
+  measurably tanks satisfaction scores. A 2024 benchmark paper (ClarQ-LLM) found the opposite
+  failure mode also real: skipping clarification entirely sometimes produces a *better*
+  experience than asking, because the user just gets an answer faster — clarifying is not a free
+  action with no cost even when it resolves genuine ambiguity. **Confidence: mixed — the
+  benchmark paper's finding is documented research; the "three mediocre questions" framing and
+  satisfaction-score claim is one blog's opinion, unverified.** A 2021 arXiv paper independently
+  confirms the general risk ("overly inquisitive behavior" degrading UX) without giving a
+  specific threshold. **JARVIS already has it, and arguably has it unusually well worked out**:
+  `systemPrompt.ts`'s clarification section is explicitly built around this exact tradeoff — ask
+  at most one short question, only when readings would lead to materially different outcomes,
+  never ask about something "trivial or already resolved," never repeat a resolved ambiguity in
+  the same thread, and (going further than anything found in this research) promote a
+  *repeated* clarification pattern across separate conversations into a saved preference so the
+  question stops being asked at all. This is more sophisticated than what any source described
+  as current practice elsewhere.
+
+- **Agents that silently assume, hedge, or refuse instead of asking are a documented counter-
+  failure mode** — not every product err toward asking; some vendor material specifically argues
+  the opposite problem (never clarifying, guessing wrong, or flatly refusing) is just as common
+  and just as damaging. **Confidence: stated in practitioner/vendor material, directionally
+  plausible but not independently measured.** **JARVIS has explicit guardrails against this
+  too**: the system prompt's "never fabricate an answer that sounds plausible" rule and the
+  separate "confirm-back" tier for garbled/misheard input (distinct from the
+  multiple-readings tier) both exist specifically to avoid silently guessing. Has it.
+
+- **No source found documents a *specific, concrete* technique for "sounding natural while being
+  proactive" beyond general tone-consistency advice** — this entire sub-area (how to phrase an
+  unprompted check-in so it doesn't read as a canned script) turned out to be the single weakest-
+  evidenced area in this whole research pass; most "be more natural" guidance is generic and not
+  specific to proactive/unprompted messages as opposed to replies. Flagging the absence itself as
+  a finding: this is a real, still-open design problem for JARVIS's device-announce and
+  automations features (wishlist #19), not something to assume is already solved by copying a
+  pattern from elsewhere.
+
+### 3. Tool-use nuances
+
+- **"Filler tool calls" (calling a tool that contributes nothing, as diligence theater rather
+  than to actually get information) is a named, measured failure mode, and training — not
+  prompting — is what actually fixes it.** A cited 2025 Alibaba study on their "Metis" agent
+  reported redundant tool invocations as high as 98% of calls in an untrained baseline, dropping
+  to 2% after targeted training, with task accuracy improving alongside the drop (fewer calls,
+  better results, not a tradeoff). Separately, a NeurIPS 2026 poster ("LLM Agents Already Know
+  When to Call Tools") found whether a tool is actually necessary is linearly decodable from the
+  model's own pre-generation internal representation (AUROC 0.89-0.96 across six models) —
+  meaning models often "know" a tool call is unnecessary before making it anyway, and a cheap
+  probe-and-prefill technique cut tool calls 48% with only 1.7% accuracy loss. **Confidence:
+  documented research, though the 98%→2% figure is the blog's citation of the study, not
+  independently re-verified against Alibaba's original paper.** **JARVIS**: has no mechanism for
+  this at all — the system prompt only gives qualitative guidance ("never call a tool whose
+  actual purpose doesn't match what you're looking for") and relies entirely on the underlying
+  model's own judgment, with no probe, no logged filler-call rate, no training signal. Given
+  JARVIS's wishlist #14 ambition (~1000 tools, already past the ~67-tool/20-tools-per-request
+  comfort zone the competitive-research doc already flagged), unnecessary tool calls will likely
+  get more frequent and more costly as the tool count grows — worth tracking per-conversation
+  "tool called but result unused" rate as a cheap diagnostic once usage volume justifies it, not
+  something to build infrastructure for today.
+
+- **Graceful degradation on tool failure follows a fairly consistent tiered pattern across
+  sources: try an equivalent alternative tool → degrade to a usable-but-weaker substitute,
+  disclosed as such → escalate to a human/ask the user, with a circuit breaker cutting off a
+  repeatedly-failing dependency rather than hammering it.** The one point multiple sources
+  converge on explicitly: a degraded response should say so ("I couldn't check your calendar
+  live, here's what I last knew") rather than silently presenting a worse answer as if it were
+  the real one. **Confidence: consistent across several vendor/architecture sources (AWS's own
+  agentic-AI Well-Architected guidance among them), but these are design-pattern write-ups, not
+  measured outcomes.** **JARVIS has partial infrastructure for this, not the full pattern**:
+  `Orchestrator.ts` already catches tool-execution errors and returns a structured message to the
+  model (not a raw stack trace or silent empty result) in multiple places, and `AIRouter`'s
+  provider fallback/circuit-breaker machinery already does exactly the "equivalent alternative →
+  degrade → escalate" shape, but for *brain provider* failures, not for failures of JARVIS's own
+  action tools (calendar, Drive, GitHub, etc.) — there's no evidence of a standing rule that a
+  failed action tool must be disclosed as degraded-not-silent versus the model simply being
+  trusted to phrase the error reasonably turn by turn. Worth a light pass (a shared "this result
+  may be stale/incomplete, say so" convention for action-tool error returns) rather than new
+  infrastructure.
+
+- **Long-running background task UX converges on explicit state machines (running/completed/
+  failed, health-check heartbeats) plus re-engagement on completion, not silence until done.**
+  One concrete numeric point worth internalizing: a task with a 99%-per-minute survival
+  probability still only has a ~55% chance of completing uninterrupted over 60 minutes — the
+  practical implication is that any background task expected to run that long needs real
+  checkpointing/progress reporting, not just a single "done" callback at the end. **Confidence:
+  the 99%/55% figure is a vendor blog's own stated math (0.99^60 ≈ 0.547, which checks out
+  arithmetically), not an empirically measured completion rate — treat the specific number as an
+  illustration of compounding risk, not a measured JARVIS-relevant statistic.** No source
+  specifically documents how Devin or Claude Code themselves solve "the user forgets what they
+  asked" during a long background task — that remains an unverified gap in available public
+  material, not a confirmed pattern to copy. **JARVIS already has the state-machine half of
+  this**: `AgentTaskStateMachine`'s full PENDING→PLANNING→EXECUTING→VERIFYING→COMPLETED/FAILED/
+  RETRYING/RECOVERING/WAITING lifecycle plus `goalProgressNote.ts` surfacing active goals back
+  into the system prompt at the start of later, separate conversations is a stronger version of
+  "re-engage on completion" than anything concretely documented in this research — it proactively
+  reminds the user of in-flight goals unprompted, not just on-demand status checks. Has it.
+
+### 4. Trust/reliability nuances
+
+- **"Predictability, explainability, reversibility" is repeatedly cited as the three-part basis
+  of agent trust, but no source traced this to an actual named HCI study — every mention found
+  was a secondary reference with no citation.** **Confidence: directionally plausible, structurally
+  consistent with other sourced findings below, but unverified as a specific research claim — flag
+  it as "widely repeated practitioner framing," not settled science.**
+
+- **"Show reasoning, not just output" is the most concretely sourced trust pattern found**: one
+  guide's specific example is an agent that reschedules a meeting with no visible account of
+  which conflicts it weighed or why it picked one day over another — when the choice turns out
+  wrong, the user has no way to correct it efficiently because there's nothing to point to.
+  Salesforce's Agentforce Observability is cited as a real shipped example: logging inputs,
+  reasoning steps taken, and guardrails triggered into one traceable record. **Confidence: the
+  Salesforce example is the single most concrete, attributable claim out of this whole trust
+  topic (a named shipped product behavior), the rest is practitioner-blog opinion.**
+  **JARVIS has meaningful infrastructure here but doesn't consistently surface it conversationally**:
+  `ToolAuditLog` (referenced throughout the memory/correction code above) and
+  `MemoryStore.getHistory`/`getConflicts` already keep the "why" trail server-side, and
+  `BehaviorCorrectionStore` exists specifically so a past correction can change future behavior
+  with an attributable reason. What's missing: no evidence the model is prompted to *proactively
+  narrate* its reasoning for a judgment call in the reply itself (e.g. "I picked Thursday because
+  your other two options conflicted with X") the way the Salesforce example implies — today's
+  system prompt's judgment-call guidance (the goal-engine "ask before guessing" section) covers
+  *asking* before a judgment call, not *narrating the reasoning* after making one that didn't need
+  asking. Partially has it — worth a small systemPrompt.ts addition, not new infrastructure.
+
+- **"Intent preview" (show the planned action before it runs, with proceed/edit/take-over
+  options) is specifically called "non-negotiable" by one source for any action that's
+  irreversible, financial (any amount), shares data externally, or is hard to undo** —
+  essentially a stricter, UI-pattern restatement of confirm-before-acting. **Confidence:
+  practitioner opinion piece, not measured, but directionally consistent with the
+  CONFIRM/DANGEROUS tiering already in JARVIS's own permission model.** **JARVIS already has the
+  substance of this via `ConfirmationService` and the CONFIRM/DANGEROUS tool tiers** referenced
+  throughout this doc's own wishlist notes — the one gap against the "intent preview" framing
+  specifically is "edit" as a third option alongside approve/deny: it's unclear from the code
+  surfaced in this pass whether a user can adjust a pending confirmable action's parameters
+  (e.g. "send it, but to a different time") rather than only approve-as-is or reject-and-restate.
+  Not verified either way in this pass — worth a direct code check before claiming it's missing.
+
+### 5. Proactivity nuances: done right vs. wrong
+
+- **The Humane AI Pin and Rabbit R1 are well-documented hardware/product failures, but this
+  research did NOT find evidence that proactive/unsolicited notifications specifically were the
+  named cause of backlash for either** — the documented complaints are about basic reliability
+  (slow, wrong, unfinished) and unclear product-market fit, not about being too proactive or
+  interruptive. **Confidence: the failures themselves are well-documented (Humane sold its
+  assets to HP for $116M after shutting down Pin servers in Feb 2025; Rabbit's own founder
+  disclosed only ~5,000 daily active users); the specific causal link to proactivity-as-such is
+  NOT established by this research** — worth not overstating this connection if it comes up
+  again; these are cautionary tales about reliability and value proposition, not proactivity
+  design specifically.
+
+- **Google Now's predictive cards are the best-documented real case of proactivity triggering a
+  "creepy" reaction, and the trigger was consistently topic-sensitivity, not frequency or
+  timing**: the two concrete complaints found both involve *inferred-but-unstated-relationship*
+  categories — a drive-time alert to a specific church (reported as "creepy" specifically because
+  religion is normally an off-limits inferred category) and a general discomfort with how much
+  the system clearly knew without being told. **Confidence: documented via contemporary
+  (2013-2014) tech-press pieces, genuinely primary accounts, not secondary summaries.** The
+  actionable, non-obvious implication: proactive surfacing's riskiest trigger for "creepy" isn't
+  volume or timing, it's *demonstrating unstated inference about sensitive categories* (religion,
+  relationships, health, politics) even when the inference is accurate — this is a different axis
+  from the "urgency/channel" caution JARVIS's own Proactive Watcher design already recorded above.
+  **JARVIS's existing design already defends against the adjacent risk (interruption/urgency)
+  but not explicitly this one** — the Watcher design note above already restricts channel
+  escalation to explicit user-configured rules, but has no equivalent rule about avoiding
+  visible inference-display for sensitive categories specifically. Worth a one-line addition to
+  the Watcher's eventual design doc when it's built, not urgent.
+
+- **No direct evidence found of Replika/Woebot facing user backlash specifically for over-
+  frequent or clingy proactive check-ins** — searches turned up only vendor help-center material
+  (Replika's "report a hostile or irrelevant message" flow, Woebot's user-configured daily
+  check-in time). **Confidence: absence of evidence, not evidence of absence** — real complaints
+  likely exist in app-store reviews or Reddit threads that weren't reachable through this
+  research's search tool; flagging as an open question rather than a settled "they got it right"
+  finding. The one structurally relevant detail found: Woebot's check-in time is explicitly
+  user-set, not system-chosen — a small, concrete point in favor of JARVIS's existing design
+  choice (wishlist #19's automations are explicitly user-configured, not JARVIS deciding when to
+  proactively start a conversation on its own).
+
+### 6. Other notable findings
+
+- **The research literature on "what makes an AI assistant feel like a real personal agent" is
+  itself thin and mostly non-rigorous** — repeated across every search angle in this pass, the
+  strongest-evidenced material was either (a) narrow, specific technical benchmarks on one
+  sub-problem (memory conflict resolution, tool-call necessity), or (b) vendor/practitioner blog
+  opinion with no controlled measurement. This is itself worth recording: there is no canonical
+  "feels alive" literature to simply go read and implement — most of the genuinely useful,
+  checkable claims in this whole pass come from narrow technical papers on adjacent problems
+  (memory benchmarks, tool-call decoding), and generalizing from "a model can tell when a tool
+  call is unnecessary" to "therefore the product feels alive" is this report's own inference, not
+  a claim any source made directly.
+
+- **A genuinely non-obvious cross-cutting pattern across memory, trust, and tool-use findings
+  above: every area independently converged on "disclose degradation/uncertainty explicitly
+  rather than silently presenting a worse answer as if it were the normal one"** — stale cached
+  data, a filler tool call, a rejected lower-trust memory write, a guessed interpretation. JARVIS
+  already does this in several of these specific spots (memory conflict logging, the "never
+  fabricate" system-prompt rule, the confirm-back tier for garbled input) but has never stated it
+  as one unified principle anywhere in `systemPrompt.ts` — e.g. there's no explicit instruction
+  covering "if a tool result is partial/stale/degraded, say so in the reply, don't just answer
+  from what little you got as if it were complete." Worth considering as one small, general
+  addition to the system prompt rather than relying on it falling out correctly from several
+  separate, narrower rules — low-risk, high-leverage if David wants a concrete next small
+  improvement rather than a new feature.
+
+## Built (2026-10-27): interim narration on Telegram, casual-confirmation understanding, translation
+
+David asked for three related conversational UX fixes (Hebrew, paraphrased): (1) understand
+casual/slang confirmations ("אני זורם," "אמן," "I'm in") as agreement, not literally; (2) translate
+words/phrases on the spot and be able to say "send that to my Telegram"; (3) stop feeling slow/silent
+during tool calls, especially on Telegram.
+
+**Root cause of (3), confirmed in code**: `Orchestrator.handleUserMessage`'s tool loop
+(`src/core/orchestrator/Orchestrator.ts`) records any text the model produces alongside a tool call
+(e.g. "checking now") into conversation history via `addAssistantMessage`, but never delivered it to
+the user until the whole loop finished — only the final reply ever reached the caller.
+`TelegramGateway.ts`'s call site passed no callback at all, so a Telegram user saw nothing until every
+tool iteration (potentially several, with real network calls) completed. **Fix**: a new optional
+`onInterimMessage?: (text: string) => void` parameter on `handleUserMessage`, fired once per iteration
+with non-empty pre-tool-call text, right when that iteration's response arrives and before its tools
+run. `TelegramGateway.ts`'s call site now passes this, sending each interim narration as its own real
+Telegram message immediately (fire-and-forget; a failed interim send is logged, never blocks the real
+reply). Backward compatible — every other caller (web chat's `onTextDelta`, voice, AgentCore, tests)
+is unaffected since the parameter is optional and additive. A new `systemPrompt.ts` addition tells the
+model to say a short, natural acknowledgment before a tool call that will take real time, without
+forcing one before trivial/instant actions. Tests: `tests/integration/orchestrator.test.ts` (interim
+callback fires once, before tool execution, final return value unaffected) and
+`tests/telegram/TelegramGateway.test.ts` (interim message sent as its own message, followed by the
+final reply).
+
+**Casual-confirmation understanding (1)**: added directly to `systemPrompt.ts` next to the existing
+confirm-back section — concrete Hebrew/English examples ("אני זורם" = I'm in, "אמן" = enthusiastic
+agreement, "I'm in"/"got you"/"on it" = confirmation), explicitly framed as examples of a pattern, not
+an exhaustive list, falling back to the existing confirm-back behavior for genuine ambiguity.
+**`BehaviorCorrectionStore` was checked and is NOT a clean fit for this**, so no code change was made
+there: `MemoryExtractor.ts`'s correction-detection pass only ever looks for a correction when a
+`priorAction` (a specific prior tool call) exists — it's scoped to "the user is correcting HOW I just
+acted," not general terminology/phrase interpretation that can come up with no tool call involved at
+all (e.g. JARVIS just misreading a casual reply in plain conversation). Forcing a terminology mapping
+into that shape would mean it only ever gets learned in the narrow case where a tool call happened to
+precede it. The general systemPrompt guidance above is the real fix; in the (overlapping but
+different) case where a misread casual confirmation actually did follow a tool call and the user then
+corrects the resulting action, the existing correction-learning pipeline already covers it with no
+further code changes needed.
+
+**Translation (4)**: no new tool/client — `systemPrompt.ts` now says explicitly to answer translation
+requests directly in conversation rather than deflecting to an external translator.
+
+**Send-to-Telegram (part of 2 and 3)**: the task spec called for a new `SEND_TELEGRAM_MESSAGE` tool,
+but `src/tools/telegram/NotifyUserTool.ts` (`NOTIFY_USER`, already registered in `src/index.ts`,
+SAFE_ACTION) turned out to already do exactly this — "sends a text notification to the user's phone
+via Telegram, regardless of which channel this conversation is happening on," using the same
+`telegramOwnerChatId` and `TelegramGateway.sendMessage` the spec described building. **No new tool was
+added** to avoid a near-duplicate; `systemPrompt.ts`'s new translation note tells the model to use
+`NOTIFY_USER` when asked to send a translation (or anything else) to Telegram. If a future need
+genuinely diverges from `NOTIFY_USER`'s shape, build on top of it rather than starting a third
+telegram-send path.

@@ -123,6 +123,7 @@ import { GoogleSlidesClient } from "@/drive/GoogleSlidesClient";
 import { GoogleDocsClient } from "@/drive/GoogleDocsClient";
 import { createCreatePresentationTool } from "@/tools/drive/CreatePresentationTool";
 import { createCreateChecklistTool } from "@/tools/drive/CreateChecklistTool";
+import { createCreateDocumentTool } from "@/tools/drive/CreateDocumentTool";
 import { createFindDriveFileTool } from "@/tools/drive/FindDriveFileTool";
 import { createSearchDriveFilesTool } from "@/tools/drive/SearchDriveFilesTool";
 import { YouTubeClient } from "@/youtube/YouTubeClient";
@@ -387,6 +388,7 @@ function main() {
     const docsClient = new GoogleDocsClient(driveClient);
     toolRegistry.registerTool(createCreatePresentationTool(slidesClient));
     toolRegistry.registerTool(createCreateChecklistTool(docsClient));
+    toolRegistry.registerTool(createCreateDocumentTool(docsClient));
     toolRegistry.registerTool(createFindDriveFileTool(driveClient));
     toolRegistry.registerTool(createSearchDriveFilesTool(driveClient));
   }

@@ -12,6 +12,22 @@ function makeStubOrchestrator(handle: (userId: string, message: string) => Promi
   return { handleUserMessage: handle } as unknown as Orchestrator;
 }
 
+/** A stub orchestrator whose handleUserMessage fires an interim message (the 5th arg) before resolving — simulates a real multi-iteration tool-calling turn. */
+function makeInterimStubOrchestrator(interimText: string, finalText: string): Orchestrator {
+  return {
+    handleUserMessage: async (
+      _userId: string,
+      _message: string,
+      _images?: unknown,
+      _onTextDelta?: unknown,
+      onInterimMessage?: (text: string) => void
+    ) => {
+      onInterimMessage?.(interimText);
+      return finalText;
+    },
+  } as unknown as Orchestrator;
+}
+
 function stubSendMessage(): { calls: Array<{ chatId: string; text: string }> } {
   const calls: Array<{ chatId: string; text: string }> = [];
   global.fetch = (async (url: string, init?: RequestInit) => {
@@ -33,6 +49,21 @@ describe("TelegramGateway.handleUpdate", () => {
     await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "hi" } });
 
     expect(calls).toEqual([{ chatId: "123", text: "Hello back" }]);
+  });
+
+  test("sends an interim narration as its own message immediately, followed by the final reply", async () => {
+    const { calls } = stubSendMessage();
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeInterimStubOrchestrator("בטח אדוני, בודק עכשיו", "Found it."),
+      userId: "local-user",
+    }));
+
+    await gateway.handleUpdate({ message: { chat: { id: 123 }, text: "what's the weather" } });
+
+    expect(calls).toEqual([
+      { chatId: "123", text: "בטח אדוני, בודק עכשיו" },
+      { chatId: "123", text: "Found it." },
+    ]);
   });
 
   test("rejects a chat not in the allowlist, without replying", async () => {
