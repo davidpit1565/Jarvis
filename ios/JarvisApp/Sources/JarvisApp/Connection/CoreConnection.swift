@@ -7,6 +7,17 @@
 
 import Foundation
 
+/// `@MainActor`-isolated because `JarvisConnectionManager` (the only
+/// conformer) is itself `@MainActor` and writes `@Published` properties
+/// directly inside these methods. `CoreConnection` is NOT `@MainActor` — it
+/// is driven by `URLSession`'s own delegate callbacks, which (per
+/// `connect()`'s `delegateQueue: nil`) arrive on a private background
+/// serial queue, not the main thread. Every call site in this file must
+/// therefore explicitly hop onto the main actor (`Task { @MainActor in ... }`)
+/// before calling through to `delegate` — never call a delegate method
+/// directly from a `URLSessionWebSocketDelegate` callback or from
+/// `receiveLoop`'s completion handler.
+@MainActor
 protocol CoreConnectionDelegate: AnyObject {
     func coreConnection(_ connection: CoreConnection, didReceive envelopeData: Data)
     func coreConnectionDidOpen(_ connection: CoreConnection)
@@ -17,7 +28,19 @@ protocol CoreConnectionDelegate: AnyObject {
 /// responsibilities to the Mac agent's class of the same name — see its
 /// doc comment. This class never exposes a way to send arbitrary/
 /// unvalidated data; callers always pass an already-constructed envelope.
-final class CoreConnection: NSObject {
+/// `@unchecked Sendable`: instances are captured by `weak self` inside the
+/// `Task { @MainActor in ... }` hops below (required so those closures can
+/// cross from the nonisolated `URLSession` delegate-queue context onto the
+/// main actor). All of this class's own mutable state (`session`, `task`,
+/// `reconnectAttempt`, `isStopped`) is only ever touched from the single
+/// background queue `URLSession(delegateQueue: nil)` created in `connect()`
+/// hands its callbacks to, plus `connect()`/`stop()`/`send(data:)` — which
+/// `JarvisConnectionManager` only ever calls from the main actor — so there
+/// is no actual concurrent mutation, just no way to express that constraint
+/// to the compiler without a real lock. `@unchecked` is an honest
+/// escape hatch for this specific delegate-bridging shape, not a blanket
+/// "trust me."
+final class CoreConnection: NSObject, @unchecked Sendable {
     weak var delegate: CoreConnectionDelegate?
 
     private let coreURL: URL
@@ -66,10 +89,16 @@ final class CoreConnection: NSObject {
             case .success(let message):
                 switch message {
                 case .data(let data):
-                    self.delegate?.coreConnection(self, didReceive: data)
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.delegate?.coreConnection(self, didReceive: data)
+                    }
                 case .string(let text):
                     if let data = text.data(using: .utf8) {
-                        self.delegate?.coreConnection(self, didReceive: data)
+                        Task { @MainActor [weak self] in
+                            guard let self else { return }
+                            self.delegate?.coreConnection(self, didReceive: data)
+                        }
                     }
                 @unknown default:
                     break
@@ -84,7 +113,10 @@ final class CoreConnection: NSObject {
 
     private func scheduleReconnect(after error: Error) {
         guard !isStopped else { return }
-        delegate?.coreConnectionDidClose(self, error: error)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.delegate?.coreConnectionDidClose(self, error: error)
+        }
 
         reconnectAttempt += 1
         let backoff = min(pow(2.0, Double(reconnectAttempt)), maxBackoffSeconds)
@@ -105,7 +137,10 @@ extension CoreConnection: URLSessionWebSocketDelegate {
     ) {
         Logger.log("WebSocket connected.")
         reconnectAttempt = 0
-        delegate?.coreConnectionDidOpen(self)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.delegate?.coreConnectionDidOpen(self)
+        }
     }
 
     func urlSession(
