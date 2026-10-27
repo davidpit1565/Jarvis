@@ -162,6 +162,12 @@ import { OpenMeteoClient } from "@/weather/OpenMeteoClient";
 import { createGetWeatherTool } from "@/tools/weather/GetWeatherTool";
 import { createGetWeatherForecastTool } from "@/tools/weather/GetWeatherForecastTool";
 import { RssNewsClient } from "@/news/RssNewsClient";
+import { createNewsWatchSources } from "@/news/newsWatchSources";
+import { WatcherStore } from "@/watcher/WatcherStore";
+import { pollWatchSources } from "@/watcher/pollWatchSources";
+import { createPollScheduler } from "@/watcher/scheduler";
+import { WatcherNotifier } from "@/watcher/WatcherNotifier";
+import { emptyWatcherChannelConfig } from "@/watcher/WatcherChannelRouter";
 import { createGetNewsTool } from "@/tools/news/GetNewsTool";
 import { createSearchNewsTool } from "@/tools/news/SearchNewsTool";
 import { isWeeklyDigestDue } from "@/digest/isWeeklyDigestDue";
@@ -507,11 +513,26 @@ function main() {
     toolRegistry.registerTool(createGetWeatherForecastTool(weatherClient));
   }
 
-  if (config.newsRssUrl) {
-    const newsClient = new RssNewsClient(config.newsRssUrl);
+  const newsClient = config.newsRssUrl ? new RssNewsClient(config.newsRssUrl) : undefined;
+  if (newsClient) {
     toolRegistry.registerTool(createGetNewsTool(newsClient));
     toolRegistry.registerTool(createSearchNewsTool(newsClient));
   }
+
+  // Proactive news-by-topic watching — the generalized Proactive Watcher's
+  // first non-GitHub source (CLAUDE.md "Approved for build: generalized
+  // Proactive Watcher"). Same opt-in-and-otherwise-inert posture as GitHub
+  // activity watching above: needs both a configured feed (newsClient) AND
+  // at least one watched topic, and the store is always constructed
+  // (cheap) so the context note always has something to read even before
+  // the poller below has run. Polling itself (newsWatcherScheduler) is set
+  // up further below, once telegramGateway/proactiveAnnouncer exist — an
+  // immediate push notification (when WATCHER_PUSH_NOTIFICATIONS_ENABLED)
+  // needs both.
+  const newsWatcherStore = new WatcherStore(config.newsWatchDbPath);
+  const newsWatchSources = newsClient ? createNewsWatchSources(newsClient, config.newsWatchTopics) : [];
+  const newsWatchEnabled = newsWatchSources.length > 0;
+  const newsWatchContext = newsWatchEnabled ? { store: newsWatcherStore, sources: newsWatchSources } : undefined;
 
   toolRegistry.registerTool(readOnlyFileInfoTool);
   toolRegistry.registerTool(getActiveApplicationTool);
@@ -854,7 +875,8 @@ function main() {
         { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
         behaviorCorrectionStore,
         message,
-        githubActivityStore
+        githubActivityStore,
+        newsWatchContext
       ),
     lockdownService,
     toolResultCache,
@@ -941,7 +963,8 @@ function main() {
           { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
           behaviorCorrectionStore,
           message,
-          githubActivityStore
+          githubActivityStore,
+          newsWatchContext
         ),
       lockdownService,
       toolResultCache,
@@ -998,7 +1021,8 @@ function main() {
           { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
           behaviorCorrectionStore,
           message,
-          githubActivityStore
+          githubActivityStore,
+          newsWatchContext
         ),
       lockdownService,
       toolResultCache,
@@ -1088,7 +1112,8 @@ function main() {
           { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
           behaviorCorrectionStore,
           message,
-          githubActivityStore
+          githubActivityStore,
+          newsWatchContext
         ),
       lockdownService,
       toolResultCache,
@@ -1151,7 +1176,8 @@ function main() {
           { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
           behaviorCorrectionStore,
           message,
-          githubActivityStore
+          githubActivityStore,
+          newsWatchContext
         ),
       lockdownService,
       toolResultCache,
@@ -1206,6 +1232,55 @@ function main() {
     permissionService.grant(DEFAULT_USER_ID, "NOTIFY_USER");
     toolRegistry.registerTool(createShareFileToPhoneTool(telegramGateway, config.telegramOwnerChatId));
     permissionService.grant(DEFAULT_USER_ID, "SHARE_FILE_TO_PHONE");
+  }
+
+  // Generalized Proactive Watcher: urgency-to-channel router + the shared
+  // polling scheduler for watch sources built against the generic
+  // `WatchSource` interface (today: news-by-topic; GitHub keeps its own
+  // specialized interval above — see GitHubActivityStore.ts's doc comment
+  // for why). `watcherNotifier` is what actually sends an immediate
+  // notification (vs. only caching for the next conversation's context
+  // note) — see WatcherNotifier's own doc comment for the channel-honesty
+  // rules (phone is a deliberate no-op stub; device-announce only fires
+  // when a source is explicitly configured high-priority AND a device id
+  // is configured, otherwise it falls back to Telegram).
+  const watcherChannelConfig = {
+    ...emptyWatcherChannelConfig(),
+    highPrioritySourceIds: new Set(config.watcherHighPrioritySourceIds),
+  };
+  const watcherNotifier = new WatcherNotifier(telegramGateway, config.telegramOwnerChatId, proactiveAnnouncer, config.watcherAnnounceDeviceId);
+
+  let newsWatcherScheduler: ReturnType<typeof createPollScheduler> | undefined;
+  if (newsWatchEnabled) {
+    newsWatcherScheduler = createPollScheduler(
+      [
+        () =>
+          pollWatchSources(newsWatchSources, newsWatcherStore, (sourceId, error) => {
+            console.error(`[jarvis] news watch poll failed for "${sourceId}":`, error instanceof Error ? error.message : String(error));
+          }).then(() => {
+            if (!config.watcherPushNotificationsEnabled) return;
+            // Immediate push for whatever this tick just found new — see
+            // WatcherNotifier's own doc comment for why this is a real,
+            // additional capability beyond the context-note surfacing
+            // above, and the introducing PR description for the honest
+            // "both can fire for the same event" tradeoff this implies.
+            for (const record of newsWatcherStore.listWithActivity<{ title: string }>()) {
+              const source = newsWatchSources.find((s) => s.id === record.sourceId);
+              if (!source) continue;
+              const text = `JARVIS spotted ${record.newItems.length} new headline(s) for "${source.label}": ${record.newItems
+                .slice(0, 3)
+                .map((item) => `"${item.title}"`)
+                .join(", ")}`;
+              watcherNotifier.notify(source.id, text, watcherChannelConfig).catch((error) => {
+                console.error(`[jarvis] watcher notify failed for "${source.id}":`, error instanceof Error ? error.message : String(error));
+              });
+            }
+          }),
+      ],
+      config.newsWatchPollMs,
+      { onTick: () => schedulerHealthTracker.tick("newsWatch") }
+    );
+    console.log(`[jarvis] News watching ${newsWatchSources.length} topic(s), polling every ${config.newsWatchPollMs}ms`);
   }
 
   // OPEN_CHAT only needs the bot's public username (to build the t.me
@@ -1300,7 +1375,8 @@ function main() {
           { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
           behaviorCorrectionStore,
           message,
-          githubActivityStore
+          githubActivityStore,
+          newsWatchContext
         ),
       lockdownService,
       toolResultCache,
@@ -2206,6 +2282,8 @@ function main() {
     goalStore.close();
     githubActivityStore.close();
     if (githubActivityInterval) clearInterval(githubActivityInterval);
+    if (newsWatcherScheduler) newsWatcherScheduler.stop();
+    newsWatcherStore.close();
     calendarTokenStore.close();
     spotifyTokenStore.close();
     canvaTokenStore.close();
