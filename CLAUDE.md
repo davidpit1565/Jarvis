@@ -485,6 +485,19 @@ project — still explicitly **not built now**, per his own standing priority or
   "add skill support" as a separate roadmap item; it's a natural consequence of #10's own
   design, worth re-confirming in practice once #10 is actually underway, not before.
 
+**Two more specifics from David on this same elaboration (2026-10-27):**
+- **Claude Code should only be invoked when he explicitly asks for it** — not automatically
+  reached for whenever JARVIS judges a task is complex enough. This is a real scoping
+  constraint on #10, not just a cost concern (though it is also that, per #17): Claude Code
+  access is high-privilege real-machine execution, so it should be opt-in per request, not a
+  silent default escalation path JARVIS picks on its own.
+- **On-demand research-agent invocation**: he wants to be able to say something like "use a
+  research agent and look into X for me" and have JARVIS kick off the kind of deep research
+  this very Claude Code session can do with a research-oriented skill (he named
+  `agent-reach`-style multi-source research as the concrete example) — this is the same #10
+  dependency as the skills point above (it only exists once JARVIS can actually drive a real
+  Claude Code session under his subscription), not a separately buildable capability today.
+
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
 - `davidpit1565/Rudder` — the app he initially called "Decide" (that was its working
