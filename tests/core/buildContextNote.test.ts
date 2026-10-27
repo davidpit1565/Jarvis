@@ -4,6 +4,8 @@ import { buildContextNote } from "@/core/buildContextNote";
 import { CalendarTokenStore } from "@/calendar/CalendarTokenStore";
 import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { CommitmentStore } from "@/commitments/CommitmentStore";
+import { GoalStore } from "@/agent/GoalStore";
+import { AgentTaskStore } from "@/agent/AgentTaskStore";
 
 const originalFetch = global.fetch;
 
@@ -85,6 +87,49 @@ describe("buildContextNote", () => {
     expect(note).toContain("stale");
     store.close();
     commitmentStore.close();
+  });
+
+  test("omits goal context when no goals param is given", async () => {
+    const store = new ReminderStore(":memory:");
+    const note = await buildContextNote({ timezone: "UTC" }, store);
+    expect(note).not.toContain("active goal(s)");
+    store.close();
+  });
+
+  test("omits goal context when the user has no active goals", async () => {
+    const store = new ReminderStore(":memory:");
+    const goalStore = new GoalStore(":memory:");
+    const taskStore = new AgentTaskStore(":memory:");
+
+    const note = await buildContextNote({ timezone: "UTC" }, store, undefined, undefined, {
+      goalStore,
+      taskStore,
+      userId: "local-user",
+    });
+    expect(note).not.toContain("active goal(s)");
+    store.close();
+    goalStore.close();
+    taskStore.close();
+  });
+
+  test("includes active goals and their progress", async () => {
+    const store = new ReminderStore(":memory:");
+    const goalStore = new GoalStore(":memory:");
+    const taskStore = new AgentTaskStore(":memory:");
+
+    const goal = goalStore.create({ userId: "local-user", description: "Launch my app" });
+    taskStore.create({ userId: "local-user", goal: "Write landing page", goalId: goal.id });
+
+    const note = await buildContextNote({ timezone: "UTC" }, store, undefined, undefined, {
+      goalStore,
+      taskStore,
+      userId: "local-user",
+    });
+    expect(note).toContain("Launch my app");
+    expect(note).toContain("active goal(s)");
+    store.close();
+    goalStore.close();
+    taskStore.close();
   });
 
   afterEach(() => {

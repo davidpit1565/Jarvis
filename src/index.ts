@@ -53,7 +53,12 @@ import { buildContextNote } from "@/core/buildContextNote";
 import { ToolAuditLog } from "@/audit/ToolAuditLog";
 import { AgentCore } from "@/agent/AgentCore";
 import { AgentTaskStore } from "@/agent/AgentTaskStore";
+import { GoalStore } from "@/agent/GoalStore";
 import { BrainAgentPlanner } from "@/agent/BrainAgentPlanner";
+import { createCreateGoalTool } from "@/tools/agent/CreateGoalTool";
+import { createCheckGoalProgressTool } from "@/tools/agent/CheckGoalProgressTool";
+import { createCompleteGoalTool } from "@/tools/agent/CompleteGoalTool";
+import { createCancelGoalTool } from "@/tools/agent/CancelGoalTool";
 import { TokenUsageStore } from "@/audit/TokenUsageStore";
 import { CostAlertMonitor } from "@/audit/CostAlertMonitor";
 import { estimateCostUsd } from "@/audit/estimateCostUsd";
@@ -462,6 +467,13 @@ function main() {
   permissionService.grant(DEFAULT_USER_ID, "DELETE_AUTOMATION_RULE");
   permissionService.grant(DEFAULT_USER_ID, "CREATE_COMMITMENT");
   permissionService.grant(DEFAULT_USER_ID, "FULFILL_COMMITMENT");
+  // Goal Engine (roadmap items 26-27) — same single-user SAFE_ACTION
+  // reasoning as CREATE_REMINDER/CREATE_COMMITMENT: creating/closing a goal
+  // record has no real-world side effect of its own (its individual steps'
+  // own permission levels gate anything that actually does something).
+  permissionService.grant(DEFAULT_USER_ID, "CREATE_GOAL");
+  permissionService.grant(DEFAULT_USER_ID, "COMPLETE_GOAL");
+  permissionService.grant(DEFAULT_USER_ID, "CANCEL_GOAL");
   // DANGEROUS: granted so the tool is askable at all, but PermissionService
   // still forces a fresh per-invocation confirmation regardless of this
   // grant — this never lets JARVIS erase the transcript silently.
@@ -693,6 +705,19 @@ function main() {
   // hook being entirely absent).
   let agentCoreForCancel: AgentCore | undefined;
 
+  // Hoisted above `orchestrator` (which only needs these as closures captured
+  // in `contextProvider`, not called until a real turn runs) so both the Goal
+  // Engine's own tools and every `buildContextNote` call site below can see
+  // the same instances — see the Autonomous Agent Core comment further down
+  // for what `agentTaskStore` itself is for.
+  const agentTaskStore = new AgentTaskStore(config.agentTaskDbPath);
+  // Goal Engine (roadmap items 26-27): tracks what the user asked JARVIS to
+  // help with across conversations. `GoalStore` only ever remembers a goal's
+  // own identity/status (the user's words, active/completed/abandoned) —
+  // all step/progress data lives in `agentTaskStore`, grouped by the same
+  // `goalId` (see `GoalStore`'s own doc comment for why the split).
+  const goalStore = new GoalStore(config.goalsDbPath);
+
   const orchestrator = new Orchestrator({
     brain,
     conversation,
@@ -702,7 +727,12 @@ function main() {
     deviceRegistry,
     deviceConnectionManager,
     confirmationService,
-    contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
+    contextProvider: () =>
+      buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
+        goalStore,
+        taskStore: agentTaskStore,
+        userId: DEFAULT_USER_ID,
+      }),
     lockdownService,
     toolResultCache,
     embeddingsClient,
@@ -718,18 +748,20 @@ function main() {
     },
   });
 
-  // Autonomous Agent Core — Goal Engine + persistent/priority task queue +
-  // background worker (roadmap items 26-34). Reuses the exact same
-  // Orchestrator/ToolRegistry/PermissionService pipeline as any other tool
-  // call; never wired into `Orchestrator.handleUserMessage` itself, an
-  // explicit opt-in surface only. `resumeIncompleteTasks()` runs once,
-  // synchronously, before the queue worker's first tick, so a task a
-  // previous process left mid-flight (PLANNING/EXECUTING/VERIFYING/
-  // RETRYING/RECOVERING/WAITING) is failed cleanly with a clear reason
-  // instead of sitting there forever, invisible — see the doc comment on
-  // `AgentCore.resumeIncompleteTasks` for why that's the safe default
-  // rather than attempting a risky mid-tool-execution resume.
-  const agentTaskStore = new AgentTaskStore(config.agentTaskDbPath);
+  // Autonomous Agent Core — persistent/priority task queue + background
+  // worker (roadmap items 31-34), and the execution substrate the Goal
+  // Engine's CREATE_GOAL/CHECK_GOAL_PROGRESS/COMPLETE_GOAL/CANCEL_GOAL tools
+  // (registered below) sit on top of. Reuses the exact same Orchestrator/
+  // ToolRegistry/PermissionService pipeline as any other tool call; never
+  // wired into `Orchestrator.handleUserMessage` itself, an explicit opt-in
+  // surface only. `resumeIncompleteTasks()` runs once, synchronously, before
+  // the queue worker's first tick, so a task a previous process left
+  // mid-flight (PLANNING/EXECUTING/VERIFYING/RETRYING/RECOVERING/WAITING) is
+  // failed cleanly with a clear reason instead of sitting there forever,
+  // invisible — see the doc comment on `AgentCore.resumeIncompleteTasks` for
+  // why that's the safe default rather than attempting a risky
+  // mid-tool-execution resume. (`agentTaskStore`/`goalStore` themselves are
+  // created above, before `orchestrator`, so its `contextProvider` can see them.)
   const agentCore = new AgentCore({
     orchestrator,
     planner: new BrainAgentPlanner(brain, toolRegistry),
@@ -753,6 +785,14 @@ function main() {
     });
   }, config.agentQueueTickMs);
 
+  // Goal Engine tool-level interface — registered here (not alongside the
+  // other SAFE_ACTION tools above) because these need `agentCore`/
+  // `agentTaskStore`, which don't exist until this point.
+  toolRegistry.registerTool(createCreateGoalTool(goalStore, agentCore));
+  toolRegistry.registerTool(createCheckGoalProgressTool(goalStore, agentTaskStore));
+  toolRegistry.registerTool(createCompleteGoalTool(goalStore));
+  toolRegistry.registerTool(createCancelGoalTool(goalStore, agentCore, agentTaskStore));
+
   // A phone call gets its own conversation thread (a fresh ConversationManager
   // + Orchestrator) but shares every other live instance — same JARVIS,
   // separate conversation. Only wired up when both Twilio settings are
@@ -769,7 +809,12 @@ function main() {
       deviceConnectionManager,
       confirmationService: phoneConfirmationService,
       channelContext: "This conversation is happening over a live phone call right now.",
-      contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
+      contextProvider: () =>
+        buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
+          goalStore,
+          taskStore: agentTaskStore,
+          userId: DEFAULT_USER_ID,
+        }),
       lockdownService,
       toolResultCache,
       embeddingsClient,
@@ -816,7 +861,12 @@ function main() {
         "today — a meeting, a task, a workout). If they push back or say they're tired, don't just accept it: " +
         "persuade them further with another real, specific reason, the way a determined friend would, rather " +
         "than immediately backing off. Keep replies short and energetic — this is a live phone call.",
-      contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
+      contextProvider: () =>
+        buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
+          goalStore,
+          taskStore: agentTaskStore,
+          userId: DEFAULT_USER_ID,
+        }),
       lockdownService,
       toolResultCache,
       embeddingsClient,
@@ -896,7 +946,12 @@ function main() {
       deviceConnectionManager,
       confirmationService: phoneConfirmationService,
       channelContext: "This conversation is happening over text message (SMS) right now.",
-      contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
+      contextProvider: () =>
+        buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
+          goalStore,
+          taskStore: agentTaskStore,
+          userId: DEFAULT_USER_ID,
+        }),
       lockdownService,
       toolResultCache,
       embeddingsClient,
@@ -949,7 +1004,12 @@ function main() {
       deviceConnectionManager,
       confirmationService: telegramConfirmationService,
       channelContext: "This conversation is happening over Telegram right now.",
-      contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
+      contextProvider: () =>
+        buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
+          goalStore,
+          taskStore: agentTaskStore,
+          userId: DEFAULT_USER_ID,
+        }),
       lockdownService,
       toolResultCache,
       embeddingsClient,
@@ -1069,7 +1129,12 @@ function main() {
       deviceConnectionManager,
       confirmationService: voiceConfirmationService,
       channelContext: "This conversation is happening by voice, right now, on the user's Mac.",
-      contextProvider: () => buildContextNote(config, reminderStore, calendarClient, commitmentStore),
+      contextProvider: () =>
+        buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
+          goalStore,
+          taskStore: agentTaskStore,
+          userId: DEFAULT_USER_ID,
+        }),
       lockdownService,
       toolResultCache,
       embeddingsClient,
@@ -1970,6 +2035,7 @@ function main() {
     clearInterval(automationRuleInterval);
     clearInterval(agentQueueInterval);
     agentTaskStore.close();
+    goalStore.close();
     calendarTokenStore.close();
     spotifyTokenStore.close();
     rl.close();
