@@ -70,6 +70,22 @@ enum CapabilityReporter {
 
         // Notifications (show_notification) — the only genuinely async
         // check of the group.
+        //
+        // UNUserNotificationCenter.current() hard-crashes (NSInternalInconsistencyException,
+        // "bundleProxyForCurrentProcess is nil") outside a real, Launch-Services-registered
+        // .app bundle — exactly what `swift run` / a raw executable is. Same underlying issue
+        // as main.swift's own notification-permission-request guard; this is the second call
+        // site that needed it, since a connected device.command can trigger a capability
+        // report independently of app launch. The proper scripts/install.sh flow produces a
+        // real .app bundle, where this still works as before.
+        guard Bundle.main.bundleURL.pathExtension == "app" else {
+            permissions[Key.notifications] = "unknown"
+            DispatchQueue.main.async {
+                completion(permissions)
+            }
+            return
+        }
+
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             permissions[Key.notifications] = mapNotificationAuthorization(settings.authorizationStatus)
             DispatchQueue.main.async {
