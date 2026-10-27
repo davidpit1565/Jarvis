@@ -18,7 +18,7 @@ import Speech
 /// The tradeoff (more CPU than a purpose-built wake-word engine) is
 /// acceptable for a Mac that's usually plugged in; nothing here is ever
 /// sent anywhere until the wake phrase is actually heard.
-final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
+final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate, AVSpeechSynthesizerDelegate {
     /// Called with the text spoken after the wake phrase, once a pause is
     /// detected, plus which language the reply should be forced into:
     /// "en", "he", or "" (no forced language — let Claude auto-detect, as
@@ -128,6 +128,27 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     /// owner — see `ProactiveReplyPayload`'s own doc comment.
     private var proactiveReplyCallback: ((String?) -> Void)?
 
+    /// True from the moment `speak()` hands an utterance to
+    /// `AVSpeechSynthesizer` until it finishes, is cancelled, or is
+    /// stopped by a barge-in — see `speak()`, the
+    /// `AVSpeechSynthesizerDelegate` callbacks below, and
+    /// `stopSpeakingForBargeIn()`.
+    private var isSpeaking = false
+    /// The exact text currently being spoken, tracked so
+    /// `SpeechEchoClassifier` has something to compare a concurrently
+    /// heard transcript against. `nil` whenever `isSpeaking` is false.
+    private var currentlySpokenText: String?
+
+    override init() {
+        super.init()
+        // Needed for self-echo rejection / barge-in (see
+        // `handleTranscriptUpdate`): without this delegate, nothing ever
+        // clears `isSpeaking`/`currentlySpokenText` when an utterance
+        // finishes on its own, and the classifier would think JARVIS was
+        // still speaking forever after its first reply.
+        synthesizer.delegate = self
+    }
+
     func start() {
         // print() here is deliberate, not a duplicate of the os_log call
         // below it (roadmap #71 — wake diagnostics): `os_log`/`Logger`
@@ -199,7 +220,40 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
         if let voice = Self.bestAvailableVoice(languagePrefix: isHebrew ? "he" : "en") {
             utterance.voice = voice
         }
+        // Tracked for self-echo rejection / barge-in — see
+        // `handleTranscriptUpdate` and `SpeechEchoClassifier`. Set before
+        // `speak(_:)` is called (rather than in a delegate "did start"
+        // callback) so there's no window where the recognizer could pick
+        // up the very first word of the utterance before this is in
+        // place.
+        isSpeaking = true
+        currentlySpokenText = text
         synthesizer.speak(utterance)
+    }
+
+    /// Stops JARVIS mid-sentence because a concurrently heard transcript
+    /// was classified as genuine new user speech (a cancel command or
+    /// otherwise) rather than JARVIS hearing its own voice — see
+    /// `handleTranscriptUpdate`. `AVSpeechSynthesizer.stopSpeaking(at:)`
+    /// (passing `.immediate`) is the real, current API for this; it does
+    /// not itself fire `didCancel`'s delegate callback reliably across all
+    /// macOS versions in every case, so this clears the tracking state
+    /// directly rather than relying solely on the delegate.
+    private func stopSpeakingForBargeIn() {
+        guard isSpeaking else { return }
+        synthesizer.stopSpeaking(at: .immediate)
+        isSpeaking = false
+        currentlySpokenText = nil
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        isSpeaking = false
+        currentlySpokenText = nil
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        isSpeaking = false
+        currentlySpokenText = nil
     }
 
     /// Speaks a proactive (JARVIS-initiated) announcement aloud, then
@@ -340,6 +394,36 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
 
     private func handleTranscriptUpdate(_ transcript: String) {
         lastTranscriptUpdate = Date()
+
+        // Self-echo rejection + barge-in. The microphone tap never stops
+        // while JARVIS itself is speaking — a normal spoken reply, the
+        // clap/wake-phrase greetings, and especially PR #146's
+        // `speakProactiveAnnouncement` (JARVIS speaks first, unprompted,
+        // then listens for a reply with no wake phrase required) all run
+        // the recognizer and the synthesizer at the same time. Without
+        // this check, JARVIS's own voice coming back through the mic gets
+        // treated as whatever the current listening mode is waiting for —
+        // a wake phrase, a clap-triggered command, or (most visibly) a
+        // proactive-reply capture. See `SpeechEchoClassifier` for the
+        // actual heuristic and its honest limitations.
+        if isSpeaking {
+            switch SpeechEchoClassifier.classify(heardTranscript: transcript, currentlySpokenText: currentlySpokenText) {
+            case .likelyEcho:
+                // Almost certainly JARVIS hearing itself. Don't let this
+                // reach any of the capture logic below — forwarding it
+                // would risk a false proactive-reply/clap-command capture,
+                // or JARVIS re-triggering on its own voice.
+                return
+            case .cancelCommand, .genuineUserSpeech:
+                // The user said something real while JARVIS was still
+                // talking. Stop talking immediately and let whatever they
+                // said fall through to the normal handling below in this
+                // same call, rather than losing it while waiting for the
+                // next transcript update.
+                print("[JarvisAgent] Barge-in: \"\(transcript)\" read as real user speech, not an echo — stopping speech.")
+                stopSpeakingForBargeIn()
+            }
+        }
 
         if proactiveReplyModeActive {
             let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
