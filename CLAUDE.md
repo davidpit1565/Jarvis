@@ -316,6 +316,32 @@ if this is ever revisited — just a one-line discipline (keep model files off t
 Worth a quick re-check only if BitNet (or something similar) ships a materially larger context
 window in a future release — not something to schedule as a project today.
 
+## Added: global keyboard shortcut for "look at my screen" (2026-10-27, not yet built on a real Mac)
+
+David wanted a keyboard trigger, in addition to saying "Hey Jarvis," for the screen-vision
+feature being built concurrently (the `LOOK_AT_SCREEN` device tool + orchestrator vision wiring
+— a separate piece of work, not touched here). Added `agents/imac/JarvisAgent/Sources/
+JarvisAgent/Voice/GlobalHotkeyListener.swift`, registered alongside `WakeWordListener` in
+`main.swift`. **Chosen shortcut: Control+Option+J** ("J" for JARVIS) — picked for being a
+rare chord nothing in stock macOS or common apps binds globally (unlike Cmd-based combos,
+where most real collisions live) and for using a mnemonic letter key rather than an
+unmemorable function key. It's a single named constant
+(`GlobalHotkeyListener.modifierFlags`/`keyCodeJ`) specifically so it's a one-line change once
+David tries it for real. On trigger, it sends the exact same `voice.transcript` message
+`WakeWordListener` already sends for a spoken command (via the existing
+`JarvisAgentApp.sendVoiceTranscript`, reused rather than duplicated), with a fixed stand-in
+phrase ("Look at my screen and tell me what you think.") in place of a live transcription —
+functionally identical to speaking "Hey Jarvis, look at my screen." Uses
+`NSEvent.addGlobalMonitorForEvents(matching: .keyDown)`, which needs the same Accessibility
+trust this Agent already requests at launch for `ClickElementTool`/`TypeText` — no new
+permission to explain to David.
+
+**Same standing caveat as every other Swift Mac-agent feature so far: never compiled or run
+on a real Mac** — no Xcode/macOS toolchain in this sandbox. Written and reviewed by hand
+against `WakeWordListener.swift`'s existing conventions, not verified end to end. Revisit the
+exact chord once David actually tries it on his real keyboard and can say whether Control+
+Option+J collides with something else he uses.
+
 ## Architecture decision (2026-10-27): hybrid Fly + Mac split, and Claude Code via subscription not API
 
 David proposed, and this is now the target architecture: **Fly.io stays the light, always-on
