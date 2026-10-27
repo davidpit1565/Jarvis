@@ -68,6 +68,11 @@ export class DeviceConnectionManager {
     return this.connections.has(deviceId);
   }
 
+  /** Every device id currently connected — used to resolve "all" / "wherever available" announce targets. */
+  listConnectedDeviceIds(): string[] {
+    return Array.from(this.connections.keys());
+  }
+
   /**
    * Sends a "ping" to every connected device — paired with the server's
    * own WebSocket `idleTimeout`, this is what keeps a genuinely healthy

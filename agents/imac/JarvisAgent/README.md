@@ -41,8 +41,14 @@ Hybrid menu bar app + `launchd` user agent, sharing one executable:
   wake-word engine, no cloud dependency) — continuously transcribes the
   mic, watches for the wake phrase, and hands whatever follows it to Core
   as a `voice.transcript` message once the user pauses. Speaks Core's
-  `voice.reply` back aloud via `AVSpeechSynthesizer`. See "Microphone and
-  Speech Recognition permissions" below.
+  `voice.reply` back aloud via `AVSpeechSynthesizer`. Also speaks an
+  unprompted, Core-initiated `proactive.announce` (e.g. a device-targeted
+  reminder — see `src/communication/voice/ProactiveAnnouncer.ts`) via
+  `speakProactiveAnnouncement`, which then listens for a reply with no
+  wake phrase required and reports whatever (if anything) it heard back as
+  `proactive.reply` — Core's `SpeakerAuthenticator` (a shared passphrase
+  today), not this Agent, decides whether that reply is really the owner.
+  See "Microphone and Speech Recognition permissions" below.
 
 ## What has been validated on a real iMac
 
@@ -82,6 +88,12 @@ test.
   the `Info.plist` packaging step above, wake-phrase detection accuracy,
   silence-threshold tuning, and the actual round trip (mic → Core →
   spoken reply) have never run against a real microphone or a real Core.
+- `speakProactiveAnnouncement` / the `proactive.announce` ↔ `proactive.reply`
+  round trip specifically: never run against a real microphone or a real
+  Core. The no-wake-phrase capture window it adds is new Swift logic with
+  no equivalent anywhere else in this file to have already exercised it —
+  treat it as no more trustworthy than brand-new code until it's actually
+  heard and replied to on a real Mac.
 
 ## Building and installing
 

@@ -62,6 +62,9 @@ import { createListRemindersTool } from "@/tools/reminders/ListRemindersTool";
 import { createCompleteReminderTool } from "@/tools/reminders/CompleteReminderTool";
 import { createDeleteReminderTool } from "@/tools/reminders/DeleteReminderTool";
 import { createUpdateReminderTool } from "@/tools/reminders/UpdateReminderTool";
+import { composeAnnouncementText } from "@/reminders/composeAnnouncementText";
+import { getAnnounceFollowUps } from "@/reminders/getAnnounceFollowUps";
+import { resolveAnnounceTargets } from "@/reminders/resolveAnnounceTargets";
 import { ConversationHistoryStore } from "@/history/ConversationHistoryStore";
 import { createSearchConversationHistoryTool } from "@/tools/history/SearchConversationHistoryTool";
 import { createClearConversationHistoryTool } from "@/tools/history/ClearConversationHistoryTool";
@@ -145,6 +148,10 @@ import { TwilioVoiceGateway, type PhoneSession } from "@/communication/phone/Twi
 import { TwilioSmsGateway, type SmsSession } from "@/communication/phone/TwilioSmsGateway";
 import { TelegramGateway, type TelegramSession } from "@/communication/telegram/TelegramGateway";
 import { DeviceVoiceGateway, type DeviceVoiceSession } from "@/communication/voice/DeviceVoiceGateway";
+import { ProactiveAnnouncer } from "@/communication/voice/ProactiveAnnouncer";
+import { ConfirmationPassphraseStore } from "@/security/ConfirmationPassphraseStore";
+import { PassphraseSpeakerAuthenticator } from "@/core/confirmation/SpeakerAuthenticator";
+import { createSetConfirmationPassphraseTool } from "@/tools/security/SetConfirmationPassphraseTool";
 import { createNotifyUserTool } from "@/tools/telegram/NotifyUserTool";
 import { createShareFileToPhoneTool } from "@/tools/telegram/ShareFileToPhoneTool";
 import { PollinationsImageClient } from "@/images/PollinationsImageClient";
@@ -225,6 +232,14 @@ function main() {
   const toolRegistry = new ToolRegistry();
   const memoryStore = new MemoryStore(config.memoryDbPath);
   const reminderStore = new ReminderStore(config.remindersDbPath, config.timezone);
+  // Security layer for proactive, JARVIS-initiated "wake up and speak"
+  // reminders (CLAUDE.md wishlist #19) — see SpeakerAuthenticator.ts for
+  // why this is a separate, narrow interface from ConfirmationService.
+  // seedIfEmpty only ever applies on a fresh store with nothing set yet;
+  // SET_CONFIRMATION_PASSPHRASE always wins once used.
+  const confirmationPassphraseStore = new ConfirmationPassphraseStore(config.confirmationPassphraseDbPath);
+  confirmationPassphraseStore.seedIfEmpty(config.confirmationPassphraseSeed);
+  const speakerAuthenticator = new PassphraseSpeakerAuthenticator(() => confirmationPassphraseStore.get());
   const automationRuleStore = new AutomationRuleStore(config.automationRulesDbPath);
   const automationFailureStore = new AutomationFailureStore(config.automationFailuresDbPath);
   // Tracks "is this setInterval loop actually still ticking" for each
@@ -394,6 +409,7 @@ function main() {
   toolRegistry.registerTool(createCompleteReminderTool(reminderStore));
   toolRegistry.registerTool(createDeleteReminderTool(reminderStore, undoStore));
   toolRegistry.registerTool(createUpdateReminderTool(reminderStore));
+  toolRegistry.registerTool(createSetConfirmationPassphraseTool(confirmationPassphraseStore));
   toolRegistry.registerTool(createCreateAutomationRuleTool(automationRuleStore));
   toolRegistry.registerTool(createListAutomationRulesTool(automationRuleStore));
   toolRegistry.registerTool(createUpdateAutomationRuleTool(automationRuleStore));
@@ -415,6 +431,11 @@ function main() {
   permissionService.grant(DEFAULT_USER_ID, "COMPLETE_REMINDER");
   permissionService.grant(DEFAULT_USER_ID, "DELETE_REMINDER");
   permissionService.grant(DEFAULT_USER_ID, "UPDATE_REMINDER");
+  // CONFIRM (see SetConfirmationPassphraseTool's own doc comment): granted
+  // so it's askable at all, but PermissionService still forces a fresh
+  // per-invocation confirmation regardless — changing the owner's own
+  // proactive-reply security passphrase never happens silently.
+  permissionService.grant(DEFAULT_USER_ID, "SET_CONFIRMATION_PASSPHRASE");
   permissionService.grant(DEFAULT_USER_ID, "CREATE_AUTOMATION_RULE");
   permissionService.grant(DEFAULT_USER_ID, "UPDATE_AUTOMATION_RULE");
   permissionService.grant(DEFAULT_USER_ID, "DELETE_AUTOMATION_RULE");
@@ -512,6 +533,7 @@ function main() {
 
   const pairingService = new PairingService(undefined, undefined, config.pairingDbPath);
   const deviceConnectionManager = new DeviceConnectionManager(eventBus);
+  const proactiveAnnouncer = new ProactiveAnnouncer(deviceConnectionManager, speakerAuthenticator);
   const conversation = new ConversationManager(eventBus);
   // AIProviderRegistry holds whichever Brain(s) we could actually
   // construct from the API keys present — never require both. "groq" is
@@ -1522,6 +1544,10 @@ function main() {
   // find the same reminder (notified_at still null) and fire a second
   // send for it before the first one's .then() clears it. Same
   // in-flight-id-set pattern staleCommitmentInterval below already uses.
+  // How long a device is given to reply (with no wake phrase required —
+  // see ProactiveAnnouncer/WakeWordListener.speakProactiveAnnouncement)
+  // before a proactive announcement counts as unanswered.
+  const PROACTIVE_REPLY_WINDOW_MS = 20_000;
   const inFlightReminderIds = new Set<string>();
   const reminderNotificationInterval = setInterval(() => {
     schedulerHealthTracker.tick("reminderNotifications");
@@ -1532,6 +1558,45 @@ function main() {
 
     for (const reminder of due) {
       const message = `⏰ Reminder: ${reminder.text}`;
+
+      // Device-targeted live spoken reminders (CLAUDE.md wishlist #19):
+      // an `announce` reminder with at least one currently-connected
+      // target device gets spoken aloud instead of (not in addition to)
+      // the silent push/Telegram path below — "device must be powered on"
+      // (per the spec) is exactly what resolveAnnounceTargets returning
+      // nothing means, and in that case this falls straight through to
+      // the existing push/Telegram behavior unchanged, so an announce
+      // reminder never gets silently lost just because the device happens
+      // to be off right now.
+      if (reminder.announce) {
+        const targets = resolveAnnounceTargets(reminder.targetDevice, deviceRegistry, deviceConnectionManager);
+        if (targets.length > 0) {
+          inFlightReminderIds.add(reminder.id);
+          // Marked notified immediately: the speech itself is the
+          // delivery (unlike Telegram, there's no "confirmed sent"
+          // signal to wait on beyond the WebSocket send not throwing,
+          // which ProactiveAnnouncer already treats as "no response"
+          // rather than an error) — the follow-up engine below is what
+          // actually tracks whether the owner engaged with it.
+          reminderStore.markNotified(reminder.id, nowIso);
+          activityLog.record(`Reminder announced on ${targets.length} device(s): ${reminder.text.slice(0, 100)}`);
+          const announceText = composeAnnouncementText(reminder.text, reminder.tone, false);
+          Promise.all(targets.map((deviceId) => proactiveAnnouncer.announce(deviceId, announceText, PROACTIVE_REPLY_WINDOW_MS)))
+            .then((results) => {
+              if (results.some((r) => r.authenticated)) {
+                reminderStore.markAcknowledged(reminder.id, new Date().toISOString());
+                activityLog.record(`Reminder announcement acknowledged: ${reminder.text.slice(0, 100)}`);
+              }
+            })
+            .catch((error) => {
+              console.error(`[jarvis] proactive announcement failed for reminder ${reminder.id}:`, error);
+            })
+            .finally(() => {
+              inFlightReminderIds.delete(reminder.id);
+            });
+          continue;
+        }
+      }
 
       // Native on-device push, independent of Telegram being configured
       // at all — a paired Mac already has everything this needs, no
@@ -1576,6 +1641,49 @@ function main() {
         reminderStore.markNotified(reminder.id, nowIso);
         activityLog.record(`Reminder notification sent: ${reminder.text.slice(0, 100)}`);
       }
+    }
+  }, 30_000);
+
+  // Bounded follow-up ("did you do it?") engine for `announce` reminders —
+  // CLAUDE.md wishlist #19: "If he doesn't respond, JARVIS should follow
+  // up ... rather than firing once and moving on." Same setInterval +
+  // in-flight-id-set pattern as the schedulers around it. Only ever
+  // attempts a follow-up when a target device is actually reachable right
+  // now (resolveAnnounceTargets) — a reminder whose device stayed
+  // disconnected the whole time simply waits at its current followUpCount
+  // rather than burning its bounded follow-up budget on attempts that
+  // never reached anyone.
+  const inFlightFollowUpIds = new Set<string>();
+  const announceFollowUpInterval = setInterval(() => {
+    schedulerHealthTracker.tick("announceFollowUps");
+    const nowIso = new Date().toISOString();
+    if (isSuppressibleByQuietHours("reminder") && isQuietHours(formatTimeOfDay(new Date(), config.timezone), quietHoursWindow)) {
+      return;
+    }
+    const needingFollowUp = getAnnounceFollowUps(reminderStore.list(), nowIso, inFlightFollowUpIds);
+
+    for (const reminder of needingFollowUp) {
+      const targets = resolveAnnounceTargets(reminder.targetDevice, deviceRegistry, deviceConnectionManager);
+      if (targets.length === 0) continue;
+
+      inFlightFollowUpIds.add(reminder.id);
+      reminderStore.recordFollowUpAttempt(reminder.id, nowIso);
+      const followUpText = composeAnnouncementText(reminder.text, reminder.tone, true);
+      Promise.all(targets.map((deviceId) => proactiveAnnouncer.announce(deviceId, followUpText, PROACTIVE_REPLY_WINDOW_MS)))
+        .then((results) => {
+          if (results.some((r) => r.authenticated)) {
+            reminderStore.markAcknowledged(reminder.id, new Date().toISOString());
+            activityLog.record(`Reminder follow-up acknowledged: ${reminder.text.slice(0, 100)}`);
+          } else {
+            activityLog.record(`Reminder follow-up sent (no confirmed reply): ${reminder.text.slice(0, 100)}`);
+          }
+        })
+        .catch((error) => {
+          console.error(`[jarvis] proactive follow-up failed for reminder ${reminder.id}:`, error);
+        })
+        .finally(() => {
+          inFlightFollowUpIds.delete(reminder.id);
+        });
     }
   }, 30_000);
 
@@ -1626,6 +1734,7 @@ function main() {
     twilioAllowedCallers: config.twilioAllowedCallers,
     telegramGateway,
     deviceVoiceGateway,
+    proactiveAnnouncer,
     telegramWebhookSecret: config.telegramWebhookSecret,
     lockdownService,
     adminToken: config.adminToken,
@@ -1815,6 +1924,7 @@ function main() {
     httpHandle.stop();
     memoryStore.close();
     reminderStore.close();
+    confirmationPassphraseStore.close();
     automationRuleStore.close();
     automationFailureStore.close();
     commitmentStore.close();
@@ -1835,6 +1945,7 @@ function main() {
     if (checkinInterval) clearInterval(checkinInterval);
     if (morningBriefingInterval) clearInterval(morningBriefingInterval);
     clearInterval(reminderNotificationInterval);
+    clearInterval(announceFollowUpInterval);
     clearInterval(automationRuleInterval);
     clearInterval(agentQueueInterval);
     agentTaskStore.close();

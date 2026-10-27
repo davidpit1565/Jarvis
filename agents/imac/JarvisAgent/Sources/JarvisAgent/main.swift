@@ -86,6 +86,8 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             sendPong()
         case "voice.reply":
             handleVoiceReply(data: envelopeData)
+        case "proactive.announce":
+            handleProactiveAnnounce(data: envelopeData)
         default:
             Logger.shared.log("Unhandled message type: \(header.type)")
         }
@@ -245,6 +247,35 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
             return
         }
         wakeWordListener.speak(envelope.payload.text)
+    }
+
+    /// Speaks an unprompted, JARVIS-initiated announcement (e.g. a
+    /// device-targeted reminder — see ReminderStore's `announce` field on
+    /// the Core side) and reports back whatever (if anything) was heard in
+    /// response, via `proactive.reply`. This Agent makes no authentication
+    /// decision of its own — see `ProactiveReplyPayload`'s doc comment.
+    private func handleProactiveAnnounce(data: Data) {
+        guard let envelope = try? JSONDecoder().decode(Envelope<ProactiveAnnouncePayload>.self, from: data) else {
+            Logger.shared.log("Failed to decode proactive.announce payload")
+            return
+        }
+        let announcementId = envelope.payload.announcementId
+        wakeWordListener.speakProactiveAnnouncement(envelope.payload.text, replyWindowMs: envelope.payload.replyWindowMs) { [weak self] captured in
+            self?.sendProactiveReply(announcementId: announcementId, text: captured)
+        }
+    }
+
+    private func sendProactiveReply(announcementId: String, text: String?) {
+        let envelope = MessageFactory.makeEnvelope(
+            type: "proactive.reply",
+            payload: ProactiveReplyPayload(announcementId: announcementId, text: text),
+            deviceId: deviceId
+        )
+        guard let data = try? JSONEncoder().encode(envelope) else {
+            Logger.shared.log("Failed to encode proactive.reply")
+            return
+        }
+        connection.send(data: data)
     }
 
     /// Sends this Agent's live permission status to Core (capability
