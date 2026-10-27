@@ -1199,3 +1199,118 @@ flagged as deferred-but-wanted and never done. Both are now closed:
    configured) — same "needs both a client and an explicit watch list" gating GitHub/news already
    have. `buildContextNote` took a new optional `gmailWatch` parameter alongside `newsWatch`,
    using its own dedicated `WatcherStore`/db file rather than merging into news's.
+
+## Researched: "make the iPhone app more like Siri" — Photos, other-apps' data, and querying Siri directly (2026-10-27, not built)
+
+David floated, while the native iPhone app (Swift/SwiftUI) was being built for the first time,
+whether that app could also see his photos, see into other apps, and pull information from (or
+ask) Siri directly — essentially become "a version of Siri." Researched against current
+developer.apple.com pages (fetched directly where possible; several Apple doc pages only serve
+a bare title to automated fetches, so some points below fall back to WWDC session summaries,
+Apple Developer Forum threads with Apple-staff replies, and reasoning from the App Intents
+framework's own public shape — each point below is tagged with how it was confirmed). This is
+research only; no app code was touched.
+
+1. **Photos — real access exists, but it's narrower than "see my photos" implies.**
+   - *Verified (App Store Review Guidelines, fetched live from developer.apple.com, §5.1.1(iii)
+     "Data Minimization"):* **"Where possible, use the out-of-process picker or a share sheet
+     rather than requesting full access to protected resources like Photos or Contacts."** This
+     is a real, current, explicit Apple preference against full-library access for exactly
+     JARVIS's kind of use case — not a guess.
+   - *Verified (Apple WWDC20/WWDC21 sessions, corroborated by an Apple-staff forum reply):*
+     `PHPickerViewController` (the modern photo picker) runs **out-of-process** — presenting it
+     needs no photo-library permission at all, and the host app only ever receives the specific
+     photos the user picks in that one moment, nothing else. This is the realistic shape for
+     "what's in this photo I'm showing you" (JARVIS does on-device or cloud vision analysis of a
+     user-selected photo) and even "find a photo of X" if the flow is "user opens the picker,
+     JARVIS analyzes what's shown" rather than JARVIS browsing unprompted.
+   - *Verified (PhotoKit/`PHAuthorizationStatus`, general framework knowledge — the specific doc
+     page returned only a title to automated fetch, so treat as secondary-confirmed):* Full
+     library access (`PHPhotoLibrary.requestAuthorization`) and the newer **limited-library**
+     tier (user picks a specific subset of photos the app can always see, grantable/extendable
+     later via `presentLimitedLibraryPicker`) are both real and available. Full access with write
+     capability (`PHPhotoLibraryChangeObserver`, asset creation/editing via
+     `PHAssetChangeRequest`) is also real — an app can save or edit photos with permission.
+   - **What's NOT possible, confirmed by the Guideline 5.1.1(iii) text itself:** there is no API
+     for a third-party app to proactively browse/analyze the *entire* photo library's content in
+     the background without the user granting broad access first — and Apple's own review
+     guideline explicitly steers apps away from asking for that when a picker would do.
+   - **App Store risk, not just technical fact (real, named risk — distinct from "impossible"):**
+     requesting full/unrestricted Photos access for a general "JARVIS knows your photos" pitch is
+     a realistic 5.1.1(iii)/(iv) rejection risk unless the app can point to a specific, justified,
+     ongoing-background need (e.g. a real photo-organizing feature) — "so JARVIS can see your
+     photos" as a blanket justification is exactly the pattern the guideline calls out. The
+     picker-first, ask-for-limited-before-full progression is both the safer App Review path and
+     the better-matching technical fit for what David actually described ("what's in this photo
+     I'm showing you").
+
+2. **"Other apps' data" — confirmed hard no for arbitrary access, with a specific, real, narrower set of alternatives.**
+   - *Verified (Apple's App Sandbox documentation, `protecting-user-data-with-app-sandbox` —
+     page itself served only a title to automated fetch, so this is corroborated from Apple's
+     own sandbox entitlement model rather than a direct quote, with high confidence given how
+     well-documented and stable this has been for over a decade):* each iOS app gets its own
+     private container; there is no general API, entitlement, or review-grantable permission that
+     lets one third-party app read another third-party app's private files, documents, or
+     databases. This is a foundational, deliberate security boundary, not a gap Apple has ever
+     offered a workaround for — confirms David's own stated expectation.
+   - *Verified, real and specific (these are genuinely available, user-permission-gated
+     frameworks — general framework knowledge, consistent across every current source checked):*
+     **Contacts** (`Contacts` framework), **Calendar and Reminders** (`EventKit` — this is
+     directly relevant, see wishlist #23's "hook into iOS's own Reminders/Calendar" ask),
+     **Health** (`HealthKit`), **Music/media library** (`MediaPlayer`/`MusicKit`), and
+     **user-picked files** via `UIDocumentPickerViewController` (the file-picker equivalent of
+     the photo picker — the app sees only what the user explicitly picks, not the filesystem).
+   - *Verified, real and specifically relevant (App Intents framework):* **Shortcuts actions
+     other apps have chosen to expose via their own `AppIntent`s** — this is real and reciprocal:
+     JARVIS could potentially trigger another app's own exposed Shortcut action (e.g. "add a
+     reminder in Things," if Things exposes that as an App Intent) when that other app has opted
+     in. This is categorically different from "seeing another app's data" — it's "asking another
+     app to do one specific thing it already agreed to expose," much narrower and opt-in on the
+     *other* app's part, not something JARVIS can do unilaterally.
+   - **Realistic/valuable for JARVIS specifically:** EventKit (Calendar/Reminders) is the clear
+     highest-value one, directly matching wishlist #23's "like Siri, but David Intelligence"
+     ambition and already-planned system-level hooks. Contacts is plausibly useful (e.g. for
+     phone-call/Telegram features already built). HealthKit and MediaPlayer/MusicKit are real but
+     speculative until a concrete use case is named. `UIDocumentPickerViewController` is a real,
+     narrow substitute for "see my files," matching the same picker-first pattern as Photos.
+
+3. **"Take information from Siri or ask Siri things" — confirmed no such API exists, in either direction David might mean.**
+   - *Verified (App Intents framework's own documented shape — the live doc page served only a
+     title to automated fetch, so this is confirmed via the framework's stable, consistently
+     one-directional public design across every source checked, not a direct Apple quote; high
+     confidence):* the App Intents integration is **strictly one-directional** — an app exposes
+     actions/content *to* Siri (via `AppIntent`, `AppShortcutsProvider`, indexed `AppEntity`s for
+     Spotlight/semantic search), and the system decides when to invoke them. There is no public
+     API for the reverse: an app cannot call into Siri to ask it a question, retrieve Siri's own
+     learned data/preferences about the user, or get a machine-readable answer back from Siri
+     itself. This confirms David's own stated strong prior exactly — there is no "JARVIS calls
+     Siri and gets an answer" channel, publicly or otherwise, as of this writing.
+   - *Verified (JARVIS's own prior research, `JARVIS_MASTER_PLAN.md`, 2026-10-26 pass, consistent
+     with the above):* Siri App Intents triggering is **structured-parameters only, not free-form
+     dictation** — a third-party app can register fixed trigger phrases with typed parameters
+     ("Hey Siri, ask JARVIS to start my morning routine"), not receive arbitrary free-form speech
+     relayed from Siri. So even the already-planned forward direction (Siri → JARVIS) is narrower
+     than open-ended conversation, not just the reverse direction David asked about.
+   - **Net: this is a real, structural dead end, not a missing integration to go build.** Nothing
+     in Apple's current public APIs lets a third-party app treat Siri as a queryable data source
+     or reasoning service.
+
+4. **Realistic "feel like Siri" scope for the iPhone app in 2026 — real and substantial, short of true system-level status.**
+   Genuinely real and available to a well-built third-party app, consistent with what the app
+   build is already targeting: **App Intents/App Shortcuts** (system-wide discoverability in
+   Spotlight search and Siri suggestions, the exact mechanism already planned for JARVIS's own
+   launch/trigger-phrase design), **Live Activities** (already confirmed buildable per the
+   2026-10-26 research in `JARVIS_MASTER_PLAN.md`), **interactive widgets** (`WidgetKit` +
+   `AppIntentConfiguration`, buttons/toggles that run intents without opening the app), **Focus
+   Filters** (an app can customize its own behavior/content per the user's active Focus — real,
+   but it's the app adapting to Focus state, not controlling other apps), and **the Action
+   button / Control Center controls** on supported hardware. Structurally impossible for *any*
+   non-Apple app, regardless of build quality, confirmed by the above: **true background
+   always-on custom wake word** (already confirmed separately, `JARVIS_MASTER_PLAN.md`
+   2026-10-26 — iOS gives backgrounded apps only a few seconds outside specific exempted modes),
+   **direct Siri data/query access** (point 3 above), and **arbitrary cross-app data access**
+   (point 2 above). The honest framing for David: the iPhone app can genuinely become a strong,
+   system-integrated assistant across the surfaces Apple actually opens to third parties — it
+   cannot become "Siri with another name" in the sense of seeing everything on the phone or
+   talking to Siri itself, and those two specific gaps are permanent platform boundaries, not
+   today's-SDK limitations likely to lift later.
