@@ -146,7 +146,14 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate, AVSpeechSynt
 
     /// How long to wait after speech stops updating before treating whatever
     /// followed the wake phrase as the complete command.
-    private static let silenceThresholdSeconds: TimeInterval = 1.5
+    ///
+    /// Raised from 1.5s to 2.5s (2026-10-27) after real hands-on testing: 1.5s
+    /// repeatedly cut off natural speech mid-sentence (especially composing a
+    /// sentence, or switching between Hebrew/English), causing the wake-only
+    /// "how can I help you" greeting to fire before an actual command was
+    /// captured — the user never reached a real Core round-trip. Still short
+    /// enough to feel responsive once speech has genuinely stopped.
+    private static let silenceThresholdSeconds: TimeInterval = 2.5
 
     /// True from the moment a proactive (JARVIS-initiated) announcement
     /// finishes speaking until either something is captured or
