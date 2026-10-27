@@ -52,12 +52,22 @@ final class JarvisAgentApp: NSObject, NSApplicationDelegate, CoreConnectionDeleg
         // Native notification permission — needed for show_notification
         // (due reminders, automation results) to actually appear as a
         // banner, independent of Telegram being configured at all.
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error {
-                Logger.shared.log("Notification authorization request failed: \(error.localizedDescription)")
-            } else if !granted {
-                Logger.shared.log("Notification permission not granted — show_notification will silently do nothing.")
+        //
+        // UNUserNotificationCenter.current() hard-crashes (NSInternalInconsistencyException,
+        // "bundleProxyForCurrentProcess is nil") when the running process has no real bundle
+        // identifier — which is exactly what `swift run` / a raw unsigned executable produces.
+        // The proper `scripts/install.sh` flow code-signs a real app bundle, where this works
+        // fine, so this guard only short-circuits ad-hoc `swift run` smoke-testing.
+        if Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+                if let error {
+                    Logger.shared.log("Notification authorization request failed: \(error.localizedDescription)")
+                } else if !granted {
+                    Logger.shared.log("Notification permission not granted — show_notification will silently do nothing.")
+                }
             }
+        } else {
+            Logger.shared.log("No bundle identifier (running unbundled, e.g. `swift run`) — skipping notification permission request.")
         }
 
         // Accessibility (CLICK_ELEMENT, TYPE_TEXT) is the one permission
