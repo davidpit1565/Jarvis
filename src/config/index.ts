@@ -1425,6 +1425,17 @@ const KNOWN_SECRET_CONFIG_FIELDS: ReadonlySet<keyof JarvisConfig> = new Set([
   "githubToken",
   "studioSecret",
   "agentMailApiKey",
+  // Not caught by SECRET_FIELD_NAME_PATTERN below (its name contains
+  // neither "token"/"secret"/"apikey"/"password"/"credential") even though
+  // it IS a real credential — the shared confirmation passphrase's seed
+  // value, read from JARVIS_CONFIRMATION_PASSPHRASE. Found during a
+  // post-flood config-sanity audit (2026-10-27): GET /config's own doc
+  // comment promises every secret-shaped field is redacted, but this one
+  // field — a password, functionally — was passing through
+  // redactConfigForDisplay unredacted because the naming pattern missed it.
+  // Explicit allowlist entry, same belt-and-suspenders reasoning this set's
+  // own doc comment already describes.
+  "confirmationPassphraseSeed",
 ]);
 
 /** Case-insensitive fallback pattern catching any field name that reads as a secret, even one not in the explicit list above. */
