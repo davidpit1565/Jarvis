@@ -37,7 +37,8 @@ export type MessageTopic =
   | "history"
   | "undo"
   | "devices"
-  | "github";
+  | "github"
+  | "canva";
 
 /**
  * Keyword/phrase matchers per topic, checked against the lowercased
@@ -102,6 +103,7 @@ const TOPIC_KEYWORDS: Record<MessageTopic, string[]> = {
     "pushed",
     "open issues",
   ],
+  canva: ["canva", "brand template", "autofill", "design in canva"],
 };
 
 /**

@@ -19,6 +19,7 @@ import type { ConversationHistoryStore } from "@/history/ConversationHistoryStor
 import type { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import type { UserMessageImage } from "@/types/conversation";
 import type { SpotifyClient } from "@/spotify/SpotifyClient";
+import type { CanvaClient } from "@/canva/CanvaClient";
 import type { WakeUpCallStore } from "@/wakeup/WakeUpCallStore";
 import type { PermissionService } from "@/permissions/PermissionService";
 import type { Orchestrator } from "@/core/orchestrator/Orchestrator";
@@ -215,6 +216,12 @@ export interface JarvisWebSocketServerDependencies {
    * routes 404.
    */
   spotifyClient?: SpotifyClient;
+  /**
+   * Optional: enables GET /canva/oauth/start and /canva/oauth/callback,
+   * which link a Canva account for design listing/autofill. When unset,
+   * both routes 404.
+   */
+  canvaClient?: CanvaClient;
   /** Optional: enables the admin-gated GET /wakeup-calls read-only endpoint. */
   wakeUpCallStore?: WakeUpCallStore;
   /**
@@ -450,6 +457,13 @@ export class JarvisWebSocketServer {
   private readonly pendingOAuthStates: Map<string, number> = new Map();
   /** Same purpose/lifecycle as `pendingOAuthStates`, kept separate so the Spotify and Calendar OAuth flows never share state. */
   private readonly pendingSpotifyOAuthStates: Map<string, number> = new Map();
+  /**
+   * Canva's OAuth flow requires PKCE (unlike Spotify/Google here), so each
+   * pending state must also carry the matching `code_verifier` generated
+   * alongside it in `handleCanvaOAuthStart` — the callback needs both to
+   * complete the token exchange.
+   */
+  private readonly pendingCanvaOAuthStates: Map<string, { issuedAt: number; codeVerifier: string }> = new Map();
 
   /**
    * Read-only spectators connected on `/observer` (e.g. the hologram UI in
@@ -844,6 +858,14 @@ export class JarvisWebSocketServer {
 
           if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/spotify/oauth/callback") {
             return await this.handleSpotifyOAuthCallback(url);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/canva/oauth/start") {
+            return this.handleCanvaOAuthStart(req, url, server);
+          }
+
+          if (!isUpgradeRequest && req.method === "GET" && url.pathname === "/canva/oauth/callback") {
+            return await this.handleCanvaOAuthCallback(url);
           }
 
           if (!isUpgradeRequest && req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
@@ -2338,6 +2360,74 @@ export class JarvisWebSocketServer {
     }
 
     return new Response("Spotify linked successfully. You can close this tab.", {
+      headers: { "Content-Type": "text/plain" },
+    });
+  }
+
+  /**
+   * GET /canva/oauth/start — begins linking a Canva account for design
+   * listing/autofill. Same admin-token-in-query-param gating and
+   * rate-limiting rationale as GET /spotify/oauth/start. Unlike Spotify,
+   * Canva's `buildAuthUrl` also returns a PKCE `code_verifier`, which must
+   * be held alongside `state` so the callback can complete the exchange.
+   */
+  private handleCanvaOAuthStart(req: Request, url: URL, server: BunServer): Response {
+    const { adminToken, canvaClient } = this.deps;
+    if (!canvaClient || !adminToken) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!this.rateLimiter.attempt(rateLimitKey(req, server, "canva-oauth-start"))) {
+      return Response.json({ error: "Too many attempts, try again later" }, { status: 429 });
+    }
+    if (!constantTimeEqual(url.searchParams.get("token") ?? "", adminToken)) {
+      return Response.json({ error: "Missing or invalid admin token" }, { status: 401 });
+    }
+
+    this.purgeExpiredCanvaOAuthStates();
+    const state = randomUUID();
+    const { url: authUrl, codeVerifier } = canvaClient.buildAuthUrl(state);
+    this.pendingCanvaOAuthStates.set(state, { issuedAt: Date.now(), codeVerifier });
+    return Response.redirect(authUrl, 302);
+  }
+
+  /** Same purpose as `purgeExpiredSpotifyOAuthStates`, for the separate Canva state map. */
+  private purgeExpiredCanvaOAuthStates(): void {
+    const cutoff = Date.now() - OAUTH_STATE_TTL_MS;
+    for (const [state, entry] of this.pendingCanvaOAuthStates) {
+      if (entry.issuedAt < cutoff) this.pendingCanvaOAuthStates.delete(state);
+    }
+  }
+
+  /** GET /canva/oauth/callback — Canva redirects here once the user grants (or denies) access. */
+  private async handleCanvaOAuthCallback(url: URL): Promise<Response> {
+    const { canvaClient } = this.deps;
+    if (!canvaClient) {
+      return new Response("Not found", { status: 404 });
+    }
+
+    const error = url.searchParams.get("error");
+    if (error) {
+      return new Response(`Canva linking was not completed: ${error}`, { status: 400 });
+    }
+
+    const state = url.searchParams.get("state");
+    const code = url.searchParams.get("code");
+    const pending = state ? this.pendingCanvaOAuthStates.get(state) : undefined;
+    if (!state || !pending || pending.issuedAt < Date.now() - OAUTH_STATE_TTL_MS || !code) {
+      return new Response("Invalid or expired OAuth state", { status: 400 });
+    }
+    this.pendingCanvaOAuthStates.delete(state);
+
+    try {
+      await canvaClient.exchangeCodeForTokens(code, pending.codeVerifier);
+    } catch (err) {
+      console.error("[jarvis] Canva OAuth exchange failed:", err instanceof Error ? err.message : String(err));
+      return new Response("Failed to complete Canva linking. Check the server logs for details.", {
+        status: 500,
+      });
+    }
+
+    return new Response("Canva linked successfully. You can close this tab.", {
       headers: { "Content-Type": "text/plain" },
     });
   }
