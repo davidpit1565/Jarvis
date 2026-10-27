@@ -420,6 +420,42 @@ session" decision above). The spec:
   targeted the iMac) — per David's explicit ask here, the same agent needs to run on **both**
   his iMac and his MacBook, not just one, once this phase starts.
 
+## Researched: free/local speaker verification for wishlist #19's voice-ID tier (2026-10-27, not built)
+
+Researched (not built) whether a real speaker-verification option exists to confirm a reply to
+a JARVIS-initiated proactive announcement is actually David speaking, not just anyone saying the
+right words — the second-tier security mechanism he described wanting to grow toward, beyond
+the already-built passphrase (PR #146). **Verdict: not ready to build now.** Two separate
+problems, not one:
+1. **No off-the-shelf free product exists anymore.** The one obvious fit, Picovoice Eagle
+   (free-tier, on-device, Swift-friendly), was **retired in September 2025**. Azure AI Speaker
+   Recognition and Amazon Connect Voice ID were also both retired/discontinued in 2025. This
+   landscape got measurably worse in the last year — not a case of an obvious tool being missed.
+2. **The remaining DIY option (open-source speaker-embedding models, e.g. SpeechBrain's
+   `spkrec-ecapa-voxceleb`, Apache 2.0, genuinely free, runs fully on-device/local, no cloud
+   needed) is not reliably accurate for short replies like "מאשר"/"לא מאשר."** Published
+   research on short-utterance speaker verification shows error rates climbing sharply as
+   utterance length drops — real numbers range from single digits up past 20% error on ~1-second
+   clips, even under clean lab conditions (a real iMac mic in a real room would be worse). A
+   one-word yes/no reply sits squarely in this unreliable range.
+
+Privacy is not the blocker here — the realistic model choice (SpeechBrain/pyannote-style
+embeddings) runs entirely on-device, matching the existing `WakeWordListener.swift` posture of
+never sending audio to the cloud. The real tradeoff is accuracy-vs-utterance-length: a longer
+spoken confirmation phrase (several seconds, not one word) would land in a meaningfully more
+reliable regime, but that's a real UX tradeoff David should decide on explicitly, not have
+decided for him by assuming "מאשר" alone can ever be voice-verified reliably.
+
+**If/when revisited**: the concrete next step is an offline prototype — stand up SpeechBrain's
+ECAPA-TDNN model as a local sidecar process the Swift Mac agent calls over localhost, enroll
+David with ~5-10 real sample recordings on his actual iMac mic, and measure real accuracy on
+both his current short passphrase word and a longer alternative phrase before wiring anything
+into the live agent. Store only the derived embedding (not raw audio), in a small dedicated
+local store matching `ConfirmationPassphraseStore.ts`'s existing single-secret-per-user pattern,
+living on the Mac rather than Fly since the whole point is the voiceprint never needs to leave
+the device. The passphrase remains the right primary mechanism for now; voice verification,
+once viable, should layer on top of it (closer to 2FA) rather than replace it.
+
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
 - `davidpit1565/Rudder` — the app he initially called "Decide" (that was its working
