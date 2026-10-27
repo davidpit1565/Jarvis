@@ -456,6 +456,35 @@ living on the Mac rather than Fly since the whole point is the voiceprint never 
 the device. The passphrase remains the right primary mechanism for now; voice verification,
 once viable, should layer on top of it (closer to 2FA) rather than replace it.
 
+## Elaboration of wishlist #10 (2026-10-27): full scope once it's actually time to build it
+
+David expanded on what #10 ("JARVIS drives Claude Code to build/ship his apps") should actually
+cover, confirmed as an elaboration of that same already-last-priority item, not a new separate
+project — still explicitly **not built now**, per his own standing priority order (#20):
+
+- **End-to-end repo lifecycle**: not just driving an existing repo's Claude Code session, but
+  JARVIS creating a brand-new GitHub repo from an idea in the first place, then running
+  appropriate research agents, then building — i.e. the same kind of workflow this very
+  Claude Code session already does for JARVIS itself, but JARVIS doing it for *his other app
+  ideas*. The GitHub integration built 2026-10-27 (read-only PAT, `src/github/GitHubClient.ts`)
+  would need real write/repo-creation scope for this — a meaningfully higher-privilege grant
+  than the current read-only token, and should get its own CONFIRM/DANGEROUS-tier gating when
+  built, not silently reuse the read-only integration's trust level.
+- **Skills, explicitly clarified as not a separate thing to build**: David wants to be able to
+  hand JARVIS "skills" the way he can hand Claude Code skills in this very session (he named
+  `arena` — a heavy, multi-agent competitive skill he rarely uses because of its cost — as one
+  concrete example, alongside research/design skills generally). **Important technical reality,
+  explained to him and worth remembering**: skills are not a generic AI capability that can be
+  bolted onto any brain — they're specifically a Claude Code harness feature (instruction
+  packages loaded into a Claude session). They only become available to JARVIS at all once #10
+  itself is built the way it's already architected (JARVIS's Mac agent literally invoking the
+  `claude` CLI under David's own subscription/account, per the "Architecture decision" section
+  above) — at that point, skills already synced to his account are automatically available to
+  that Claude Code session with no additional integration work. **This is not an extra feature
+  to build on top of #10 — it's something #10 already includes once it exists.** Don't treat
+  "add skill support" as a separate roadmap item; it's a natural consequence of #10's own
+  design, worth re-confirming in practice once #10 is actually underway, not before.
+
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
 - `davidpit1565/Rudder` — the app he initially called "Decide" (that was its working
