@@ -131,6 +131,11 @@ import { createPlayMusicTool } from "@/tools/spotify/PlayMusicTool";
 import { createPauseMusicTool } from "@/tools/spotify/PauseMusicTool";
 import { createSkipTrackTool } from "@/tools/spotify/SkipTrackTool";
 import { createUnlinkSpotifyTool } from "@/tools/spotify/UnlinkSpotifyTool";
+import { GitHubClient } from "@/github/GitHubClient";
+import { createListGitHubCommitsTool } from "@/tools/github/ListGitHubCommitsTool";
+import { createListGitHubIssuesTool } from "@/tools/github/ListGitHubIssuesTool";
+import { createListGitHubPullRequestsTool } from "@/tools/github/ListGitHubPullRequestsTool";
+import { createCheckGitHubRepoActivityTool } from "@/tools/github/CheckGitHubRepoActivityTool";
 import { createSearchEmailTool } from "@/tools/gmail/SearchEmailTool";
 import { createSendEmailTool } from "@/tools/gmail/SendEmailTool";
 import { createReplyEmailTool } from "@/tools/gmail/ReplyEmailTool";
@@ -383,6 +388,20 @@ function main() {
     toolRegistry.registerTool(createPauseMusicTool(spotifyClient));
     toolRegistry.registerTool(createSkipTrackTool(spotifyClient));
     toolRegistry.registerTool(createUnlinkSpotifyTool(spotifyTokenStore));
+  }
+
+  // GitHub integration: a single static fine-grained PAT (no OAuth flow,
+  // no per-account linking — see GitHubClient's own doc comment and the
+  // introducing PR for why) — gated on GITHUB_TOKEN alone, unlike
+  // Spotify/Calendar which also require publicBaseUrl for an OAuth
+  // redirect this integration doesn't need.
+  const githubClient = config.githubToken ? new GitHubClient(config.githubToken) : undefined;
+  if (githubClient) {
+    toolRegistry.registerTool(createListGitHubCommitsTool(githubClient));
+    toolRegistry.registerTool(createListGitHubIssuesTool(githubClient));
+    toolRegistry.registerTool(createListGitHubPullRequestsTool(githubClient));
+    toolRegistry.registerTool(createCheckGitHubRepoActivityTool(githubClient));
+    console.log("[jarvis] GitHub integration enabled");
   }
 
   const studioClient =

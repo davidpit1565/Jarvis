@@ -483,6 +483,14 @@ export interface JarvisConfig {
   spotifyClientSecret?: string;
   /** Path to the SQLite database storing the linked Spotify account's OAuth tokens. */
   spotifyTokenDbPath: string;
+  /**
+   * A GitHub fine-grained personal access token (read-only scopes: repo
+   * contents, issues, pull requests — see the GitHub integration PR
+   * description for the exact setup steps). Unlike Calendar/Gmail/Spotify,
+   * there's no OAuth flow or TokenStore here — this single static token
+   * (one GitHub account, David's own) is all GitHubClient needs.
+   */
+  githubToken?: string;
   /** Both required together to enable the video studio integration (reels list, publish, Instagram stats). */
   studioBaseUrl?: string;
   studioSecret?: string;
@@ -845,6 +853,8 @@ export function loadConfig(): JarvisConfig {
     );
   }
 
+  const githubToken = process.env.GITHUB_TOKEN?.trim() || undefined;
+
   const studioBaseUrl = process.env.JARVIS_STUDIO_BASE_URL?.trim() || undefined;
   const studioSecret = process.env.JARVIS_STUDIO_SECRET?.trim() || undefined;
   if (Boolean(studioBaseUrl) !== Boolean(studioSecret)) {
@@ -1104,6 +1114,7 @@ export function loadConfig(): JarvisConfig {
     spotifyClientId,
     spotifyClientSecret,
     spotifyTokenDbPath,
+    githubToken,
     studioBaseUrl,
     studioSecret,
     commitmentsDbPath,
@@ -1156,6 +1167,7 @@ const KNOWN_SECRET_CONFIG_FIELDS: ReadonlySet<keyof JarvisConfig> = new Set([
   "adminToken",
   "googleClientSecret",
   "spotifyClientSecret",
+  "githubToken",
   "studioSecret",
   "agentMailApiKey",
 ]);

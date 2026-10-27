@@ -36,7 +36,8 @@ export type MessageTopic =
   | "phone"
   | "history"
   | "undo"
-  | "devices";
+  | "devices"
+  | "github";
 
 /**
  * Keyword/phrase matchers per topic, checked against the lowercased
@@ -88,6 +89,19 @@ const TOPIC_KEYWORDS: Record<MessageTopic, string[]> = {
   history: ["conversation history", "what did we talk about", "earlier you said"],
   undo: ["undo", "take that back"],
   devices: ["my devices", "connected devices", "which device"],
+  github: [
+    "github",
+    "repo",
+    "repos",
+    "repository",
+    "repositories",
+    "pull request",
+    "pull requests",
+    "commit",
+    "commits",
+    "pushed",
+    "open issues",
+  ],
 };
 
 /**
