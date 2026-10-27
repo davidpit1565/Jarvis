@@ -81,6 +81,7 @@ import { createListAutomationRulesTool } from "@/tools/automation/ListAutomation
 import { createUpdateAutomationRuleTool } from "@/tools/automation/UpdateAutomationRuleTool";
 import { createDeleteAutomationRuleTool } from "@/tools/automation/DeleteAutomationRuleTool";
 import { CommitmentStore } from "@/commitments/CommitmentStore";
+import { BehaviorCorrectionStore } from "@/behavior/BehaviorCorrectionStore";
 import { getStaleCommitments } from "@/commitments/getStaleCommitments";
 import { createCreateCommitmentTool } from "@/tools/commitments/CreateCommitmentTool";
 import { createListCommitmentsTool } from "@/tools/commitments/ListCommitmentsTool";
@@ -274,6 +275,12 @@ function main() {
   // throughout the rest of this file.
   const logger = new Logger("scheduler");
   const commitmentStore = new CommitmentStore(config.commitmentsDbPath);
+  // Correction Learning: see src/behavior/BehaviorCorrectionStore.ts's own
+  // doc comment for why this is a separate store from MemoryStore. Created
+  // here (alongside the other stores MemoryExtractor/buildContextNote need)
+  // rather than down near agentTaskStore/goalStore — unlike those, nothing
+  // about it depends on `orchestrator` existing first.
+  const behaviorCorrectionStore = new BehaviorCorrectionStore(config.behaviorCorrectionsDbPath);
   // Unset (either JARVIS_QUIET_HOURS_START or _END missing) means quiet
   // hours is disabled entirely — isQuietHours(_, undefined) always
   // returns false, so every proactive-notification check below behaves
@@ -734,7 +741,9 @@ function main() {
   // SAVE_MEMORY call does. `undefined` when disabled means every
   // Orchestrator below gets no `memoryExtractor` at all, identical to
   // before this feature existed.
-  const memoryExtractor = config.memoryExtractionEnabled ? new MemoryExtractor(brain, memoryStore, eventBus) : undefined;
+  const memoryExtractor = config.memoryExtractionEnabled
+    ? new MemoryExtractor(brain, memoryStore, eventBus, behaviorCorrectionStore)
+    : undefined;
   const confirmationService = new ConfirmationService(confirmViaChat);
   const phoneConfirmationService = new ConfirmationService(denyPhoneConfirmation);
   // Shared across every channel's Orchestrator below — a repeated
@@ -774,12 +783,16 @@ function main() {
     deviceRegistry,
     deviceConnectionManager,
     confirmationService,
-    contextProvider: () =>
-      buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
-        goalStore,
-        taskStore: agentTaskStore,
-        userId: DEFAULT_USER_ID,
-      }),
+    contextProvider: (message) =>
+      buildContextNote(
+        config,
+        reminderStore,
+        calendarClient,
+        commitmentStore,
+        { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
+        behaviorCorrectionStore,
+        message
+      ),
     lockdownService,
     toolResultCache,
     embeddingsClient,
@@ -856,12 +869,16 @@ function main() {
       deviceConnectionManager,
       confirmationService: phoneConfirmationService,
       channelContext: "This conversation is happening over a live phone call right now.",
-      contextProvider: () =>
-        buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
-          goalStore,
-          taskStore: agentTaskStore,
-          userId: DEFAULT_USER_ID,
-        }),
+      contextProvider: (message) =>
+        buildContextNote(
+          config,
+          reminderStore,
+          calendarClient,
+          commitmentStore,
+          { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
+          behaviorCorrectionStore,
+          message
+        ),
       lockdownService,
       toolResultCache,
       embeddingsClient,
@@ -908,12 +925,16 @@ function main() {
         "today — a meeting, a task, a workout). If they push back or say they're tired, don't just accept it: " +
         "persuade them further with another real, specific reason, the way a determined friend would, rather " +
         "than immediately backing off. Keep replies short and energetic — this is a live phone call.",
-      contextProvider: () =>
-        buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
-          goalStore,
-          taskStore: agentTaskStore,
-          userId: DEFAULT_USER_ID,
-        }),
+      contextProvider: (message) =>
+        buildContextNote(
+          config,
+          reminderStore,
+          calendarClient,
+          commitmentStore,
+          { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
+          behaviorCorrectionStore,
+          message
+        ),
       lockdownService,
       toolResultCache,
       embeddingsClient,
@@ -993,12 +1014,16 @@ function main() {
       deviceConnectionManager,
       confirmationService: phoneConfirmationService,
       channelContext: "This conversation is happening over text message (SMS) right now.",
-      contextProvider: () =>
-        buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
-          goalStore,
-          taskStore: agentTaskStore,
-          userId: DEFAULT_USER_ID,
-        }),
+      contextProvider: (message) =>
+        buildContextNote(
+          config,
+          reminderStore,
+          calendarClient,
+          commitmentStore,
+          { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
+          behaviorCorrectionStore,
+          message
+        ),
       lockdownService,
       toolResultCache,
       embeddingsClient,
@@ -1051,12 +1076,16 @@ function main() {
       deviceConnectionManager,
       confirmationService: telegramConfirmationService,
       channelContext: "This conversation is happening over Telegram right now.",
-      contextProvider: () =>
-        buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
-          goalStore,
-          taskStore: agentTaskStore,
-          userId: DEFAULT_USER_ID,
-        }),
+      contextProvider: (message) =>
+        buildContextNote(
+          config,
+          reminderStore,
+          calendarClient,
+          commitmentStore,
+          { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
+          behaviorCorrectionStore,
+          message
+        ),
       lockdownService,
       toolResultCache,
       embeddingsClient,
@@ -1185,12 +1214,16 @@ function main() {
       deviceConnectionManager,
       confirmationService: voiceConfirmationService,
       channelContext: "This conversation is happening by voice, right now, on the user's Mac.",
-      contextProvider: () =>
-        buildContextNote(config, reminderStore, calendarClient, commitmentStore, {
-          goalStore,
-          taskStore: agentTaskStore,
-          userId: DEFAULT_USER_ID,
-        }),
+      contextProvider: (message) =>
+        buildContextNote(
+          config,
+          reminderStore,
+          calendarClient,
+          commitmentStore,
+          { goalStore, taskStore: agentTaskStore, userId: DEFAULT_USER_ID },
+          behaviorCorrectionStore,
+          message
+        ),
       lockdownService,
       toolResultCache,
       embeddingsClient,

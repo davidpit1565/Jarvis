@@ -56,12 +56,14 @@ export interface JarvisEventMap {
   "tool.cacheHit": { toolName: string; input: Record<string, unknown>; semantic?: boolean };
   /** Continuous Memory/Profile: a background extraction call failed/timed out for a turn — see `MemoryExtractor`'s own doc comment. Never affects the user-facing reply. */
   "memory.extraction.failed": { userId: string; error: string };
-  /** Continuous Memory/Profile: an extraction call completed and parsed; how many facts it proposed vs. actually wrote (some may be skipped as tombstoned/invalid). */
-  "memory.extraction.completed": { userId: string; factsConsidered: number; factsStored: number };
+  /** Continuous Memory/Profile: an extraction call completed and parsed; how many facts/corrections it proposed vs. actually wrote (some may be skipped as tombstoned/invalid). `correctionsStored` is only ever >0 when a `priorAction` was supplied to that extraction call — see `MemoryExtractor.run`. */
+  "memory.extraction.completed": { userId: string; factsConsidered: number; factsStored: number; correctionsStored?: number };
   /** Continuous Memory/Profile: an extracted fact was skipped because its key (or the near-duplicate key it resolved to) was explicitly deleted by the user and hasn't been explicitly re-saved since. */
   "memory.extraction.skippedDeleted": { key: string };
   /** Continuous Memory/Profile: an extracted fact was written (or rejected by the Memory Poisoning Defense — `applied: false`) via `MemoryStore.save`. */
   "memory.extraction.wrote": { key: string; category: string; applied: boolean };
+  /** Correction Learning: a behavioral correction about `contextKey` (the tool it was about) was detected and written to `BehaviorCorrectionStore`. `flaggedPreferenceConflict` true means it was also flagged as conflicting with a standing MemoryStore preference — see `correctionNote.ts`'s caveat handling. */
+  "behaviorCorrection.stored": { contextKey: string; flaggedPreferenceConflict: boolean };
   /**
    * Tool Risk Model: a tool call was refused — never even reaching
    * permission checks or execution — because it would exceed the
