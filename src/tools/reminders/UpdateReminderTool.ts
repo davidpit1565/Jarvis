@@ -1,16 +1,20 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 import type { ReminderStore } from "@/reminders/ReminderStore";
-import type { ReminderRecurrence } from "@/types/reminders";
+import type { ReminderRecurrence, ReminderTone } from "@/types/reminders";
 
 export interface UpdateReminderInput extends Record<string, unknown> {
   id: string;
   text?: string;
   dueAt?: string | null;
   recurrence?: ReminderRecurrence | null;
+  announce?: boolean;
+  targetDevice?: string | null;
+  tone?: ReminderTone | null;
 }
 
 const VALID_RECURRENCES: ReminderRecurrence[] = ["daily", "weekly"];
+const VALID_TONES: ReminderTone[] = ["casual", "formal"];
 
 function isValidIsoDate(value: string): boolean {
   return !Number.isNaN(Date.parse(value));
@@ -54,6 +58,21 @@ export function createUpdateReminderTool(reminderStore: ReminderStore): LocalToo
           enum: [...VALID_RECURRENCES, null],
           description: 'New recurrence ("daily"/"weekly"), or null to make it a one-off. Omit to leave unchanged.',
         },
+        announce: {
+          type: "boolean",
+          description: "Whether this reminder should be spoken live through a connected device when due. Omit to leave unchanged.",
+        },
+        targetDevice: {
+          type: ["string", "null"],
+          description:
+            'Which device to speak an "announce" reminder through ("all", a specific device id, or null for ' +
+            '"wherever available"). Omit to leave unchanged.',
+        },
+        tone: {
+          type: ["string", "null"],
+          enum: [...VALID_TONES, null],
+          description: 'Phrasing tone for an "announce" reminder ("casual"/"formal"), or null to reset to default. Omit to leave unchanged.',
+        },
       },
       required: ["id"],
     },
@@ -77,6 +96,15 @@ export function createUpdateReminderTool(reminderStore: ReminderStore): LocalToo
       }
       if (input.recurrence !== undefined && input.recurrence !== null && !VALID_RECURRENCES.includes(input.recurrence)) {
         return { success: false, error: `recurrence must be one of: ${VALID_RECURRENCES.join(", ")}, or null` };
+      }
+      if (input.announce !== undefined && typeof input.announce !== "boolean") {
+        return { success: false, error: "announce must be a boolean" };
+      }
+      if (input.targetDevice !== undefined && input.targetDevice !== null && typeof input.targetDevice !== "string") {
+        return { success: false, error: "targetDevice must be a string or null" };
+      }
+      if (input.tone !== undefined && input.tone !== null && !VALID_TONES.includes(input.tone)) {
+        return { success: false, error: `tone must be one of: ${VALID_TONES.join(", ")}, or null` };
       }
 
       // Same invariant CreateReminderTool enforces at creation time: a
@@ -103,13 +131,24 @@ export function createUpdateReminderTool(reminderStore: ReminderStore): LocalToo
         text: input.text,
         dueAt: input.dueAt,
         recurrence: input.recurrence,
+        announce: input.announce,
+        targetDevice: input.targetDevice,
+        tone: input.tone,
       });
       if (!updated) {
         return { success: false, error: `No reminder found with id: ${input.id}` };
       }
       return {
         success: true,
-        data: { id: updated.id, text: updated.text, dueAt: updated.dueAt, recurrence: updated.recurrence },
+        data: {
+          id: updated.id,
+          text: updated.text,
+          dueAt: updated.dueAt,
+          recurrence: updated.recurrence,
+          announce: updated.announce,
+          targetDevice: updated.targetDevice,
+          tone: updated.tone,
+        },
       };
     },
   };

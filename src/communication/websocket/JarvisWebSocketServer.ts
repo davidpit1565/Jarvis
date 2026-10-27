@@ -27,6 +27,7 @@ import type { TwilioVoiceGateway } from "@/communication/phone/TwilioVoiceGatewa
 import type { TwilioSmsGateway } from "@/communication/phone/TwilioSmsGateway";
 import type { TelegramGateway } from "@/communication/telegram/TelegramGateway";
 import type { DeviceVoiceGateway } from "@/communication/voice/DeviceVoiceGateway";
+import type { ProactiveAnnouncer } from "@/communication/voice/ProactiveAnnouncer";
 import type { LockdownService } from "@/core/lockdown/LockdownService";
 import type { AutomationRuleStore } from "@/automation/AutomationRuleStore";
 import type { CostTracker } from "@/core/cost/CostTracker";
@@ -233,6 +234,15 @@ export interface JarvisWebSocketServerDependencies {
    * `event`'s current no-op handling).
    */
   deviceVoiceGateway?: DeviceVoiceGateway;
+  /**
+   * Optional: enables proactive, JARVIS-initiated device announcements
+   * (device-spoken reminders — see ReminderStore's `announce` field). When
+   * set, a `proactive.reply` message from a paired device is routed to it
+   * to resolve the matching `announce()` call. Without it, `proactive.reply`
+   * messages are silently ignored, the same posture as every other
+   * optional dependency here.
+   */
+  proactiveAnnouncer?: ProactiveAnnouncer;
   /**
    * Optional break-glass kill switch. When set, enables POST
    * /emergency/lockdown and POST /emergency/lockdown/lift (both admin-token
@@ -1210,6 +1220,13 @@ export class JarvisWebSocketServer {
           deviceVoiceGateway.handleTranscript(message.deviceId, message.payload.text, message.payload.wakeWord).catch((error) => {
             console.error(`[jarvis] voice.transcript handling threw for device ${message.deviceId}:`, error);
           });
+        }
+        return;
+      }
+      case "proactive.reply": {
+        const { proactiveAnnouncer } = this.deps;
+        if (proactiveAnnouncer && message.deviceId) {
+          proactiveAnnouncer.handleReply(message.deviceId, message.payload);
         }
         return;
       }

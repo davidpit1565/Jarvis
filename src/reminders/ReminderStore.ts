@@ -2,7 +2,13 @@ import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { CreateReminderInput, ReminderRecord, ReminderRecurrence } from "@/types/reminders";
+import type {
+  CreateReminderInput,
+  ReminderRecord,
+  ReminderRecurrence,
+  ReminderTargetDevice,
+  ReminderTone,
+} from "@/types/reminders";
 
 const RECURRENCE_DAYS: Record<ReminderRecurrence, number> = {
   daily: 1,
@@ -123,6 +129,42 @@ export class ReminderStore {
     } catch {
       // already exists
     }
+    // Proactive device-spoken reminders (CLAUDE.md wishlist #19) — same
+    // ALTER-and-ignore migration idiom as recurrence/notified_at above, so
+    // an existing reminders.sqlite from before this feature gains these
+    // columns (defaulted so every pre-existing row behaves exactly as
+    // before: announce=0, no target/tone, never acknowledged, no
+    // follow-ups yet) instead of needing a destructive migration.
+    try {
+      this.db.run(`ALTER TABLE reminders ADD COLUMN announce INTEGER NOT NULL DEFAULT 0`);
+    } catch {
+      // already exists
+    }
+    try {
+      this.db.run(`ALTER TABLE reminders ADD COLUMN target_device TEXT`);
+    } catch {
+      // already exists
+    }
+    try {
+      this.db.run(`ALTER TABLE reminders ADD COLUMN tone TEXT`);
+    } catch {
+      // already exists
+    }
+    try {
+      this.db.run(`ALTER TABLE reminders ADD COLUMN acknowledged_at TEXT`);
+    } catch {
+      // already exists
+    }
+    try {
+      this.db.run(`ALTER TABLE reminders ADD COLUMN follow_up_count INTEGER NOT NULL DEFAULT 0`);
+    } catch {
+      // already exists
+    }
+    try {
+      this.db.run(`ALTER TABLE reminders ADD COLUMN last_follow_up_at TEXT`);
+    } catch {
+      // already exists
+    }
   }
 
   create(input: CreateReminderInput): ReminderRecord {
@@ -143,25 +185,54 @@ export class ReminderStore {
       createdAt: new Date().toISOString(),
       recurrence: input.recurrence ?? null,
       notifiedAt: null,
+      announce: input.announce ?? false,
+      targetDevice: input.targetDevice ?? null,
+      tone: input.tone ?? null,
+      acknowledgedAt: null,
+      followUpCount: 0,
+      lastFollowUpAt: null,
     };
 
     this.db
       .query(
-        `INSERT INTO reminders (id, text, due_at, completed, created_at, recurrence, notified_at) VALUES (?, ?, ?, ?, ?, ?, NULL)`
+        `INSERT INTO reminders (id, text, due_at, completed, created_at, recurrence, notified_at, announce, target_device, tone, acknowledged_at, follow_up_count, last_follow_up_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, 0, NULL)`
       )
-      .run(record.id, record.text, record.dueAt, record.completed ? 1 : 0, record.createdAt, record.recurrence);
+      .run(
+        record.id,
+        record.text,
+        record.dueAt,
+        record.completed ? 1 : 0,
+        record.createdAt,
+        record.recurrence,
+        record.announce ? 1 : 0,
+        record.targetDevice,
+        record.tone
+      );
 
     return record;
+  }
+
+  private static readonly SELECT_COLUMNS = `id, text, due_at as dueAt, completed, created_at as createdAt, recurrence,
+    notified_at as notifiedAt, announce, target_device as targetDevice, tone, acknowledged_at as acknowledgedAt,
+    follow_up_count as followUpCount, last_follow_up_at as lastFollowUpAt`;
+
+  private static rowToRecord(
+    row: Omit<ReminderRecord, "completed" | "announce"> & { completed: number; announce: number }
+  ): ReminderRecord {
+    return { ...row, completed: row.completed === 1, announce: row.announce === 1 };
   }
 
   /** Pending reminders by default (what "what do I need to do" should see); pass true to include completed ones too. */
   list(includeCompleted: boolean = false): ReminderRecord[] {
     const query = includeCompleted
-      ? `SELECT id, text, due_at as dueAt, completed, created_at as createdAt, recurrence, notified_at as notifiedAt FROM reminders ORDER BY (due_at IS NULL), due_at ASC, created_at ASC`
-      : `SELECT id, text, due_at as dueAt, completed, created_at as createdAt, recurrence, notified_at as notifiedAt FROM reminders WHERE completed = 0 ORDER BY (due_at IS NULL), due_at ASC, created_at ASC`;
+      ? `SELECT ${ReminderStore.SELECT_COLUMNS} FROM reminders ORDER BY (due_at IS NULL), due_at ASC, created_at ASC`
+      : `SELECT ${ReminderStore.SELECT_COLUMNS} FROM reminders WHERE completed = 0 ORDER BY (due_at IS NULL), due_at ASC, created_at ASC`;
 
-    const rows = this.db.query(query).all() as Array<Omit<ReminderRecord, "completed"> & { completed: number }>;
-    return rows.map((row) => ({ ...row, completed: row.completed === 1 }));
+    const rows = this.db.query(query).all() as Array<
+      Omit<ReminderRecord, "completed" | "announce"> & { completed: number; announce: number }
+    >;
+    return rows.map(ReminderStore.rowToRecord);
   }
 
   /**
@@ -177,6 +248,27 @@ export class ReminderStore {
   /** Records that a due-reminder push notification actually went out, so the scheduler doesn't send it again. */
   markNotified(id: string, nowIso: string): void {
     this.db.query(`UPDATE reminders SET notified_at = ? WHERE id = ?`).run(nowIso, id);
+  }
+
+  /**
+   * Records that the owner's spoken reply to an `announce` reminder was
+   * authenticated (see SpeakerAuthenticator) — the follow-up engine
+   * (getAnnounceFollowUps) stops re-announcing a reminder once this is set.
+   */
+  markAcknowledged(id: string, nowIso: string): void {
+    this.db.query(`UPDATE reminders SET acknowledged_at = ? WHERE id = ?`).run(nowIso, id);
+  }
+
+  /**
+   * Records that a bounded follow-up announcement ("did you do it?") was
+   * just sent for this reminder — increments `follow_up_count` and stamps
+   * `last_follow_up_at`, which getAnnounceFollowUps uses to pace the next
+   * one and cap the total.
+   */
+  recordFollowUpAttempt(id: string, nowIso: string): void {
+    this.db
+      .query(`UPDATE reminders SET follow_up_count = follow_up_count + 1, last_follow_up_at = ? WHERE id = ?`)
+      .run(nowIso, id);
   }
 
   /**
@@ -217,7 +309,14 @@ export class ReminderStore {
   /** Edits an existing reminder's text and/or due date — e.g. "actually make that 7pm" or fixing a typo. */
   update(
     id: string,
-    changes: { text?: string; dueAt?: string | null; recurrence?: ReminderRecurrence | null }
+    changes: {
+      text?: string;
+      dueAt?: string | null;
+      recurrence?: ReminderRecurrence | null;
+      announce?: boolean;
+      targetDevice?: ReminderTargetDevice | null;
+      tone?: ReminderTone | null;
+    }
   ): ReminderRecord | null {
     const existing = this.get(id);
     if (!existing) return null;
@@ -227,27 +326,63 @@ export class ReminderStore {
     const dueAt =
       changes.dueAt !== undefined ? (changes.dueAt != null ? new Date(changes.dueAt).toISOString() : null) : existing.dueAt;
     const recurrence = changes.recurrence !== undefined ? changes.recurrence : existing.recurrence;
+    const announce = changes.announce !== undefined ? changes.announce : existing.announce;
+    const targetDevice = changes.targetDevice !== undefined ? changes.targetDevice : existing.targetDevice;
+    const tone = changes.tone !== undefined ? changes.tone : existing.tone;
     // A re-dated reminder should get a fresh notification at its new
     // time, not stay silenced by one already sent for the old time.
     // Compared against the normalized `dueAt` (not the raw `changes.dueAt`)
     // so a re-supplied due time that's merely a different ISO spelling of
     // the same instant isn't mistaken for an actual change.
     const notifiedAt = changes.dueAt !== undefined && dueAt !== existing.dueAt ? null : existing.notifiedAt;
+    // Same reasoning as notifiedAt: a re-dated (or otherwise changed)
+    // reminder's prior acknowledgement/follow-up history no longer applies
+    // to whatever new due time it now has — without resetting these, a
+    // reminder re-dated after already being acknowledged would never
+    // announce again at its new time.
+    const acknowledgedAt = changes.dueAt !== undefined && dueAt !== existing.dueAt ? null : existing.acknowledgedAt;
+    const followUpCount = changes.dueAt !== undefined && dueAt !== existing.dueAt ? 0 : existing.followUpCount;
+    const lastFollowUpAt = changes.dueAt !== undefined && dueAt !== existing.dueAt ? null : existing.lastFollowUpAt;
 
     this.db
-      .query(`UPDATE reminders SET text = ?, due_at = ?, recurrence = ?, notified_at = ? WHERE id = ?`)
-      .run(text, dueAt, recurrence, notifiedAt, id);
-    return { ...existing, text, dueAt, recurrence, notifiedAt };
+      .query(
+        `UPDATE reminders SET text = ?, due_at = ?, recurrence = ?, notified_at = ?, announce = ?, target_device = ?, tone = ?,
+         acknowledged_at = ?, follow_up_count = ?, last_follow_up_at = ? WHERE id = ?`
+      )
+      .run(
+        text,
+        dueAt,
+        recurrence,
+        notifiedAt,
+        announce ? 1 : 0,
+        targetDevice,
+        tone,
+        acknowledgedAt,
+        followUpCount,
+        lastFollowUpAt,
+        id
+      );
+    return {
+      ...existing,
+      text,
+      dueAt,
+      recurrence,
+      notifiedAt,
+      announce,
+      targetDevice,
+      tone,
+      acknowledgedAt,
+      followUpCount,
+      lastFollowUpAt,
+    };
   }
 
   get(id: string): ReminderRecord | null {
-    const row = this.db
-      .query(
-        `SELECT id, text, due_at as dueAt, completed, created_at as createdAt, recurrence, notified_at as notifiedAt FROM reminders WHERE id = ?`
-      )
-      .get(id) as (Omit<ReminderRecord, "completed"> & { completed: number }) | null;
+    const row = this.db.query(`SELECT ${ReminderStore.SELECT_COLUMNS} FROM reminders WHERE id = ?`).get(id) as
+      | (Omit<ReminderRecord, "completed" | "announce"> & { completed: number; announce: number })
+      | null;
     if (!row) return null;
-    return { ...row, completed: row.completed === 1 };
+    return ReminderStore.rowToRecord(row);
   }
 
   close(): void {

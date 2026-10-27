@@ -75,6 +75,17 @@ struct DeviceCapabilitiesPayload: Codable {
     let permissions: [String: String]
 }
 
+/// Whatever (if anything) was captured during a proactive announcement's
+/// reply window — `text` is `nil` if nothing was heard before the window
+/// elapsed. Core, not this Agent, decides whether `text` actually
+/// authenticates as the owner (see Core's SpeakerAuthenticator) — this
+/// struct only carries what was literally heard. See
+/// `WakeWordListener.speakProactiveAnnouncement` for where this is produced.
+struct ProactiveReplyPayload: Codable {
+    let announcementId: String
+    let text: String?
+}
+
 // MARK: - Core -> Device payloads
 
 struct ToolRequestPayload: Codable {
@@ -91,6 +102,21 @@ struct DeviceCommandPayload: Codable {
 /// AVSpeechSynthesizer.
 struct VoiceReplyPayload: Codable {
     let text: String
+}
+
+/// An unprompted, JARVIS-initiated announcement to speak aloud right now —
+/// distinct from `VoiceReplyPayload` (which answers a command the user just
+/// gave): this one wakes the device on Core's own initiative, e.g. a due,
+/// device-targeted reminder (see `src/communication/voice/ProactiveAnnouncer.ts`).
+/// `announcementId` correlates this Agent's eventual `ProactiveReplyPayload`
+/// back to this specific announcement. `replyWindowMs` is how long the
+/// Agent should listen for a reply with no wake phrase required, since the
+/// device itself spoke first this time — see
+/// `WakeWordListener.speakProactiveAnnouncement`.
+struct ProactiveAnnouncePayload: Codable {
+    let text: String
+    let announcementId: String
+    let replyWindowMs: Int
 }
 
 // MARK: - Helpers for constructing outbound messages

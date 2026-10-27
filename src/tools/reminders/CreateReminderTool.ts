@@ -1,15 +1,20 @@
 import { PermissionLevel } from "@/types/permissions";
 import type { LocalTool } from "@/types/tools";
 import type { ReminderStore } from "@/reminders/ReminderStore";
-import type { ReminderRecurrence } from "@/types/reminders";
+import type { ReminderRecurrence, ReminderTone } from "@/types/reminders";
+import { ANNOUNCE_TARGET_ALL } from "@/reminders/resolveAnnounceTargets";
 
 export interface CreateReminderInput extends Record<string, unknown> {
   text: string;
   dueAt?: string;
   recurrence?: ReminderRecurrence;
+  announce?: boolean;
+  targetDevice?: string;
+  tone?: ReminderTone;
 }
 
 const VALID_RECURRENCES: ReminderRecurrence[] = ["daily", "weekly"];
+const VALID_TONES: ReminderTone[] = ["casual", "formal"];
 
 function isValidIsoDate(value: string): boolean {
   return !Number.isNaN(Date.parse(value));
@@ -43,7 +48,11 @@ export function createCreateReminderTool(reminderStore: ReminderStore): LocalToo
       "(e.g. from a phrase like \"remind me at 6pm\" or \"tomorrow morning\", resolve it to an actual " +
       'timestamp yourself); omit "dueAt" entirely for an undated task. For a repeating reminder (e.g. ' +
       '"remind me every day to take my medication"), pass "recurrence" and a "dueAt" — completing it then ' +
-      "automatically creates the next occurrence, advanced by one day/week.",
+      "automatically creates the next occurrence, advanced by one day/week. " +
+      'For a reminder that should be SPOKEN OUT LOUD through a connected device rather than just pushed ' +
+      'silently (e.g. "say this out loud on my Mac when it\'s due"), set "announce" to true; "targetDevice" ' +
+      'picks which device ("all" for every connected device, a specific device id, or omit for "wherever ' +
+      'available"), and "tone" tunes the phrasing ("casual" or "formal", defaults to casual).',
     inputSchema: {
       type: "object",
       properties: {
@@ -53,6 +62,25 @@ export function createCreateReminderTool(reminderStore: ReminderStore): LocalToo
           type: "string",
           enum: VALID_RECURRENCES,
           description: 'For a repeating reminder: "daily" or "weekly". Requires dueAt. Omit for a one-off reminder.',
+        },
+        announce: {
+          type: "boolean",
+          description:
+            'When true, this reminder is spoken live through a connected device when due, instead of (in ' +
+            "addition to) a silent push notification. Defaults to false.",
+        },
+        targetDevice: {
+          type: "string",
+          description:
+            `Which device to speak an "announce" reminder through: "${ANNOUNCE_TARGET_ALL}" for every ` +
+            'connected device, a specific device id, or omit for "wherever available" (the primary device if ' +
+            "connected, else any connected device). Ignored unless announce is true.",
+        },
+        tone: {
+          type: "string",
+          enum: VALID_TONES,
+          description:
+            'Phrasing tone for an "announce" reminder\'s spoken text: "casual" (default) or "formal"/diplomatic.',
         },
       },
       required: ["text"],
@@ -80,15 +108,35 @@ export function createCreateReminderTool(reminderStore: ReminderStore): LocalToo
           return { success: false, error: "recurrence requires dueAt" };
         }
       }
+      if (input.announce !== undefined && typeof input.announce !== "boolean") {
+        return { success: false, error: "announce must be a boolean" };
+      }
+      if (input.targetDevice !== undefined && (typeof input.targetDevice !== "string" || input.targetDevice.trim() === "")) {
+        return { success: false, error: "targetDevice must be a non-empty string when provided" };
+      }
+      if (input.tone !== undefined && !VALID_TONES.includes(input.tone)) {
+        return { success: false, error: `tone must be one of: ${VALID_TONES.join(", ")}` };
+      }
 
       const record = reminderStore.create({
         text: input.text,
         dueAt: input.dueAt ?? null,
         recurrence: input.recurrence ?? null,
+        announce: input.announce ?? false,
+        targetDevice: input.targetDevice ?? null,
+        tone: input.tone ?? null,
       });
       return {
         success: true,
-        data: { id: record.id, text: record.text, dueAt: record.dueAt, recurrence: record.recurrence },
+        data: {
+          id: record.id,
+          text: record.text,
+          dueAt: record.dueAt,
+          recurrence: record.recurrence,
+          announce: record.announce,
+          targetDevice: record.targetDevice,
+          tone: record.tone,
+        },
       };
     },
   };

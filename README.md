@@ -354,6 +354,60 @@ twice; editing a reminder to a new due date (`UPDATE_REMINDER`) clears
 it, so a re-dated reminder gets a fresh notification at its new time
 rather than staying silenced by one already sent for the old one.
 
+### Device-spoken ("announce") reminders, bounded follow-ups, and proactive-reply authentication
+
+Beyond a silent push, `CREATE_REMINDER`/`UPDATE_REMINDER` accept an
+`announce: true` flag to have JARVIS **speak the reminder out loud**
+through a connected device the moment it's due, instead of a phone call —
+genuinely different from the existing Twilio wake-up-call feature
+(`src/communication/phone/`): this needs the device powered on and
+connected, a real phone call can ring even when nothing else is running.
+
+- **Device targeting** (`targetDevice`): `"all"` for every currently
+  connected device, a specific device id, or omit for "wherever
+  available" (the primary device if connected, else any connected
+  device) — see `resolveAnnounceTargets.ts`, which reuses
+  `DeviceRegistry`/`DeviceConnectionManager`'s existing "which devices are
+  known"/"currently connected" model rather than inventing a second one.
+  No device reachable falls straight through to the existing push/
+  Telegram path, so an `announce` reminder is never silently lost just
+  because the device happens to be off.
+- **Tone** (`tone`: `"casual"`/`"formal"`) — a simple tunable parameter
+  that changes the spoken phrasing (`composeAnnouncementText.ts`).
+- **Bounded follow-ups**: if nobody confirms the announcement, a separate
+  30-second scheduler tick (`getAnnounceFollowUps.ts`) sends up to 2
+  "did you do it?" check-ins, 5 minutes apart, then stops — never infinite
+  nagging. A follow-up is only attempted when a target device is actually
+  reachable; the budget isn't burned on attempts that never reached
+  anyone.
+- **Proactive-reply authentication (the security layer)**: a device
+  "waking up and speaking" on JARVIS's own initiative is a different
+  trust situation from a conversation the user started themselves —
+  whoever happens to be in the room could answer it. `SpeakerAuthenticator`
+  (`src/core/confirmation/SpeakerAuthenticator.ts`) is the one named
+  interface that decides whether a spoken reply to a proactive
+  announcement counts as really the owner; today's implementation
+  (`PassphraseSpeakerAuthenticator`) checks it against a shared passphrase
+  set via **`SET_CONFIRMATION_PASSPHRASE`** (`CONFIRM`) or seeded once
+  from `JARVIS_CONFIRMATION_PASSPHRASE` on a fresh deploy. This is
+  deliberately a separate, narrower interface than `ConfirmationService`
+  (which approves an *action* within a conversation already underway) —
+  "is this speaker who I think it is" is a different question with its
+  own future evolution path (voice biometrics, then an evolving private
+  code language — see `CLAUDE.md`), and keeping it behind one interface is
+  what lets that evolution happen without touching every caller. On the
+  Mac agent side, `WakeWordListener.speakProactiveAnnouncement` speaks the
+  announcement and then listens for a reply with **no wake phrase
+  required** (the device spoke first this time), reporting back whatever
+  was heard — the Agent itself makes no authentication decision, only
+  Core does.
+
+This whole feature (`proactive.announce`/`proactive.reply` over the
+existing WebSocket protocol, `ProactiveAnnouncer`, the Swift agent's reply
+capture) is new in this pass and has not been exercised against a real
+Mac/microphone — see `agents/imac/JarvisAgent/README.md`'s "What requires
+further real iMac validation" section.
+
 ## Conversation history search
 
 Every user/assistant text turn (tool calls/results are excluded — protocol

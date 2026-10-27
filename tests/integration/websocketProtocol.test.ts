@@ -230,6 +230,38 @@ describe("WebSocket protocol: device -> core", () => {
     );
     expect(result.ok).toBe(false);
   });
+
+  test("parses a valid proactive.reply message with text", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ type: "proactive.reply", payload: { announcementId: "ann-1", text: "open sesame" } }))
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok && result.message.type === "proactive.reply") {
+      expect(result.message.payload.announcementId).toBe("ann-1");
+      expect(result.message.payload.text).toBe("open sesame");
+    }
+  });
+
+  test("parses a valid proactive.reply message with text null (nothing heard before the reply window elapsed)", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ type: "proactive.reply", payload: { announcementId: "ann-1", text: null } }))
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  test("rejects a proactive.reply message missing announcementId", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ type: "proactive.reply", payload: { text: "hi" } }))
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a proactive.reply message with deviceId null", () => {
+    const result = parseDeviceToCoreMessage(
+      JSON.stringify(baseEnvelope({ deviceId: null, type: "proactive.reply", payload: { announcementId: "ann-1", text: "hi" } }))
+    );
+    expect(result.ok).toBe(false);
+  });
 });
 
 describe("WebSocket protocol: core -> device", () => {
@@ -265,6 +297,47 @@ describe("WebSocket protocol: core -> device", () => {
   test("rejects a voice.reply with a null deviceId", () => {
     const result = parseCoreToDeviceMessage(
       JSON.stringify(baseEnvelope({ deviceId: null, type: "voice.reply", payload: { text: "hi" } }))
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("parses a valid proactive.announce message", () => {
+    const result = parseCoreToDeviceMessage(
+      JSON.stringify(
+        baseEnvelope({
+          type: "proactive.announce",
+          payload: { text: "Hey David, you have a reminder.", announcementId: "ann-1", replyWindowMs: 20_000 },
+        })
+      )
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok && result.message.type === "proactive.announce") {
+      expect(result.message.payload.announcementId).toBe("ann-1");
+      expect(result.message.payload.replyWindowMs).toBe(20_000);
+    }
+  });
+
+  test("rejects a proactive.announce with a null deviceId", () => {
+    const result = parseCoreToDeviceMessage(
+      JSON.stringify(
+        baseEnvelope({ deviceId: null, type: "proactive.announce", payload: { text: "hi", announcementId: "ann-1", replyWindowMs: 1000 } })
+      )
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a proactive.announce with a non-positive replyWindowMs", () => {
+    const result = parseCoreToDeviceMessage(
+      JSON.stringify(
+        baseEnvelope({ type: "proactive.announce", payload: { text: "hi", announcementId: "ann-1", replyWindowMs: 0 } })
+      )
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects a proactive.announce missing announcementId", () => {
+    const result = parseCoreToDeviceMessage(
+      JSON.stringify(baseEnvelope({ type: "proactive.announce", payload: { text: "hi", replyWindowMs: 1000 } }))
     );
     expect(result.ok).toBe(false);
   });

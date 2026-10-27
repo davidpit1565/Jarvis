@@ -89,6 +89,44 @@ describe("CREATE_REMINDER tool", () => {
     const result = await tool.execute({ text: "Task", recurrence: "daily" }, context);
     expect(result.success).toBe(false);
   });
+
+  test("creates an announce reminder with a target device and tone", async () => {
+    const tool = createCreateReminderTool(store);
+    const result = await tool.execute(
+      { text: "Take medication", dueAt: "2030-09-19T18:00:00.000Z", announce: true, targetDevice: "mac-1", tone: "formal" },
+      context
+    );
+
+    expect(result.success).toBe(true);
+    const record = store.list()[0]!;
+    expect(record.announce).toBe(true);
+    expect(record.targetDevice).toBe("mac-1");
+    expect(record.tone).toBe("formal");
+  });
+
+  test("defaults announce to false when omitted", async () => {
+    const tool = createCreateReminderTool(store);
+    await tool.execute({ text: "Plain reminder" }, context);
+    expect(store.list()[0]?.announce).toBe(false);
+  });
+
+  test("rejects a non-boolean announce value", async () => {
+    const tool = createCreateReminderTool(store);
+    const result = await tool.execute({ text: "Task", announce: "yes" as unknown as boolean }, context);
+    expect(result.success).toBe(false);
+  });
+
+  test("rejects an invalid tone value", async () => {
+    const tool = createCreateReminderTool(store);
+    const result = await tool.execute({ text: "Task", tone: "sarcastic" as never }, context);
+    expect(result.success).toBe(false);
+  });
+
+  test("rejects an empty targetDevice", async () => {
+    const tool = createCreateReminderTool(store);
+    const result = await tool.execute({ text: "Task", targetDevice: "" }, context);
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("LIST_REMINDERS tool", () => {
@@ -371,5 +409,46 @@ describe("UPDATE_REMINDER tool", () => {
 
     expect(result.success).toBe(true);
     expect(store.get(record.id)?.recurrence).toBe("daily");
+  });
+
+  test("updates announce, targetDevice, and tone", async () => {
+    const record = store.create({ text: "Task" });
+    const tool = createUpdateReminderTool(store);
+
+    const result = await tool.execute({ id: record.id, announce: true, targetDevice: "all", tone: "formal" }, context);
+
+    expect(result.success).toBe(true);
+    const updated = store.get(record.id)!;
+    expect(updated.announce).toBe(true);
+    expect(updated.targetDevice).toBe("all");
+    expect(updated.tone).toBe("formal");
+  });
+
+  test("clears targetDevice and tone when passed null", async () => {
+    const record = store.create({ text: "Task", announce: true, targetDevice: "mac-1", tone: "formal" });
+    const tool = createUpdateReminderTool(store);
+
+    const result = await tool.execute({ id: record.id, targetDevice: null, tone: null }, context);
+
+    expect(result.success).toBe(true);
+    const updated = store.get(record.id)!;
+    expect(updated.targetDevice).toBeNull();
+    expect(updated.tone).toBeNull();
+  });
+
+  test("rejects a non-boolean announce value", async () => {
+    const record = store.create({ text: "Task" });
+    const tool = createUpdateReminderTool(store);
+
+    const result = await tool.execute({ id: record.id, announce: "yes" as unknown as boolean }, context);
+    expect(result.success).toBe(false);
+  });
+
+  test("rejects an invalid tone value", async () => {
+    const record = store.create({ text: "Task" });
+    const tool = createUpdateReminderTool(store);
+
+    const result = await tool.execute({ id: record.id, tone: "sarcastic" as never }, context);
+    expect(result.success).toBe(false);
   });
 });

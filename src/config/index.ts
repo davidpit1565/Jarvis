@@ -205,6 +205,22 @@ export interface JarvisConfig {
   webauthnDbPath: string;
   /** Path to the SQLite database storing reminders/tasks. */
   remindersDbPath: string;
+  /**
+   * Path to the SQLite database storing the shared confirmation
+   * passphrase (see ConfirmationPassphraseStore / SpeakerAuthenticator) —
+   * the security layer for proactive "wake up and speak" reminders: a
+   * spoken reply to one of those is only treated as really the owner once
+   * it matches this passphrase. Separate from reminders' own database so
+   * it survives/rotates independently.
+   */
+  confirmationPassphraseDbPath: string;
+  /**
+   * Optional seed value for the confirmation passphrase — only used to
+   * initialize ConfirmationPassphraseStore the first time it's empty (e.g.
+   * on a fresh deploy); once set (via this or SET_CONFIRMATION_PASSPHRASE),
+   * the stored value always wins over this env var on subsequent starts.
+   */
+  confirmationPassphraseSeed?: string;
   /** Path to the SQLite database storing proactive automation rules (JARVIS acting on its own by a schedule). */
   automationRulesDbPath: string;
   /** Path to the SQLite database storing a durable record of automation rule executions that threw (see AutomationFailureStore). */
@@ -667,6 +683,9 @@ export function loadConfig(): JarvisConfig {
   const memoryDbPath = process.env.JARVIS_MEMORY_DB_PATH ?? "./data/jarvis-memory.sqlite";
   const webauthnDbPath = process.env.JARVIS_WEBAUTHN_DB_PATH ?? "./data/jarvis-webauthn.sqlite";
   const remindersDbPath = process.env.JARVIS_REMINDERS_DB_PATH ?? "./data/jarvis-reminders.sqlite";
+  const confirmationPassphraseDbPath =
+    process.env.JARVIS_CONFIRMATION_PASSPHRASE_DB_PATH ?? "./data/jarvis-confirmation-passphrase.sqlite";
+  const confirmationPassphraseSeed = process.env.JARVIS_CONFIRMATION_PASSPHRASE?.trim() || undefined;
   const automationRulesDbPath = process.env.JARVIS_AUTOMATION_RULES_DB_PATH ?? "./data/jarvis-automation-rules.sqlite";
   const automationFailuresDbPath =
     process.env.JARVIS_AUTOMATION_FAILURES_DB_PATH ?? "./data/jarvis-automation-failures.sqlite";
@@ -987,6 +1006,8 @@ export function loadConfig(): JarvisConfig {
     memoryDbPath,
     webauthnDbPath,
     remindersDbPath,
+    confirmationPassphraseDbPath,
+    confirmationPassphraseSeed,
     automationRulesDbPath,
     automationFailuresDbPath,
     activityLogDbPath,

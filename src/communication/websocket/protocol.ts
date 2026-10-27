@@ -41,12 +41,35 @@ export interface VoiceReplyPayload {
   [key: string]: unknown;
 }
 
+/**
+ * An unprompted, JARVIS-initiated announcement to speak aloud right now —
+ * distinct from `voice.reply` (which answers a command the user just
+ * gave): this wakes the device on Core's own initiative, e.g. a due,
+ * device-targeted reminder (see ReminderStore's `announce` field /
+ * ProactiveAnnouncer). `announcementId` correlates the device's eventual
+ * `proactive.reply` back to this specific announcement. `replyWindowMs` is
+ * how long the Agent should listen for a reply with no wake phrase
+ * required, since the device itself spoke first this time.
+ */
+export interface ProactiveAnnouncePayload {
+  text: string;
+  announcementId: string;
+  replyWindowMs: number;
+  [key: string]: unknown;
+}
+
 export type DeviceCommandMessage = Envelope<"device.command", DeviceCommandPayload>;
 export type ToolRequestMessage = Envelope<"tool.request", ToolRequestPayload>;
 export type PingMessage = Envelope<"ping", PingPayload>;
 export type VoiceReplyMessage = Envelope<"voice.reply", VoiceReplyPayload>;
+export type ProactiveAnnounceMessage = Envelope<"proactive.announce", ProactiveAnnouncePayload>;
 
-export type CoreToDeviceMessage = DeviceCommandMessage | ToolRequestMessage | PingMessage | VoiceReplyMessage;
+export type CoreToDeviceMessage =
+  | DeviceCommandMessage
+  | ToolRequestMessage
+  | PingMessage
+  | VoiceReplyMessage
+  | ProactiveAnnounceMessage;
 
 // ---------------------------------------------------------------------------
 // Device -> Core payloads
@@ -127,6 +150,19 @@ export interface DeviceCapabilitiesPayload {
   [key: string]: unknown;
 }
 
+/**
+ * Whatever (if anything) the device captured during a proactive
+ * announcement's reply window — `text` is `null` if nothing was heard
+ * before the window elapsed. Core, not the device, decides whether `text`
+ * actually authenticates as the owner (see SpeakerAuthenticator) — this
+ * payload only carries what was literally heard.
+ */
+export interface ProactiveReplyPayload {
+  announcementId: string;
+  text: string | null;
+  [key: string]: unknown;
+}
+
 export type DeviceRegisterMessage = Envelope<"device.register", DeviceRegisterPayload>;
 export type DeviceStatusMessage = Envelope<"device.status", DeviceStatusPayload>;
 export type ToolResultMessage = Envelope<"tool.result", ToolResultPayload>;
@@ -134,6 +170,7 @@ export type DeviceEventMessage = Envelope<"event", DeviceEventPayload>;
 export type PongMessage = Envelope<"pong", PongPayload>;
 export type VoiceTranscriptMessage = Envelope<"voice.transcript", VoiceTranscriptPayload>;
 export type DeviceCapabilitiesMessage = Envelope<"device.capabilities", DeviceCapabilitiesPayload>;
+export type ProactiveReplyMessage = Envelope<"proactive.reply", ProactiveReplyPayload>;
 
 export type DeviceToCoreMessage =
   | DeviceRegisterMessage
@@ -142,7 +179,8 @@ export type DeviceToCoreMessage =
   | DeviceEventMessage
   | PongMessage
   | VoiceTranscriptMessage
-  | DeviceCapabilitiesMessage;
+  | DeviceCapabilitiesMessage
+  | ProactiveReplyMessage;
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -269,6 +307,14 @@ function isDeviceCapabilitiesPayload(payload: Record<string, unknown>): payload 
   );
 }
 
+function isProactiveReplyPayload(payload: Record<string, unknown>): payload is ProactiveReplyPayload {
+  return (
+    typeof payload.announcementId === "string" &&
+    payload.announcementId.trim() !== "" &&
+    (payload.text === null || typeof payload.text === "string")
+  );
+}
+
 /** Parses and validates a message sent by a device to Core. */
 export function parseDeviceToCoreMessage(raw: string): ParseResult<DeviceToCoreMessage> {
   const envelopeResult = parseEnvelopeShape(raw);
@@ -347,6 +393,17 @@ export function parseDeviceToCoreMessage(raw: string): ParseResult<DeviceToCoreM
         message: { ...envelope, deviceId: deviceIdResult.message, type: "device.capabilities", payload: envelope.payload },
       };
     }
+    case "proactive.reply": {
+      const deviceIdResult = requireDeviceId(envelope);
+      if (!deviceIdResult.ok) return deviceIdResult;
+      if (!isProactiveReplyPayload(envelope.payload)) {
+        return { ok: false, reason: "Malformed proactive.reply payload" };
+      }
+      return {
+        ok: true,
+        message: { ...envelope, deviceId: deviceIdResult.message, type: "proactive.reply", payload: envelope.payload },
+      };
+    }
     default:
       return { ok: false, reason: `Unknown message type: ${envelope.type}` };
   }
@@ -362,6 +419,16 @@ function isDeviceCommandPayload(payload: Record<string, unknown>): payload is De
 
 function isVoiceReplyPayload(payload: Record<string, unknown>): payload is VoiceReplyPayload {
   return typeof payload.text === "string";
+}
+
+function isProactiveAnnouncePayload(payload: Record<string, unknown>): payload is ProactiveAnnouncePayload {
+  return (
+    typeof payload.text === "string" &&
+    typeof payload.announcementId === "string" &&
+    payload.announcementId.trim() !== "" &&
+    typeof payload.replyWindowMs === "number" &&
+    payload.replyWindowMs > 0
+  );
 }
 
 /** Parses and validates a message sent by Core to a device. */
@@ -402,6 +469,14 @@ export function parseCoreToDeviceMessage(raw: string): ParseResult<CoreToDeviceM
       return {
         ok: true,
         message: { ...envelope, deviceId: deviceIdResult.message, type: "voice.reply", payload: envelope.payload },
+      };
+    case "proactive.announce":
+      if (!isProactiveAnnouncePayload(envelope.payload)) {
+        return { ok: false, reason: "Malformed proactive.announce payload" };
+      }
+      return {
+        ok: true,
+        message: { ...envelope, deviceId: deviceIdResult.message, type: "proactive.announce", payload: envelope.payload },
       };
     default:
       return { ok: false, reason: `Unknown message type: ${envelope.type}` };

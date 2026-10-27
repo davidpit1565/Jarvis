@@ -111,6 +111,23 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     /// followed the wake phrase as the complete command.
     private static let silenceThresholdSeconds: TimeInterval = 1.5
 
+    /// True from the moment a proactive (JARVIS-initiated) announcement
+    /// finishes speaking until either something is captured or
+    /// `proactiveReplyTimeoutSeconds` elapses with nothing heard. Distinct
+    /// from `awaitingCommandAfterWake`/`clapCommandModeActive`: this
+    /// capture requires no wake phrase and no clap — the device itself
+    /// just spoke first, so the very next thing heard (if anything) is the
+    /// candidate reply, full stop. See `speakProactiveAnnouncement`.
+    private var proactiveReplyModeActive = false
+    private var proactiveReplyStartedAt = Date.distantPast
+    private var proactiveReplyTimeoutSeconds: TimeInterval = 20.0
+    private var pendingProactiveReplyText: String?
+    /// Called with whatever was captured, or `nil` if the reply window
+    /// elapsed with nothing heard. Core (not this Agent) is responsible for
+    /// deciding whether the captured text actually authenticates as the
+    /// owner — see `ProactiveReplyPayload`'s own doc comment.
+    private var proactiveReplyCallback: ((String?) -> Void)?
+
     func start() {
         // print() here is deliberate, not a duplicate of the os_log call
         // below it (roadmap #71 — wake diagnostics): `os_log`/`Logger`
@@ -183,6 +200,31 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
             utterance.voice = voice
         }
         synthesizer.speak(utterance)
+    }
+
+    /// Speaks a proactive (JARVIS-initiated) announcement aloud, then
+    /// listens for whatever is said next within `replyWindowMs` as a
+    /// candidate reply — unlike a normal conversational turn, no wake
+    /// phrase or clap is required here, since the device itself just
+    /// interrupted the user, not the other way around. `onCaptured` fires
+    /// exactly once, with the captured text or `nil` if the window elapses
+    /// with nothing heard.
+    ///
+    /// This Agent never decides whether the captured reply is really
+    /// David — it only reports what was literally heard; Core's
+    /// SpeakerAuthenticator (passphrase matching today, see
+    /// `src/core/confirmation/SpeakerAuthenticator.ts`) makes that call.
+    func speakProactiveAnnouncement(_ text: String, replyWindowMs: Int, onCaptured: @escaping (String?) -> Void) {
+        speak(text)
+        pendingProactiveReplyText = nil
+        proactiveReplyCallback = onCaptured
+        proactiveReplyTimeoutSeconds = max(1.0, Double(replyWindowMs) / 1000.0)
+        proactiveReplyStartedAt = Date()
+        proactiveReplyModeActive = true
+        lastTranscriptUpdate = Date()
+        // Fresh transcript buffer so nothing said before this announcement
+        // lingers into the capture window.
+        beginRecognitionTask()
     }
 
     /// Picks the highest-fidelity installed voice for a language: premium
@@ -299,6 +341,12 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     private func handleTranscriptUpdate(_ transcript: String) {
         lastTranscriptUpdate = Date()
 
+        if proactiveReplyModeActive {
+            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            pendingProactiveReplyText = trimmed.isEmpty ? nil : trimmed
+            return
+        }
+
         if clapCommandModeActive {
             let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             pendingCommandText = trimmed.isEmpty ? nil : trimmed
@@ -325,6 +373,36 @@ final class WakeWordListener: NSObject, SFSpeechRecognizerDelegate {
     }
 
     private func checkForSilence() {
+        // Handled first and returns unconditionally either way: while
+        // awaiting a proactive reply, nothing said should ever fall through
+        // to the wake-phrase/clap handling below, since this capture
+        // requires neither.
+        if proactiveReplyModeActive {
+            if let pendingProactiveReplyText, !pendingProactiveReplyText.isEmpty,
+               Date().timeIntervalSince(lastTranscriptUpdate) >= Self.silenceThresholdSeconds {
+                let captured = pendingProactiveReplyText
+                self.pendingProactiveReplyText = nil
+                proactiveReplyModeActive = false
+                let callback = proactiveReplyCallback
+                proactiveReplyCallback = nil
+                print("[JarvisAgent] Proactive reply captured: \"\(captured)\"")
+                callback?(captured)
+                beginRecognitionTask()
+                return
+            }
+            if Date().timeIntervalSince(proactiveReplyStartedAt) >= proactiveReplyTimeoutSeconds {
+                proactiveReplyModeActive = false
+                pendingProactiveReplyText = nil
+                let callback = proactiveReplyCallback
+                proactiveReplyCallback = nil
+                print("[JarvisAgent] Proactive reply window elapsed with nothing heard.")
+                callback?(nil)
+                beginRecognitionTask()
+                return
+            }
+            return
+        }
+
         // A clap with nothing ever said after it shouldn't leave the
         // listener stuck treating the next ordinary sentence (with no
         // wake phrase in it) as a command — time it out independently of

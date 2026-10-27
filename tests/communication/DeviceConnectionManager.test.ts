@@ -43,6 +43,18 @@ describe("DeviceConnectionManager", () => {
     expect(manager.hasConnection("imac-1")).toBe(true);
   });
 
+  test("listConnectedDeviceIds reflects currently-registered connections", () => {
+    const manager = new DeviceConnectionManager(new EventBus());
+    expect(manager.listConnectedDeviceIds()).toEqual([]);
+
+    manager.registerConnection("imac-1", new MockDeviceConnection());
+    manager.registerConnection("phone-1", new MockDeviceConnection());
+    expect(manager.listConnectedDeviceIds().sort()).toEqual(["imac-1", "phone-1"]);
+
+    manager.removeConnection("imac-1");
+    expect(manager.listConnectedDeviceIds()).toEqual(["phone-1"]);
+  });
+
   test("removeConnection emits device.disconnected only when a connection existed", () => {
     const eventBus = new EventBus();
     const manager = new DeviceConnectionManager(eventBus);
