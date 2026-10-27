@@ -144,6 +144,8 @@ import { createListGitHubCommitsTool } from "@/tools/github/ListGitHubCommitsToo
 import { createListGitHubIssuesTool } from "@/tools/github/ListGitHubIssuesTool";
 import { createListGitHubPullRequestsTool } from "@/tools/github/ListGitHubPullRequestsTool";
 import { createCheckGitHubRepoActivityTool } from "@/tools/github/CheckGitHubRepoActivityTool";
+import { createCommentOnGitHubIssueTool } from "@/tools/github/CommentOnGitHubIssueTool";
+import { createMergeGitHubPullRequestTool } from "@/tools/github/MergeGitHubPullRequestTool";
 import { GitHubActivityStore } from "@/github/GitHubActivityStore";
 import { pollGitHubActivity } from "@/github/pollGitHubActivity";
 import { githubActivityNote } from "@/github/githubActivityNote";
@@ -434,7 +436,18 @@ function main() {
     toolRegistry.registerTool(createListGitHubIssuesTool(githubClient));
     toolRegistry.registerTool(createListGitHubPullRequestsTool(githubClient));
     toolRegistry.registerTool(createCheckGitHubRepoActivityTool(githubClient));
-    console.log("[jarvis] GitHub integration enabled");
+    // Write operations (comment/merge) — follow-up to the read-only v1.
+    // IMPORTANT: these need write-level Issues/Pull-requests permissions on
+    // the same fine-grained PAT (GITHUB_TOKEN), which the original setup
+    // only granted read-only. Registering them here regardless (rather than
+    // gating on a separate env var) so they're available as soon as David
+    // updates the token's permissions — until then they'll simply fail with
+    // a real 403 from GitHub on first use, per CommentOnGitHubIssueTool/
+    // MergeGitHubPullRequestTool's own doc comments. See the PR description
+    // for the exact permission-update steps.
+    toolRegistry.registerTool(createCommentOnGitHubIssueTool(githubClient));
+    toolRegistry.registerTool(createMergeGitHubPullRequestTool(githubClient));
+    console.log("[jarvis] GitHub integration enabled (including write operations — requires Issues/Pull-requests write permission on GITHUB_TOKEN)");
   }
 
   // Proactive GitHub activity surfacing (CLAUDE.md "continuous personal

@@ -1,4 +1,12 @@
-import type { GitHubCommit, GitHubIssue, GitHubPullRequest, GitHubRepoActivitySummary } from "@/types/github";
+import type {
+  GitHubComment,
+  GitHubCommit,
+  GitHubIssue,
+  GitHubMergeMethod,
+  GitHubMergeResult,
+  GitHubPullRequest,
+  GitHubRepoActivitySummary,
+} from "@/types/github";
 import { fetchWithRetry } from "@/core/net/fetchWithRetry";
 import { apiError } from "@/core/net/apiError";
 
@@ -52,6 +60,19 @@ interface RawGitHubPullRequest {
   updated_at: string;
 }
 
+interface RawGitHubComment {
+  id: number;
+  html_url: string;
+  body: string;
+  created_at: string;
+}
+
+interface RawGitHubMergeResult {
+  sha: string;
+  merged: boolean;
+  message: string;
+}
+
 function clampResults(maxResults: number | undefined): number {
   if (maxResults === undefined) return DEFAULT_RESULTS;
   return Math.max(1, Math.min(maxResults, MAX_RESULTS_CAP));
@@ -69,10 +90,12 @@ function clampResults(maxResults: number | undefined): number {
  * config (GITHUB_TOKEN), the same "one static credential" shape as
  * StudioClient/AgentMailClient.
  *
- * v1 scope is deliberately read-only (recent commits, open issues, open
- * PRs, and a combined activity summary) — see the PR description for why
- * write operations (creating issues, merging PRs) are an explicit
- * follow-up, not part of this change.
+ * v1 scope was deliberately read-only (recent commits, open issues, open
+ * PRs, and a combined activity summary). This follow-up adds a narrow set
+ * of write operations — commenting on an issue/PR and merging a PR — for
+ * interacting with EXISTING repos/issues/PRs only; creating issues,
+ * creating branches, deleting anything, or creating/configuring new repos
+ * remain explicitly out of scope (see the PR description).
  */
 export class GitHubClient {
   constructor(private readonly token: string) {}
@@ -93,6 +116,27 @@ export class GitHubClient {
     }
 
     const response = await fetchWithRetry(url.toString(), { headers: this.authHeaders() });
+    if (!response.ok) {
+      throw await apiError(context, response);
+    }
+    return (await response.json()) as T;
+  }
+
+  /**
+   * Shared write helper (POST/PUT) for the two write operations below.
+   * Deliberately NOT retried by fetchWithRetry's usual semantics for
+   * mutating calls that aren't idempotent (a comment POST retried after a
+   * network blip could double-post) — see commentOnIssue/mergePullRequest,
+   * which call plain fetch directly instead of going through this path for
+   * that reason. Kept here only as the shared request-building/error
+   * surfacing logic, not as a retrying call.
+   */
+  private async write<T>(method: "POST" | "PUT", path: string, body: Record<string, unknown>, context: string): Promise<T> {
+    const response = await fetch(`${GITHUB_API_BASE_URL}${path}`, {
+      method,
+      headers: { ...this.authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
     if (!response.ok) {
       throw await apiError(context, response);
     }
@@ -172,5 +216,65 @@ export class GitHubClient {
       this.listOpenPullRequests(owner, repo, DEFAULT_RESULTS),
     ]);
     return { owner, repo, branch: branch ?? "default", recentCommits, openIssues, openPullRequests };
+  }
+
+  /**
+   * Posts a comment on an issue or pull request. GitHub's REST API treats
+   * every pull request as an issue for commenting purposes (same
+   * `/issues/{number}/comments` endpoint works for both — confirmed
+   * against GitHub's current REST docs), so this one method covers both.
+   *
+   * Write operation — CONFIRM-tier at the tool layer (see
+   * CommentOnGitHubIssueTool): visible and a little embarrassing if wrong,
+   * but not structurally damaging the way a merge is.
+   */
+  async commentOnIssue(owner: string, repo: string, issueNumber: number, body: string): Promise<GitHubComment> {
+    const raw = await this.write<RawGitHubComment>(
+      "POST",
+      `/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+      { body },
+      `GitHub comment failed for ${owner}/${repo}#${issueNumber}`
+    );
+    return { id: raw.id, url: raw.html_url, body: raw.body, createdAt: raw.created_at };
+  }
+
+  /**
+   * Merges a pull request. Defaults to GitHub's own default merge
+   * behavior (a plain merge commit, with GitHub's own auto-generated
+   * commit title/message) when `options` doesn't specify otherwise —
+   * callers shouldn't be forced to compose a commit message just to merge.
+   *
+   * GitHub's merge endpoint already refuses (rather than silently
+   * force-passing) a PR that isn't mergeable: `405` when the merge cannot
+   * be performed at all (e.g. required checks haven't passed, merging is
+   * blocked by branch protection), `409` when a caller-supplied `sha`
+   * doesn't match the PR's current head (a safety check against merging
+   * the wrong commit if the PR changed underneath the caller), `404` if
+   * the PR/repo doesn't exist or the token can't see it, `403` if the
+   * token lacks permission. None of these are swallowed — `write()` throws
+   * a real error (status code preserved, raw body logged server-side only
+   * per apiError's own reasoning) for any non-2xx response, so a blocked
+   * merge always surfaces as a real tool failure, never a fabricated
+   * success.
+   */
+  async mergePullRequest(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    options?: { mergeMethod?: GitHubMergeMethod; commitTitle?: string; commitMessage?: string; sha?: string }
+  ): Promise<GitHubMergeResult> {
+    const body: Record<string, unknown> = {};
+    if (options?.mergeMethod) body.merge_method = options.mergeMethod;
+    if (options?.commitTitle) body.commit_title = options.commitTitle;
+    if (options?.commitMessage) body.commit_message = options.commitMessage;
+    if (options?.sha) body.sha = options.sha;
+
+    const raw = await this.write<RawGitHubMergeResult>(
+      "PUT",
+      `/repos/${owner}/${repo}/pulls/${pullNumber}/merge`,
+      body,
+      `GitHub merge failed for ${owner}/${repo}#${pullNumber}`
+    );
+    return { sha: raw.sha, merged: raw.merged, message: raw.message };
   }
 }
