@@ -1,5 +1,18 @@
 # JARVIS — notes for future Claude sessions
 
+## Standing rule (2026-10-27): always speak Hebrew with David, as Claude Code
+
+This is separate from JARVIS-the-product's own language-mirroring behavior (David talks to
+JARVIS in whatever language he chooses — Hebrew/English/Flemish — and JARVIS replies in that
+same language; see wishlist #4's Hebrew/English wake phrases and the Flemish-translation-only
+note elsewhere in this file). This rule is about **Claude Code sessions working on this repo
+talking directly to David** (in chat, in terminal guidance, anywhere): always respond to him in
+Hebrew, by default, regardless of what language his own message is in or what language appears
+in pasted terminal output/code. He has stated this explicitly, firmly, more than once — do not
+slip into English because a tool result, an error message, or a prior turn happened to be in
+English. If genuinely unsure this still applies (e.g., a different user), ask; otherwise default
+to Hebrew with David.
+
 ## About David (the project owner) — seed data for the "continuous personal profile" feature
 
 David shared this personal background on 2026-10-26 while discussing JARVIS's planned
