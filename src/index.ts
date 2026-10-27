@@ -109,6 +109,12 @@ import { createDeleteCalendarEventTool } from "@/tools/calendar/DeleteCalendarEv
 import { UndoStore } from "@/core/undo/UndoStore";
 import { createUndoLastActionTool } from "@/tools/undo/UndoLastActionTool";
 import { GmailClient } from "@/gmail/GmailClient";
+import { GoogleDriveClient } from "@/drive/GoogleDriveClient";
+import { GoogleSlidesClient } from "@/drive/GoogleSlidesClient";
+import { GoogleDocsClient } from "@/drive/GoogleDocsClient";
+import { createCreatePresentationTool } from "@/tools/drive/CreatePresentationTool";
+import { createCreateChecklistTool } from "@/tools/drive/CreateChecklistTool";
+import { createFindDriveFileTool } from "@/tools/drive/FindDriveFileTool";
 import { SpotifyClient } from "@/spotify/SpotifyClient";
 import { StudioClient } from "@/studio/StudioClient";
 import { createListReelsTool } from "@/tools/studio/ListReelsTool";
@@ -322,6 +328,21 @@ function main() {
     toolRegistry.registerTool(createGetUnreadEmailCountTool(gmailClient));
     toolRegistry.registerTool(createSendEmailTool(gmailClient));
     toolRegistry.registerTool(createReplyEmailTool(gmailClient));
+  }
+
+  // Shares the same Google account link as Calendar/Gmail (one OAuth
+  // consent screen, more scopes) — see GoogleCalendarClient's GOOGLE_SCOPES
+  // for the drive.file/documents/presentations scopes this depends on, and
+  // its doc comment for why an already-linked account needs one re-consent
+  // (GET /calendar/oauth/start again) before CREATE_PRESENTATION/
+  // CREATE_CHECKLIST/FIND_DRIVE_FILE actually work.
+  const driveClient = calendarEnabled ? new GoogleDriveClient(config.googleClientId!, config.googleClientSecret!, calendarTokenStore) : undefined;
+  if (driveClient) {
+    const slidesClient = new GoogleSlidesClient(driveClient);
+    const docsClient = new GoogleDocsClient(driveClient);
+    toolRegistry.registerTool(createCreatePresentationTool(slidesClient));
+    toolRegistry.registerTool(createCreateChecklistTool(docsClient));
+    toolRegistry.registerTool(createFindDriveFileTool(driveClient));
   }
 
   // AgentMail — JARVIS's own independent email inbox, wholly separate
