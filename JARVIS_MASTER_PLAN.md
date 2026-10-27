@@ -160,13 +160,33 @@ existing PR pipeline (used for every change in this session) already satisfies t
 mechanism prompt 1 §6 asks for (propose → test → compare → only then adopt). What's
 missing is making David's own stated loop explicit as a named practice, not new code.
 
+## Decisions confirmed by David (2026-10-27)
+
+- **Apple Developer Program**: he already has an account — the $99/year question is
+  resolved, no new spend, no approval blocker for Phase 5's TestFlight/App Store Connect
+  work when it comes up.
+- **Spotify Premium**: confirmed he has it — Phase 6 playback control is unblocked
+  whenever it's prioritized.
+- **"Hey JARVIS" wake word, Mac side**: he proposed leaving a process running on his
+  Mac/computer specifically (not necessarily the phone) so it's "always on" there — turns
+  out this **already exists in code**: `agents/imac/JarvisAgent` ships a `launchd` user
+  agent (`Resources/com.jarvis.agent.plist`) that starts at login and runs without a
+  Terminal window open (better than his own "leave a terminal open" idea), containing
+  `Voice/WakeWordListener.swift` — free, on-device, no cloud dependency, listening for
+  "Hey JARVIS"/"Jarvis שומע" via Apple's own Speech framework. **Never validated on a real
+  Mac's actual microphone/Speech-permission prompts** (this dev sandbox has no macOS/Xcode
+  — see `agents/imac/JarvisAgent/README.md`'s own "what requires further real iMac
+  validation" list). **Next concrete action is on David's side**: run the agent on his
+  real Mac/iMac and confirm the wake phrase actually works and the permission prompts
+  appear correctly — this isn't a coding task until that real-world test either passes or
+  surfaces a bug to fix.
+- Phone-side: per the iOS research above, true background "Hey JARVIS" stays out of
+  scope; tap-to-talk/Siri-Shortcut/Action-Button launch is the agreed realistic design.
+
 ## What's running right now (2026-10-27)
 
-- Background research on three concrete open questions needed before Phases 4-6 can be
-  scoped honestly: current iOS App Intents/Shortcuts/Live Activities capabilities and
-  real background-execution limits; Spotify Web API's actual current auth/cost/device-
-  control requirements; App Store Connect API's actual current auth/cost/build-upload
-  requirements. Results will update this file's Phase 4-6 entries with verified facts,
-  not assumptions.
 - PR #144 (free-provider priority fix + Cloudflare image generation) is open, tested,
   ready for review — **awaiting David's merge decision**, not blocked on anything else.
+- Moving to **Phase 1 (continuous memory/profile)** next, per the priority order David
+  set in his own meta-prompt (memory first, before execution reliability, context,
+  voice/iPhone, or Spotify) — see Phase 1 above for what's missing.
