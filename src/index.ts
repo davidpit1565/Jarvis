@@ -111,6 +111,7 @@ import { createSearchCalendarEventsTool } from "@/tools/calendar/SearchCalendarE
 import { createGetCalendarEventTool } from "@/tools/calendar/GetCalendarEventTool";
 import { createUpdateCalendarEventTool } from "@/tools/calendar/UpdateCalendarEventTool";
 import { createUnlinkCalendarTool } from "@/tools/calendar/UnlinkCalendarTool";
+import { createListLinkedGoogleAccountsTool } from "@/tools/calendar/ListLinkedGoogleAccountsTool";
 import { createCreateCalendarEventTool } from "@/tools/calendar/CreateCalendarEventTool";
 import { createDeleteCalendarEventTool } from "@/tools/calendar/DeleteCalendarEventTool";
 import { UndoStore } from "@/core/undo/UndoStore";
@@ -346,6 +347,7 @@ function main() {
     toolRegistry.registerTool(createCreateCalendarEventTool(calendarClient, undoStore));
     toolRegistry.registerTool(createDeleteCalendarEventTool(calendarClient, undoStore));
     toolRegistry.registerTool(createUnlinkCalendarTool(calendarTokenStore));
+    toolRegistry.registerTool(createListLinkedGoogleAccountsTool(calendarTokenStore));
   }
   // Registered unconditionally: reminders are always available (no
   // calendar link required), and reminder_deleted is one of the
