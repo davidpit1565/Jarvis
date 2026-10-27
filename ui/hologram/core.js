@@ -108,19 +108,33 @@
     uniform float uAmpBase;
     varying vec3 vWorldNormal;
     varying vec3 vWorldPosition;
+    varying vec3 vDir;
     varying float vDisp;
 
     ${NOISE_GLSL}
 
     float dispAt(vec3 dir, vec3 flow) {
-      vec3 p = dir * 2.3 + flow;
+      // Lower spatial frequency and MUCH lower amplitude than the first
+      // pass: that version's high-frequency, large-amplitude bumps made
+      // the sphere read as a rough cratered/cauliflower rock, and a bumpy
+      // normal field also scattered the specular highlight into dozens of
+      // tiny glints instead of one coherent one. The reference's "liquid
+      // chrome" look is almost entirely a smooth sphere's shading (ridges,
+      // swirl eyes, one highlight) — geometry here only needs to be just
+      // alive enough to not look static, not to carry the visual texture.
+      vec3 p = dir * 1.1 + flow;
       vec3 warp = vec3(fbm(p + 13.1), fbm(p + 47.3), fbm(p + 91.7)) * uWarp;
       float n = fbm(p + warp * 0.6);
-      return n * (uAmpBase + 0.16 * uEnergy) + uAudio * 0.045;
+      return n * (uAmpBase + 0.028 * uEnergy) + uAudio * 0.012;
     }
 
     void main() {
       vec3 dir = normalize(normal);
+      // Stable, undisplaced object-space direction — passed through so the
+      // fragment shader's swirl "eyes" and metal grain are sampled at a
+      // coordinate that only moves with the mesh's own rotation, not with
+      // the (much smaller) per-vertex bump displacement below.
+      vDir = dir;
       vec3 flow = vec3(0.0, 0.0, uTime * 0.12);
 
       float dC = dispAt(dir, flow);
@@ -157,30 +171,128 @@
     uniform float uTime;
     varying vec3 vWorldNormal;
     varying vec3 vWorldPosition;
-    varying float vDisp;
+    varying vec3 vDir;
+
+    ${NOISE_GLSL}
+
+    // One glowing "vortex eye": a slow spiral/ring pattern around a fixed
+    // point on the sphere, masked to a roughly circular patch so it reads
+    // as a distinct whirlpool rather than all-over noise. Six of these
+    // (below, at Fibonacci-sphere points computed once offline) are what
+    // give the surface its "several glowing eyes spread across the whole
+    // body" look from the reference image, instead of one smudge.
+    float vortexEye(vec3 d, vec3 center, float arms, float speed, float phase, float patchR) {
+      vec3 c = normalize(center);
+      float cosA = clamp(dot(d, c), -1.0, 1.0);
+      float ang = acos(cosA);
+      vec3 up = (abs(c.y) < 0.99) ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+      vec3 t1 = normalize(cross(c, up));
+      vec3 t2 = cross(c, t1);
+      vec3 proj = d - c * cosA;
+      float theta = atan(dot(proj, t2), dot(proj, t1));
+      float r = clamp(ang / patchR, 0.0, 1.0);
+      float falloff = smoothstep(1.0, 0.62, r);
+      // An Archimedean spiral (phase advances linearly with radius, no
+      // 1/r singularity) gives ~2 clean concentric/spiral rings across the
+      // patch plus a bright core — a real whirlpool "eye" shape, matching
+      // the reference's distinct loops, instead of the thin chaotic veins
+      // an inverse-radius twist produced.
+      float spiral = sin(r * 13.0 - theta * arms + uTime * speed + phase);
+      float rings = pow(0.5 + 0.5 * spiral, 2.0);
+      float core = smoothstep(0.2, 0.0, r);
+      return clamp((rings * 0.85 + core * 0.6) * falloff, 0.0, 1.0);
+    }
 
     void main() {
       vec3 n = normalize(vWorldNormal);
       vec3 viewDir = normalize(cameraPosition - vWorldPosition);
       float ndotv = clamp(dot(n, viewDir), 0.0, 1.0);
-      float fresnel = pow(1.0 - ndotv, 2.0);
+      float fresnel = pow(1.0 - ndotv, 2.6);
 
-      float dispN = clamp(vDisp * 2.4 + 0.5, 0.0, 1.0);
-      vec3 base = mix(uColorDeep, uColorMid, dispN * 0.6);
+      vec3 d0 = normalize(vDir);
+      vec3 slowFlow = vec3(0.0, 0.0, uTime * 0.05);
 
-      vec3 lightDir = normalize(vec3(sin(uTime * 0.17) * 0.9, 0.55, cos(uTime * 0.17) * 0.9));
-      float spec = pow(max(dot(reflect(-lightDir, n), viewDir), 0.0), 26.0);
+      // Organic liquid distortion of the pattern coordinate itself — the
+      // swirl eyes and the metal grain both read as flowing liquid rather
+      // than a static decal, because the coordinate they're sampled at
+      // drifts under slowly-evolving 3D noise.
+      vec3 warpN = vec3(fbm(d0 * 1.6 + slowFlow), fbm(d0 * 1.6 + slowFlow + 11.3), fbm(d0 * 1.6 + slowFlow + 5.7));
+      vec3 dWarp = normalize(d0 + warpN * 0.14);
 
-      vec3 rimColor = mix(uColorRim, uColorAlert, uErrorMix);
-      float rimStrength = 0.7 + 0.85 * uEnergy + 0.55 * uAudio;
+      // Nine vortex "eyes" spread across the whole sphere (a Fibonacci-
+      // sphere placement, computed once offline), each a touch different
+      // in arm count / size / spin speed / phase so they don't read as one
+      // shape stamped repeatedly. Nine (not six) is deliberate: with the
+      // camera only ever seeing one hemisphere at a time, six evenly-
+      // spread points left as few as two actually facing the camera at
+      // once (checked against real screenshots) — nine reliably keeps
+      // several ("4-6 whirlpool eyes") in view together, matching the
+      // reference, across any camera angle. Spin speed is tied to the
+      // real uEnergy/uAudio signals already driving the rest of the Core,
+      // so the eyes visibly churn faster during real thinking/execution
+      // and flicker a little with real speech audio — reusing the
+      // existing reactivity variables, not new ones.
+      float spiralSpeed = 0.3 + uEnergy * 0.8 + uAudio * 0.4;
+      float e = 0.0;
+      e = max(e, vortexEye(dWarp, vec3(0.4581, 0.8889, 0.0),       2.0, spiralSpeed * 1.00, 0.0, 0.55));
+      e = max(e, vortexEye(dWarp, vec3(-0.5497, 0.6667, 0.5036),   3.0, spiralSpeed * 0.86, 1.3, 0.48));
+      e = max(e, vortexEye(dWarp, vec3(0.0781, 0.4444, -0.8924),   2.0, spiralSpeed * 1.12, 2.6, 0.62));
+      e = max(e, vortexEye(dWarp, vec3(0.5931, 0.2222, 0.7739),    3.0, spiralSpeed * 0.94, 3.9, 0.45));
+      e = max(e, vortexEye(dWarp, vec3(-0.9848, 0.0, -0.1736),     2.0, spiralSpeed * 1.05, 5.1, 0.58));
+      e = max(e, vortexEye(dWarp, vec3(0.8223, -0.2222, -0.5239),  3.0, spiralSpeed * 0.90, 0.7, 0.50));
+      e = max(e, vortexEye(dWarp, vec3(-0.2325, -0.4444, 0.8653),  2.0, spiralSpeed * 1.08, 2.0, 0.60));
+      e = max(e, vortexEye(dWarp, vec3(-0.3431, -0.6667, -0.6618), 3.0, spiralSpeed * 0.83, 4.4, 0.46));
+      e = max(e, vortexEye(dWarp, vec3(0.4302, -0.8889, 0.1570),   2.0, spiralSpeed * 1.16, 5.8, 0.52));
+      float energyMask = e;
 
-      // A gentle center-facing glow (brightest where the surface faces the
-      // camera straight-on) so the core reads as lit from within, not just
-      // a dark shape with a bright outline.
-      float innerGlow = pow(ndotv, 1.5) * (0.16 + 0.22 * uEnergy + 0.18 * uAudio);
+      // Brushed liquid-metal grain for the silver regions between the
+      // eyes — thin flowing contour lines (a second, higher-frequency
+      // noise perturbs the band phase so lines meander like real poured
+      // liquid instead of running perfectly parallel), not a flat fill or
+      // a cloudy all-over smudge.
+      float marblePhase = fbm(dWarp * 5.5 + slowFlow) * 2.2;
+      float marble = fbm(dWarp * 3.2 + slowFlow * 0.6) * 26.0 + marblePhase;
+      float ridge = pow(0.5 + 0.5 * sin(marble), 7.0);
 
-      vec3 color = base + rimColor * innerGlow + rimColor * fresnel * rimStrength + rimColor * spec * 0.6;
-      color += uColorMid * 0.06;
+      // Key light sits mostly overhead (with a slow slight orbit) so the
+      // specular highlight consistently reads near the TOP of the sphere
+      // as it slowly rotates — the single cue that sells "polished metal"
+      // more than anything else, per the reference.
+      vec3 lightDir = normalize(vec3(sin(uTime * 0.15) * 0.4, 0.92, cos(uTime * 0.15) * 0.4));
+      float ndotl = max(dot(n, lightDir), 0.0);
+      float ambient = 0.22;
+      float diffuse = ambient + ndotl * (1.0 - ambient);
+
+      // Base material reads as silver/chrome/titanium, NOT tinted cyan —
+      // the cyan in this shader is confined to the vortex eyes and the rim
+      // highlight below, matching the reference's actual color balance
+      // (mostly silver-grey surface, blue concentrated in distinct spots).
+      vec3 metal = mix(uColorDeep, uColorMid, clamp(ridge * 0.65 + diffuse * 0.55, 0.0, 1.0));
+      metal *= (0.5 + 0.5 * diffuse);
+
+      // Specular: a tight Blinn-Phong highlight plus a wider, fainter
+      // secondary lobe, both strengthened at grazing angles the way real
+      // metal reflectivity behaves — a real catch-the-light highlight
+      // instead of the old uniform fresnel wash.
+      vec3 halfDir = normalize(lightDir + viewDir);
+      float specAngle = max(dot(n, halfDir), 0.0);
+      float spec = pow(specAngle, 140.0);
+      float specWide = pow(specAngle, 10.0) * 0.25;
+      float specStrength = mix(0.7, 1.6, fresnel);
+
+      vec3 swirlColor = mix(uColorRim, uColorAlert, uErrorMix);
+      vec3 rimColor = mix(vec3(0.82, 0.93, 1.0), uColorAlert, uErrorMix);
+      float rimStrength = 0.5 + 0.55 * uEnergy + 0.4 * uAudio;
+      float swirlBrightness = 1.05 + 0.85 * uEnergy + 0.5 * uAudio;
+
+      vec3 color = metal;
+      color += vec3(1.0, 0.99, 0.96) * (spec + specWide) * specStrength;
+      color += rimColor * fresnel * rimStrength;
+      // The ridge texture modulates the swirl glow too, so the cyan reads
+      // as the same flowing liquid catching light from within rather than
+      // a flat sticker pasted on top of the metal.
+      color += swirlColor * energyMask * swirlBrightness * (0.75 + 0.35 * ridge);
+      color += swirlColor * energyMask * fresnel * 0.4;
 
       // Luminance-based Reinhard tonemap: scale all channels by one
       // factor derived from luminance, rather than dividing each channel
@@ -281,6 +393,10 @@
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
       scene = new THREE.Scene();
+      // Explicit pure black, not relied-upon renderer default — the
+      // reference material's chrome/bloom only reads correctly against a
+      // truly black (not navy) backdrop.
+      scene.background = new THREE.Color(0x000000);
       camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
       updateCameraFromOrbit(0, 0);
 
@@ -311,10 +427,13 @@
         uEnergy: { value: curEnergy },
         uAudio: { value: curAudio },
         uWarp: { value: curWarp },
-        uAmpBase: { value: 0.06 },
-        uColorDeep: { value: new THREE.Color(0x050a18) },
-        uColorMid: { value: new THREE.Color(0x2c4060) },
-        uColorRim: { value: new THREE.Color(0x6fe3ff) },
+        uAmpBase: { value: 0.013 },
+        // Dark steel shadow -> bright chrome/silver (NOT navy/cyan — the
+        // base material should read as polished metal; cyan is reserved
+        // for the vortex "eyes" and rim highlight in the fragment shader).
+        uColorDeep: { value: new THREE.Color(0x0a0f16) },
+        uColorMid: { value: new THREE.Color(0xb9c7d3) },
+        uColorRim: { value: new THREE.Color(0x3ee6ff) },
         uColorAlert: { value: new THREE.Color(0xff5436) },
         uErrorMix: { value: 0 },
       };

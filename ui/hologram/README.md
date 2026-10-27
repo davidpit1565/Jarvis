@@ -166,17 +166,58 @@ Ashima/McEwan GLSL implementation, the same noise family referenced in
 the previous build) displaces each vertex along its normal, with the
 normal itself recomputed per-vertex from two tangent-offset neighbor
 samples (not reused from the undisplaced sphere) so lighting responds to
-the real displaced surface. Color: a deep navy/titanium base, a
-center-facing "inner glow" term (brightest where the surface faces the
-camera straight on, so the core reads as lit from within rather than just
-outlined), a fresnel rim, and a slow-orbiting specular highlight sweep —
-tonemapped by a luminance-based Reinhard curve (scaling all three
-channels by one factor derived from luminance, not compressing each
-channel independently) so a bright `ERROR`/high-energy moment keeps its
-warm tint instead of blowing out to flat white, which an earlier
-per-channel version of the same tonemap was measurably doing (caught by
-screenshotting the simulated error state and seeing a colorless white
-ball instead of a warm one).
+the real displaced surface.
+
+**Material, reworked 2026-10-27** (the first pass's flat/matte/uniformly-
+cyan look was rejected against a real reference image — a liquid-chrome
+sphere with several distinct glowing cyan "eyes" spread across its whole
+surface, sharp specular, pure-black background — and reworked to actually
+match it, see `.verification-screenshots/*-core-material-v2-*.png`):
+
+- **Geometry displacement is now small and low-frequency** (`uAmpBase`
+  0.013, far below the first pass's 0.06) — the first pass's large,
+  high-frequency bump amplitude made the sphere read as a rough cratered
+  rock and scattered the specular highlight into dozens of tiny glints
+  instead of one coherent one. The "liquid chrome" look now comes almost
+  entirely from fragment-shader shading on a nearly-smooth sphere, the
+  same way a bump/normal map reads as liquid metal without needing actual
+  heavy geometry.
+- **Base color is silver/chrome/titanium, not cyan** — `uColorDeep`/
+  `uColorMid` are a dark steel shadow and a bright silver, modulated by a
+  "brushed liquid metal" grain (two layered, differently-scaled `fbm`
+  samples turned into thin sine-wave contour bands via `pow(...ingredient, 7.0)`,
+  so lines meander like poured liquid instead of running parallel) and a
+  Lambert diffuse term from a mostly-overhead, slowly-orbiting key light.
+- **A real Blinn-Phong specular highlight** (tight `pow(…, 140.0)` lobe
+  plus a wider, fainter secondary lobe, both strengthened at grazing
+  angles) is what actually sells "polished metal" — the first pass only
+  had a fresnel wash, which read as a soft glow, not a reflective catch-
+  the-light highlight.
+- **Nine glowing "vortex eyes"** (`vortexEye()`, Fibonacci-sphere placed —
+  nine, not the obvious six, because six left as few as two actually
+  camera-facing at once, checked against real screenshots; nine reliably
+  keeps several in view from any angle) are circular patches with an
+  Archimedean spiral ring pattern (`sin(r*13.0 - theta*arms + …)` — radius-
+  linear phase, deliberately not a `1/r` twist, which was tried first and
+  produced thin chaotic veins instead of a clean whirlpool) plus a bright
+  core, each with its own arm count/size/phase/speed so they don't read as
+  one shape stamped repeatedly. Their spin speed and brightness reuse the
+  existing `uEnergy`/`uAudio` reactivity uniforms (churn faster/brighter
+  during real thinking/execution and real speech audio) — no new
+  reactivity signals were added, this is the existing ones put to double
+  use. The eyes' color is also modulated by the same metal-grain texture
+  so the glow reads as the liquid itself lit from within, not a flat
+  sticker on top of it.
+- `scene.background` is now set explicitly to pure black (`0x000000`)
+  rather than relying on the renderer's default — the chrome material and
+  bloom only read correctly against a truly black backdrop, per the
+  reference image.
+- The luminance-based Reinhard tonemap (scaling all three channels by one
+  factor derived from luminance, not compressing each channel
+  independently) is unchanged from the first pass and still does its job:
+  a bright `ERROR`/high-energy moment keeps its warm tint instead of
+  blowing out to flat white, which an earlier per-channel version of the
+  same tonemap was measurably doing.
 
 Five effects total, deliberately few per the brief's own guidance to
 prefer a small number of effects that read clearly together over many
