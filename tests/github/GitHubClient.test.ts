@@ -204,3 +204,83 @@ describe("GitHubClient.getRepoActivitySummary", () => {
     await expect(makeClient().getRepoActivitySummary("o", "r")).rejects.toThrow();
   });
 });
+
+describe("GitHubClient.commentOnIssue", () => {
+  test("posts the comment body and maps the response", async () => {
+    let requestedUrl = "";
+    let requestedInit: RequestInit | undefined;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      requestedUrl = url;
+      requestedInit = init;
+      return new Response(
+        JSON.stringify({ id: 42, html_url: "https://github.com/o/r/issues/1#issuecomment-42", body: "hello", created_at: "2026-10-27T00:00:00Z" }),
+        { status: 201 }
+      );
+    }) as unknown as typeof fetch;
+
+    const comment = await makeClient().commentOnIssue("o", "r", 1, "hello");
+
+    expect(requestedUrl).toBe("https://api.github.com/repos/o/r/issues/1/comments");
+    expect(requestedInit?.method).toBe("POST");
+    expect(JSON.parse(requestedInit?.body as string)).toEqual({ body: "hello" });
+    expect(comment).toEqual({ id: 42, url: "https://github.com/o/r/issues/1#issuecomment-42", body: "hello", createdAt: "2026-10-27T00:00:00Z" });
+  });
+
+  test("throws a sanitized error on a 404 (issue/repo not found), not the raw body", async () => {
+    global.fetch = (async () => new Response("some internal detail", { status: 404 })) as unknown as typeof fetch;
+    await expect(makeClient().commentOnIssue("o", "r", 1, "hello")).rejects.toThrow(/404/);
+    await expect(makeClient().commentOnIssue("o", "r", 1, "hello")).rejects.not.toThrow(/internal detail/);
+  });
+
+  test("surfaces a 403 permission-denied error as a real failure", async () => {
+    global.fetch = (async () => new Response("Resource not accessible by personal access token", { status: 403 })) as unknown as typeof fetch;
+    await expect(makeClient().commentOnIssue("o", "r", 1, "hello")).rejects.toThrow(/403/);
+  });
+});
+
+describe("GitHubClient.mergePullRequest", () => {
+  test("merges with no options and maps the response", async () => {
+    let requestedUrl = "";
+    let requestedInit: RequestInit | undefined;
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      requestedUrl = url;
+      requestedInit = init;
+      return new Response(JSON.stringify({ sha: "abc123", merged: true, message: "Pull Request successfully merged" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const result = await makeClient().mergePullRequest("o", "r", 7);
+
+    expect(requestedUrl).toBe("https://api.github.com/repos/o/r/pulls/7/merge");
+    expect(requestedInit?.method).toBe("PUT");
+    expect(JSON.parse(requestedInit?.body as string)).toEqual({});
+    expect(result).toEqual({ sha: "abc123", merged: true, message: "Pull Request successfully merged" });
+  });
+
+  test("forwards mergeMethod/commitTitle/commitMessage when given", async () => {
+    let requestedInit: RequestInit | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      requestedInit = init;
+      return new Response(JSON.stringify({ sha: "abc", merged: true, message: "ok" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await makeClient().mergePullRequest("o", "r", 7, { mergeMethod: "squash", commitTitle: "Title", commitMessage: "Body" });
+
+    expect(JSON.parse(requestedInit?.body as string)).toEqual({ merge_method: "squash", commit_title: "Title", commit_message: "Body" });
+  });
+
+  test("surfaces a 405 (not mergeable, e.g. failing checks or branch protection) as a real failure, never a fabricated success", async () => {
+    global.fetch = (async () => new Response("Required status check has not passed", { status: 405 })) as unknown as typeof fetch;
+    await expect(makeClient().mergePullRequest("o", "r", 7)).rejects.toThrow(/405/);
+  });
+
+  test("surfaces a 409 (head sha mismatch / merge conflict) as a real failure", async () => {
+    global.fetch = (async () => new Response("Head branch was modified", { status: 409 })) as unknown as typeof fetch;
+    await expect(makeClient().mergePullRequest("o", "r", 7)).rejects.toThrow(/409/);
+  });
+
+  test("surfaces a 404 as a real failure, with the raw body never leaked", async () => {
+    global.fetch = (async () => new Response("internal repo detail", { status: 404 })) as unknown as typeof fetch;
+    await expect(makeClient().mergePullRequest("o", "r", 7)).rejects.toThrow(/404/);
+    await expect(makeClient().mergePullRequest("o", "r", 7)).rejects.not.toThrow(/internal repo detail/);
+  });
+});

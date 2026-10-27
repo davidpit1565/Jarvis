@@ -4,6 +4,8 @@ import { createListGitHubCommitsTool } from "@/tools/github/ListGitHubCommitsToo
 import { createListGitHubIssuesTool } from "@/tools/github/ListGitHubIssuesTool";
 import { createListGitHubPullRequestsTool } from "@/tools/github/ListGitHubPullRequestsTool";
 import { createCheckGitHubRepoActivityTool } from "@/tools/github/CheckGitHubRepoActivityTool";
+import { createCommentOnGitHubIssueTool } from "@/tools/github/CommentOnGitHubIssueTool";
+import { createMergeGitHubPullRequestTool } from "@/tools/github/MergeGitHubPullRequestTool";
 import { PermissionLevel } from "@/types/permissions";
 
 const context = { userId: "user-1", requestId: "req-1" };
@@ -155,6 +157,145 @@ describe("CHECK_GITHUB_REPO_ACTIVITY tool", () => {
 
     const tool = createCheckGitHubRepoActivityTool(makeClient());
     const result = await tool.execute({ owner: "davidpit1565", repo: "videos-ai" }, context);
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("COMMENT_ON_GITHUB_ISSUE tool", () => {
+  test("is CONFIRM", () => {
+    const tool = createCommentOnGitHubIssueTool(makeClient());
+    expect(tool.requiredPermission).toBe(PermissionLevel.CONFIRM);
+  });
+
+  test("posts a comment on success", async () => {
+    global.fetch = (async () =>
+      new Response(
+        JSON.stringify({ id: 1, html_url: "https://github.com/o/r/issues/1#issuecomment-1", body: "nice work", created_at: "2026-10-27T00:00:00Z" }),
+        { status: 201 }
+      )) as unknown as typeof fetch;
+
+    const tool = createCommentOnGitHubIssueTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", issueNumber: 1, body: "nice work" }, context);
+    expect(result.success).toBe(true);
+    expect((result.data as { body: string }).body).toBe("nice work");
+  });
+
+  test("rejects an invalid owner/repo", async () => {
+    const tool = createCommentOnGitHubIssueTool(makeClient());
+    const result = await tool.execute({ owner: "not valid/owner", repo: "Jarvis", issueNumber: 1, body: "hi" }, context);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/owner/i);
+  });
+
+  test("rejects a non-positive-integer issueNumber", async () => {
+    const tool = createCommentOnGitHubIssueTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", issueNumber: -1, body: "hi" }, context);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/issueNumber/i);
+  });
+
+  test("rejects a non-integer issueNumber", async () => {
+    const tool = createCommentOnGitHubIssueTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", issueNumber: 1.5, body: "hi" }, context);
+    expect(result.success).toBe(false);
+  });
+
+  test("rejects an empty comment body", async () => {
+    const tool = createCommentOnGitHubIssueTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", issueNumber: 1, body: "   " }, context);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/body/i);
+  });
+
+  test("rejects an oversized comment body", async () => {
+    const tool = createCommentOnGitHubIssueTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", issueNumber: 1, body: "x".repeat(4001) }, context);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/body/i);
+  });
+
+  test("surfaces a 403 permission-denied GitHub error as a real failure, not a fabricated success", async () => {
+    global.fetch = (async () => new Response("Resource not accessible by personal access token", { status: 403 })) as unknown as typeof fetch;
+    const tool = createCommentOnGitHubIssueTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", issueNumber: 1, body: "hi" }, context);
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  test("surfaces a 404 not-found error as a real failure", async () => {
+    global.fetch = (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch;
+    const tool = createCommentOnGitHubIssueTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", issueNumber: 999999, body: "hi" }, context);
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("MERGE_GITHUB_PULL_REQUEST tool", () => {
+  test("is DANGEROUS", () => {
+    const tool = createMergeGitHubPullRequestTool(makeClient());
+    expect(tool.requiredPermission).toBe(PermissionLevel.DANGEROUS);
+  });
+
+  test("merges on success with no options", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ sha: "abc123", merged: true, message: "Pull Request successfully merged" }), { status: 200 })) as unknown as typeof fetch;
+
+    const tool = createMergeGitHubPullRequestTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", pullNumber: 7 }, context);
+    expect(result.success).toBe(true);
+    expect((result.data as { merged: boolean }).merged).toBe(true);
+  });
+
+  test("merges with an explicit mergeMethod", async () => {
+    let requestedInit: RequestInit | undefined;
+    global.fetch = (async (_url: string, init?: RequestInit) => {
+      requestedInit = init;
+      return new Response(JSON.stringify({ sha: "abc", merged: true, message: "ok" }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const tool = createMergeGitHubPullRequestTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", pullNumber: 7, mergeMethod: "squash" }, context);
+    expect(result.success).toBe(true);
+    expect(JSON.parse(requestedInit?.body as string)).toEqual({ merge_method: "squash" });
+  });
+
+  test("rejects an invalid mergeMethod", async () => {
+    const tool = createMergeGitHubPullRequestTool(makeClient());
+    const result = await tool.execute(
+      // @ts-expect-error deliberately invalid mergeMethod, matching a misbehaving caller
+      { owner: "davidpit1565", repo: "Jarvis", pullNumber: 7, mergeMethod: "rewrite-history" },
+      context
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/mergeMethod/i);
+  });
+
+  test("rejects a non-positive-integer pullNumber", async () => {
+    const tool = createMergeGitHubPullRequestTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", pullNumber: 0 }, context);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/pullNumber/i);
+  });
+
+  test("surfaces a 405 (not mergeable: failing checks / branch protection) as a real failure, never a fabricated success", async () => {
+    global.fetch = (async () => new Response("Required status check has not passed", { status: 405 })) as unknown as typeof fetch;
+    const tool = createMergeGitHubPullRequestTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", pullNumber: 7 }, context);
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  test("surfaces a 409 (merge conflict / head sha mismatch) as a real failure", async () => {
+    global.fetch = (async () => new Response("Head branch was modified", { status: 409 })) as unknown as typeof fetch;
+    const tool = createMergeGitHubPullRequestTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", pullNumber: 7 }, context);
+    expect(result.success).toBe(false);
+  });
+
+  test("surfaces a 404 not-found error as a real failure", async () => {
+    global.fetch = (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch;
+    const tool = createMergeGitHubPullRequestTool(makeClient());
+    const result = await tool.execute({ owner: "davidpit1565", repo: "Jarvis", pullNumber: 999999 }, context);
     expect(result.success).toBe(false);
   });
 });

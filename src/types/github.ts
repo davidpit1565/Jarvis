@@ -43,3 +43,21 @@ export interface GitHubRepoActivitySummary {
   openIssues: GitHubIssue[];
   openPullRequests: GitHubPullRequest[];
 }
+
+/** Result of posting a comment on an issue or pull request (GitHub treats PRs as issues for commenting). */
+export interface GitHubComment {
+  id: number;
+  url: string;
+  body: string;
+  createdAt: string;
+}
+
+/** The three merge strategies GitHub's merge endpoint supports. */
+export type GitHubMergeMethod = "merge" | "squash" | "rebase";
+
+/** Result of a successful pull request merge. */
+export interface GitHubMergeResult {
+  sha: string;
+  merged: boolean;
+  message: string;
+}
