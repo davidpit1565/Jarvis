@@ -596,3 +596,21 @@ YouTube awareness of his own channel:
   (`GET /calendar/oauth/start`, choosing the same account again) to pick up the new scopes
   — same re-link precedent as the earlier Canva `design:content:read` scope bump. Gmail's
   own scopes were not touched — it already had full read + send access.
+
+## Real formatted documents, not just checklists (2026-10-27)
+
+Per David asking for "real documents like you prepare for me," JARVIS can now produce an
+actual formatted Google Doc — a title plus one or more sections, each with an optional real
+heading (`HEADING_1` named style), optional prose paragraphs, and an optional real bullet
+list (`BULLET_DISC_CIRCLE_SQUARE`, not the checkbox preset `createChecklist` uses) — not just
+`createChecklist`'s narrow flat checkbox list. New `GoogleDocsClient.createDocument(title,
+sections, account?)` (same file/class as `createChecklist`, same shared OAuth plumbing) and a
+new `CREATE_DOCUMENT` tool (`src/tools/drive/CreateDocumentTool.ts`), registered in
+`src/index.ts` alongside `CREATE_CHECKLIST`/`CREATE_PRESENTATION` under the same
+`calendarEnabled`-gated Drive client. Capped at 50 sections / 300 headings+paragraphs+bullets
+combined (mirrors `createChecklist`'s own `MAX_ITEMS` reasoning). Implementation note: the
+whole document's text is built as one concatenated string and sent as a single `insertText`,
+with per-block `updateParagraphStyle`/`createParagraphBullets` style requests computed from
+precomputed offsets into that one string — all in one `batchUpdate` call — rather than
+inserting block-by-block, which avoids having to re-derive later blocks' indices as earlier
+inserts shift the document.
