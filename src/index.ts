@@ -138,6 +138,7 @@ import { CanvaTokenStore } from "@/canva/CanvaTokenStore";
 import { createListCanvaDesignsTool } from "@/tools/canva/ListCanvaDesignsTool";
 import { createListCanvaBrandTemplatesTool } from "@/tools/canva/ListCanvaBrandTemplatesTool";
 import { createCreateCanvaDesignTool } from "@/tools/canva/CreateCanvaDesignTool";
+import { createExportCanvaDesignTool } from "@/tools/canva/ExportCanvaDesignTool";
 import { GitHubClient } from "@/github/GitHubClient";
 import { createListGitHubCommitsTool } from "@/tools/github/ListGitHubCommitsTool";
 import { createListGitHubIssuesTool } from "@/tools/github/ListGitHubIssuesTool";
@@ -1197,6 +1198,16 @@ function main() {
     createGenerateImageTool(pollinationsImageClient, telegramGateway, config.telegramOwnerChatId, cloudflareImageClient)
   );
   permissionService.grant(DEFAULT_USER_ID, "GENERATE_IMAGE");
+
+  // Registered here rather than alongside the other Canva tools above
+  // (near createCreateCanvaDesignTool) because it needs telegramGateway,
+  // which isn't constructed until this point in setup — same reasoning as
+  // GENERATE_IMAGE just above it. READ-tier, so no explicit
+  // permissionService.grant needed (see ExportCanvaDesignTool's own doc
+  // comment).
+  if (canvaClient) {
+    toolRegistry.registerTool(createExportCanvaDesignTool(canvaClient, telegramGateway, config.telegramOwnerChatId));
+  }
 
   // A paired device's "Hey JARVIS" wake-word channel gets its own
   // conversation thread, exactly like Telegram — kept for the life of the

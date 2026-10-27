@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { CanvaTokenStore } from "@/canva/CanvaTokenStore";
-import type { CanvaBrandTemplate, CanvaCreatedDesign, CanvaDesignSummary } from "@/types/canva";
+import type { CanvaBrandTemplate, CanvaCreatedDesign, CanvaDesignSummary, CanvaExport, CanvaExportFormat } from "@/types/canva";
 import { apiError } from "@/core/net/apiError";
 
 const CANVA_AUTHORIZE_URL = "https://www.canva.com/api/oauth/authorize";
@@ -15,8 +15,14 @@ const TOKEN_EXPIRY_SAFETY_MARGIN_MS = 60_000;
 // (POST /v1/autofills) even though it conceptually reads as "create," per
 // Canva's own scope documentation for that endpoint — not requesting
 // asset:write/folder:write/comment:write etc., since nothing here uploads
-// assets, moves folders, or comments.
-const CANVA_SCOPES = "design:meta:read design:content:write brandtemplate:meta:read";
+// assets, moves folders, or comments. design:content:read was added for
+// exportDesign (POST /v1/exports requires it per Canva's docs) — a real
+// scope addition over the original Canva PR, so an account linked before
+// this change needs to re-link (GET /canva/oauth/start) to pick it up;
+// Canva's consent screen won't grant a scope the account never approved,
+// and exportDesign will fail with a real 403 against a stale token rather
+// than silently working.
+const CANVA_SCOPES = "design:meta:read design:content:read design:content:write brandtemplate:meta:read";
 
 // Canva's docs: "You might need to make multiple requests to this endpoint
 // until you get a success or failed status" for the async autofill job —
@@ -59,6 +65,20 @@ interface RawAutofillJob {
   };
   error?: { code: string; message: string };
 }
+
+interface RawExportJob {
+  id: string;
+  status: "in_progress" | "success" | "failed";
+  urls?: string[];
+  error?: { code: string; message: string };
+}
+
+// Canva requires an explicit `quality` (1-100) for a JPG export — no
+// default exists on their side — so a sensible one is picked here rather
+// than forcing the model to invent a number. 90 mirrors common "high
+// quality, still compressed" presets (e.g. most image editors' own JPEG
+// export defaults).
+const DEFAULT_JPG_QUALITY = 90;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -351,6 +371,96 @@ export class CanvaClient {
 
     throw new Error(
       `Canva autofill job ${jobId} is still in progress after ${maxPollAttempts} polling attempts — it may still ` +
+        "complete; check it later rather than assuming it failed."
+    );
+  }
+
+  /**
+   * Exports an existing design as a downloadable file — the read-adjacent
+   * follow-up to `createDesignFromBrandTemplate`: this never changes
+   * anything in David's Canva account, it just produces a copy. Same
+   * async-job-start-then-poll shape as autofill (POST /v1/exports ->
+   * GET /v1/exports/{exportId}), per Canva's current docs
+   * (canva.dev/docs/apps/rest-apis/reference/exports/).
+   *
+   * v1 deliberately supports only `pdf`/`png`/`jpg`/`pptx`, not every
+   * format Canva's API offers (`gif`/`mp4`/`csv`/`html_bundle`/
+   * `html_standalone` also exist): `csv`/`html_*` only apply to Canva
+   * Sheets/Docs-style designs this client has no other support for, and
+   * `mp4` is deliberately excluded even though most designs can produce
+   * one — video exports can run large, and this process runs on a small
+   * Fly machine (see CLAUDE.md's BitNet research note on this box's real
+   * memory budget); `gif` was left out too since it shares `mp4`'s
+   * "designed for motion/video content" use case, which nothing else in
+   * this codebase currently produces. All four supported formats stay
+   * comfortably small and are handed to Telegram as a URL it fetches
+   * itself (see ExportCanvaDesignTool), never buffered in this process.
+   *
+   * Only the two options worth exposing in a focused v1 are taken:
+   * `pages` (which pages of a multi-page design to export — all pages by
+   * default, matching Canva's own default) and `jpgQuality` (required by
+   * Canva's own API for a `jpg` export with no server-side default, so
+   * `DEFAULT_JPG_QUALITY` is used when omitted). Canva's `export_quality`
+   * ("pro" vs "regular") and PNG's `lossless`/`transparent_background`/
+   * `height`/`width` knobs are deliberately not exposed — real options
+   * but not worth the added tool-surface for "export this design as a
+   * file," and a `pro` export can fail outright for an account without
+   * premium Canva features, which isn't a case worth defaulting into.
+   *
+   * Returned `urls` are Canva's own temporary download links — they
+   * expire 24 hours after the job completes, so callers must use them
+   * immediately (e.g. hand straight to Telegram) rather than store them.
+   */
+  async exportDesign(
+    designId: string,
+    format: CanvaExportFormat = "pdf",
+    options: { pages?: number[]; jpgQuality?: number } = {}
+  ): Promise<CanvaExport> {
+    const accessToken = await this.getValidAccessToken();
+
+    const formatPayload: Record<string, unknown> = { type: format };
+    if (options.pages && options.pages.length > 0) formatPayload.pages = options.pages;
+    if (format === "jpg") formatPayload.quality = options.jpgQuality ?? DEFAULT_JPG_QUALITY;
+
+    const createResponse = await fetch(`${CANVA_API_BASE_URL}/exports`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ design_id: designId, format: formatPayload }),
+    });
+
+    if (!createResponse.ok) {
+      throw await apiError("Canva create export failed", createResponse);
+    }
+
+    const created = (await createResponse.json()) as { job: RawExportJob };
+    const jobId = created.job.id;
+
+    const pollIntervalMs = this.pollOptions.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    const maxPollAttempts = this.pollOptions.maxPollAttempts ?? DEFAULT_MAX_POLL_ATTEMPTS;
+
+    for (let attempt = 0; attempt < maxPollAttempts; attempt++) {
+      if (attempt > 0) await sleep(pollIntervalMs);
+
+      const pollResponse = await fetch(`${CANVA_API_BASE_URL}/exports/${jobId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!pollResponse.ok) {
+        throw await apiError("Canva get export job status failed", pollResponse);
+      }
+      const polled = (await pollResponse.json()) as { job: RawExportJob };
+      const job = polled.job;
+
+      if (job.status === "failed") {
+        throw new Error(`Canva export job failed: ${job.error?.message ?? job.error?.code ?? "unknown error"}`);
+      }
+      if (job.status === "success" && job.urls) {
+        return { id: job.id, format, urls: job.urls };
+      }
+      // status === "in_progress" — keep polling.
+    }
+
+    throw new Error(
+      `Canva export job ${jobId} is still in progress after ${maxPollAttempts} polling attempts — it may still ` +
         "complete; check it later rather than assuming it failed."
     );
   }

@@ -428,6 +428,58 @@ describe("TelegramGateway.sendPhoto", () => {
   });
 });
 
+describe("TelegramGateway.sendDocumentByUrl", () => {
+  test("POSTs the document URL as JSON, not multipart", async () => {
+    let capturedUrl: string | undefined;
+    let capturedBody: { chat_id: string; document: string; caption?: string } | undefined;
+    global.fetch = (async (url: unknown, init?: RequestInit) => {
+      capturedUrl = String(url);
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await gateway.sendDocumentByUrl("123", "https://export-download.canva.com/file.pdf", "My Design");
+
+    expect(capturedUrl).toBe("https://api.telegram.org/botbot-token/sendDocument");
+    expect(capturedBody?.chat_id).toBe("123");
+    expect(capturedBody?.document).toBe("https://export-download.canva.com/file.pdf");
+    expect(capturedBody?.caption).toBe("My Design");
+  });
+
+  test("omits caption when not given", async () => {
+    let capturedBody: { chat_id: string; document: string; caption?: string } | undefined;
+    global.fetch = (async (_url: unknown, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await gateway.sendDocumentByUrl("123", "https://export-download.canva.com/file.pdf");
+
+    expect(capturedBody?.caption).toBeUndefined();
+  });
+
+  test("propagates a non-ok response as a thrown error", async () => {
+    global.fetch = (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch;
+
+    const gateway = new TelegramGateway("bot-token", () => ({
+      orchestrator: makeStubOrchestrator(async () => "unused"),
+      userId: "local-user",
+    }));
+
+    await expect(gateway.sendDocumentByUrl("123", "https://export-download.canva.com/file.pdf")).rejects.toThrow("500");
+  });
+});
+
 describe("TelegramGateway.awaitConfirmation", () => {
   test("resolves true when the chat replies yes", async () => {
     const { calls } = stubSendMessage();
