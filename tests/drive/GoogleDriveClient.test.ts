@@ -170,3 +170,57 @@ describe("GoogleDriveClient.findFilesByName", () => {
     await expect(client.findFilesByName("anything")).rejects.toThrow(/no google account linked/i);
   });
 });
+
+describe("GoogleDriveClient.searchFiles", () => {
+  test("builds a combined name/fullText query and maps results", async () => {
+    let capturedUrl: URL | undefined;
+    global.fetch = (async (url: string) => {
+      capturedUrl = new URL(url);
+      return new Response(JSON.stringify({ files: [{ id: "f1", name: "Q3 budget", mimeType: "application/vnd.google-apps.spreadsheet" }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    const files = await client.searchFiles("budget");
+
+    expect(capturedUrl?.searchParams.get("q")).toBe("(name contains 'budget' or fullText contains 'budget') and trashed = false");
+    expect(files).toHaveLength(1);
+    expect(files[0]!.name).toBe("Q3 budget");
+  });
+
+  test("escapes single quotes in the search term", async () => {
+    let capturedQ: string | null = null;
+    global.fetch = (async (url: string) => {
+      capturedQ = new URL(url).searchParams.get("q") as string | null;
+      return new Response(JSON.stringify({ files: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(makeLinkedTokenStore());
+    await client.searchFiles("David's deck");
+
+    expect(capturedQ as unknown as string).toBe(
+      "(name contains 'David\\'s deck' or fullText contains 'David\\'s deck') and trashed = false"
+    );
+  });
+
+  test("aggregates across every linked account when none is specified", async () => {
+    const tokenStore = new CalendarTokenStore(":memory:");
+    tokenStore.save("work@example.com", { refreshToken: "r1", accessToken: "a1", accessTokenExpiresAt: Date.now() + 3_600_000 });
+    tokenStore.save("personal@example.com", { refreshToken: "r2", accessToken: "a2", accessTokenExpiresAt: Date.now() + 3_600_000 });
+
+    global.fetch = (async (url: string, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string>)?.Authorization;
+      const file = auth === "Bearer a1" ? { id: "w1", name: "Work doc", mimeType: "x" } : { id: "p1", name: "Personal doc", mimeType: "x" };
+      return new Response(JSON.stringify({ files: [file] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { client } = makeClient(tokenStore);
+    const files = await client.searchFiles("doc");
+
+    expect(files.map((f) => f.account).sort()).toEqual(["personal@example.com", "work@example.com"]);
+  });
+
+  test("throws when no account is linked", async () => {
+    const { client } = makeClient();
+    await expect(client.searchFiles("anything")).rejects.toThrow(/no google account linked/i);
+  });
+});

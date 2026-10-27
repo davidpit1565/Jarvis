@@ -49,8 +49,9 @@ describe("GoogleCalendarClient.buildAuthUrl", () => {
     expect(url.searchParams.get("state")).toBe("csrf-token-123");
     expect(url.searchParams.get("scope")).toBe(
       "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.readonly " +
-        "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/drive.file " +
-        "https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/presentations"
+        "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/drive.readonly " +
+        "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents " +
+        "https://www.googleapis.com/auth/presentations https://www.googleapis.com/auth/youtube.readonly"
     );
   });
 });
