@@ -6,6 +6,7 @@ import { GoogleCalendarClient } from "@/calendar/GoogleCalendarClient";
 import { CommitmentStore } from "@/commitments/CommitmentStore";
 import { GoalStore } from "@/agent/GoalStore";
 import { AgentTaskStore } from "@/agent/AgentTaskStore";
+import { GitHubActivityStore } from "@/github/GitHubActivityStore";
 
 const originalFetch = global.fetch;
 
@@ -130,6 +131,62 @@ describe("buildContextNote", () => {
     store.close();
     goalStore.close();
     taskStore.close();
+  });
+
+  test("omits GitHub activity context when no githubActivityStore is given", async () => {
+    const store = new ReminderStore(":memory:");
+    const note = await buildContextNote({ timezone: "UTC" }, store);
+    expect(note).not.toContain("GitHub repo");
+    store.close();
+  });
+
+  test("omits GitHub activity context when the store has nothing new cached", async () => {
+    const store = new ReminderStore(":memory:");
+    const githubActivityStore = new GitHubActivityStore(":memory:");
+
+    const note = await buildContextNote(
+      { timezone: "UTC" },
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      githubActivityStore
+    );
+    expect(note).not.toContain("GitHub repo");
+    store.close();
+    githubActivityStore.close();
+  });
+
+  test("includes new GitHub repo activity when present", async () => {
+    const store = new ReminderStore(":memory:");
+    const githubActivityStore = new GitHubActivityStore(":memory:");
+    githubActivityStore.recordPoll(
+      "davidpit1565",
+      "Jarvis",
+      { lastCommitSha: "abc" },
+      {
+        newCommits: [{ sha: "abc", message: "Fix the thing", authorName: "David", date: "2026-10-27T00:00:00Z", url: "https://x" }],
+        newIssues: [],
+        newPullRequests: [],
+      }
+    );
+
+    const note = await buildContextNote(
+      { timezone: "UTC" },
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      githubActivityStore
+    );
+    expect(note).toContain("davidpit1565/Jarvis");
+    expect(note).toContain("Fix the thing");
+    store.close();
+    githubActivityStore.close();
   });
 
   afterEach(() => {

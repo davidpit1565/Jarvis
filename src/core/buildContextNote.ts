@@ -5,12 +5,14 @@ import type { CommitmentStore } from "@/commitments/CommitmentStore";
 import type { GoalStore } from "@/agent/GoalStore";
 import type { AgentTaskStore } from "@/agent/AgentTaskStore";
 import type { BehaviorCorrectionStore } from "@/behavior/BehaviorCorrectionStore";
+import type { GitHubActivityStore } from "@/github/GitHubActivityStore";
 import { currentTimeNote } from "@/core/time/currentTimeNote";
 import { dueRemindersNote } from "@/reminders/dueRemindersNote";
 import { todayCalendarNote } from "@/calendar/todayCalendarNote";
 import { staleCommitmentsNote } from "@/commitments/staleCommitmentsNote";
 import { goalProgressNote } from "@/agent/goalProgressNote";
 import { correctionNote } from "@/behavior/correctionNote";
+import { githubActivityNote } from "@/github/githubActivityNote";
 
 /**
  * Combines every per-turn context note into the single string Orchestrator's
@@ -27,6 +29,13 @@ import { correctionNote } from "@/behavior/correctionNote";
  * produces anything when both are given AND the current message maps to
  * exactly one relevance topic — see its own doc comment for why an
  * ambiguous/multi-topic message surfaces nothing rather than everything.
+ * `githubActivityStore` is likewise optional and independent of the rest:
+ * when given, `githubActivityNote` (always-shown like goals, not
+ * topic-gated like corrections — see its own doc comment for why) reads
+ * whatever the background poller in index.ts most recently cached; when
+ * omitted (GitHub proactive surfacing isn't configured), it contributes
+ * nothing, the same inert-by-default behavior every other optional note
+ * here already has.
  */
 export async function buildContextNote(
   config: Pick<JarvisConfig, "timezone">,
@@ -35,7 +44,8 @@ export async function buildContextNote(
   commitmentStore?: CommitmentStore,
   goals?: { goalStore: GoalStore; taskStore: AgentTaskStore; userId: string },
   correctionStore?: BehaviorCorrectionStore,
-  currentMessage?: string
+  currentMessage?: string,
+  githubActivityStore?: GitHubActivityStore
 ): Promise<string> {
   const calendarNote = calendarClient ? await todayCalendarNote(calendarClient) : undefined;
   return [
@@ -45,6 +55,7 @@ export async function buildContextNote(
     commitmentStore ? staleCommitmentsNote(commitmentStore) : undefined,
     goals ? goalProgressNote(goals.goalStore, goals.taskStore, goals.userId) : undefined,
     correctionStore && currentMessage ? correctionNote(correctionStore, currentMessage) : undefined,
+    githubActivityStore ? githubActivityNote(githubActivityStore) : undefined,
   ]
     .filter(Boolean)
     .join("\n\n");
