@@ -216,6 +216,31 @@ sessions/compaction. None of this is built yet unless a specific PR/commit is no
     checking if it opens up, but not something to integrate today; flagging so it isn't
     forgotten, not as an action item yet.
 
+## Status note (2026-10-27): the "Task State Machine" / "Goal Engine" roadmap gaps are now mostly closed
+
+`JARVIS_ROADMAP_AUDIT.md` previously flagged a Task State Machine and Goal Engine as
+**MISSING** — this is now stale against `main`. Before this session, `src/agent/AgentCore.ts` +
+`AgentTaskStateMachine.ts` + `AgentTaskStore.ts` already implemented a real persisted task
+state machine (PENDING→PLANNING→EXECUTING→VERIFYING→COMPLETED/FAILED/CANCELLED/RETRYING/
+RECOVERING/WAITING, enforced transitions, cooperative cancellation wired into
+`Orchestrator.requestStop`, a resumable priority queue, and goal-grouped progress via
+`AgentTaskStore.getGoalProgress`) — but **nothing ever called `AgentCore.startGoal`**, so the
+background queue (`agentQueueInterval`) had been running against a permanently empty table.
+PR #152 (merged) closed that gap: `src/agent/GoalStore.ts` + four tools
+(`CREATE_GOAL`/`CHECK_GOAL_PROGRESS`/`COMPLETE_GOAL`/`CANCEL_GOAL` in `src/tools/agent/`) give
+the model a real on-ramp into the existing queue, and `src/agent/goalProgressNote.ts` surfaces
+active goals/next-step into the system prompt at conversation start (same place as
+`dueRemindersNote`/`staleCommitmentsNote`) so JARVIS can mention progress unprompted across
+separate conversations. `CREATE_GOAL` decomposes a goal into a flat, capped (≤12) list of steps
+exactly once — deliberately not a recursive/self-reprioritizing planner, as a guard against the
+documented AutoGPT/BabyAGI runaway-task-list failure mode. All of this still runs through the
+existing Orchestrator/PermissionService/ConfirmationService gates — no new unsupervised
+execution was added. PR #151 (merged) also did a post-merge security/bug audit of PRs
+#143-#149: two real defense-in-depth fixes (constant-time passphrase comparison, device-binding
+on proactive-announcement replies), no exploitable issue found. `JARVIS_ROADMAP_AUDIT.md`
+itself has not been re-edited to reflect this — treat its Task State Machine / Goal Engine
+"MISSING" verdicts as outdated until it's refreshed.
+
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
 - `davidpit1565/Rudder` — the app he initially called "Decide" (that was its working
