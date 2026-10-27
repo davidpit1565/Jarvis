@@ -284,6 +284,38 @@ Responding to a list of remaining gaps he was given, he decided:
   requirement for whichever phase actually builds the iPhone app's wake-word UI, not something
   to build now.
 
+## Researched and rejected: self-hosted BitNet as a free JARVIS brain (2026-10-27)
+
+David found `microsoft/BitNet` (1-bit LLM inference, MIT, ~41k★, actively maintained) via an
+Instagram video and asked whether JARVIS should self-host it as a brain option immune to
+third-party free-tier changes. Researched (not built) and the verdict was **not worth building
+now, and probably not later either in its current form** — two blockers, not just one:
+1. **It isn't actually free.** Fly.io has no free tier in 2026; running BitNet-b1.58-2B-4T
+   alongside JARVIS's existing process needs roughly `shared-cpu-2x`/2GB (~$13.39/mo) vs.
+   today's `shared-cpu-1x`/512MB (~$3.69/mo) — a real ~$10/mo new cost, i.e. trading "pay for
+   Claude tokens" for "pay for Fly compute," exactly the trade-off wishlist #17's zero-cost
+   mandate exists to avoid.
+2. **4,096-token context window** is a plausible hard architectural blocker on its own:
+   JARVIS's system prompt + ~67 tool schemas would likely consume most/all of that budget
+   before the model ever sees the user's message — would need a separately-built, drastically
+   cut-down tool manifest just for this one provider.
+Also notable: real-world quality is "decent for a 2B model" (competitive on GSM8K/IFEval,
+clearly behind on MMLU/HumanEval+) but far below Gemini/Groq/Claude for general conversation
+and tool-calling reliability, and the model card documents limited non-English support — a
+real concern given JARVIS's Hebrew requirements. The repo's own headline "100B model on a
+single CPU" claim is a synthetic benchmark, not a real downloadable model — don't cite it as a
+real capability.
+
+The one thing confirmed *safe* in this research: David's explicit worry about a self-hosted
+model's disk footprint growing or risking JARVIS's memory data is already structurally
+resolved by Fly's existing architecture — the persistent volume (`/data`, all the SQLite DBs)
+is fully separate from the machine's own image/filesystem (where model weights would live),
+so redeploying/resizing/recreating the machine never touches memory data. No new design needed
+if this is ever revisited — just a one-line discipline (keep model files off the `/data` mount).
+
+Worth a quick re-check only if BitNet (or something similar) ships a materially larger context
+window in a future release — not something to schedule as a project today.
+
 - `davidpit1565/BFA` — his school coursework repo (Business and Fashion Academy program).
 - `davidpit1565/calistenics` — matches his calisthenics interest above.
 - `davidpit1565/Rudder` — the app he initially called "Decide" (that was its working
