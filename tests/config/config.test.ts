@@ -1116,6 +1116,7 @@ describe("redactConfigForDisplay", () => {
     process.env.JARVIS_STUDIO_SECRET = "studio-REAL-SECRET-VALUE";
     process.env.AGENTMAIL_API_KEY = "agentmail-REAL-SECRET-VALUE";
     process.env.AGENTMAIL_INBOX_ID = "jarvis-inbox";
+    process.env.JARVIS_CONFIRMATION_PASSPHRASE = "passphrase-REAL-SECRET-VALUE";
 
     const config = loadConfig();
     const redacted = redactConfigForDisplay(config);
@@ -1137,6 +1138,16 @@ describe("redactConfigForDisplay", () => {
     expect(redacted.spotifyClientSecret).toEqual({ configured: true });
     expect(redacted.studioSecret).toEqual({ configured: true });
     expect(redacted.agentMailApiKey).toEqual({ configured: true });
+    expect(redacted.confirmationPassphraseSeed).toEqual({ configured: true });
+  });
+
+  test("redacts confirmationPassphraseSeed even though its field name contains no 'token'/'secret'/'apikey'/'password'/'credential' substring (regression: this field previously fell through both the explicit allowlist and the name-pattern fallback and leaked in plaintext)", () => {
+    process.env.JARVIS_CONFIRMATION_PASSPHRASE = "a-real-spoken-passphrase";
+    const config = loadConfig();
+    const redacted = redactConfigForDisplay(config);
+
+    expect(JSON.stringify(redacted)).not.toContain("a-real-spoken-passphrase");
+    expect(redacted.confirmationPassphraseSeed).toEqual({ configured: true });
   });
 
   test("reports an unset secret as not configured", () => {
